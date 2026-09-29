@@ -4,7 +4,7 @@ Vitrina autoadministrada y panel privado. WhatsApp es el canal principal; Facebo
 
 ## Estado de esta entrega
 
-El código está actualizado, con pruebas ejecutadas en SQLite y configuración para desplegar. **No está publicado ni conectado a un proyecto real de Supabase.** Consulta `docs/VERIFICACION.md`: no se pudo instalar dependencias por falta de resolución de red; Next build, navegador y PostgreSQL real están pendientes. No interpretar el ZIP como una aplicación ya certificada en producción.
+El código está actualizado, con pruebas ejecutadas en SQLite y navegador, compilación Next.js y configuración para desplegar. **No está publicado ni conectado a un proyecto real de Supabase.** Consulta `docs/VERIFICACION.md`: la integración PostgreSQL, Docker, Vercel y la infraestructura real siguen pendientes. No interpretar el ZIP como una aplicación ya certificada en producción.
 
 ## Inicio local
 

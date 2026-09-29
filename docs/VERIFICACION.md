@@ -6,14 +6,14 @@ Preparación: 28 de septiembre de 2026. El año de los mensajes comerciales hist
 
 | Comprobación | Resultado |
 |---|---|
-| `npm test`, Node 22.16.0 | 78 pruebas contabilizadas: **77 aprobadas, 0 fallidas y 1 omitida**. La omitida corresponde a la integración PostgreSQL sin credenciales de prueba. |
+| `npm test` | 78 pruebas contabilizadas: **77 aprobadas, 0 fallidas y 1 omitida**. La omitida corresponde a la integración PostgreSQL sin `TEST_DATABASE_URL`. |
 | Adaptador SQLite | Ejecutado con SQLite real, en memoria y en archivo temporal. |
 | Sintaxis e importaciones locales | **56 archivos JavaScript/JSX**, sin errores detectados por el analizador. No equivale a comprobación de tipos ni a una compilación Next.js. |
 | Comandos CLI sobre SQLite temporal | Migración, setup repetido sin duplicados, respaldo JSON y SQLite completo, importación a destino vacío: ejecutados correctamente. |
-| Instalación de dependencias | Intentada; falló con `EAI_AGAIN` al resolver `registry.npmjs.org`. |
+| Dependencias y navegador | Dependencias npm y Chromium de Playwright instalados en el entorno de verificación. |
 | Integración PostgreSQL/Supabase real | No ejecutada. La suite está preparada, pero no se suministró una base de pruebas ni hay un servidor PostgreSQL local. |
-| Compilación Next.js | No ejecutada por falta de dependencias instaladas. |
-| Playwright / navegador | Pruebas escritas para escritorio y celular, **no ejecutadas**. |
+| Compilación Next.js | **Ejecutada correctamente** con Next.js 16.3.6; compilación, comprobación TypeScript y generación de rutas sin errores. |
+| Playwright / navegador | **8 pruebas aprobadas, 0 fallidas** en escritorio y celular. Incluye privacidad, vista previa, creación/edición de producto y pedido manual con validación de guía e historial. |
 | Docker, Vercel, dominio y proyecto Supabase | Configuración y comandos preparados; **no desplegados ni verificados en infraestructura real**. |
 
 Los registros completos de pruebas, sintaxis e instalación están en esta carpeta. Las claves y cuentas que aparecen en los tests son únicamente datos ficticios de una base de pruebas, no accesos de producción.
@@ -24,8 +24,8 @@ Validación de enlaces y datos; selección de base por entorno; rechazo de SQLit
 
 Las pruebas de lógica no equivalen a una auditoría de seguridad, ensayo de carga, validación del diseño real en móvil ni compatibilidad comprobada con el pooler de Supabase. El código no ha sido instalado o probado en la cuenta del cliente.
 
-## Próxima comprobación obligatoria en un entorno con red
+## Próxima comprobación obligatoria en un entorno con PostgreSQL
 
-Ejecutar `npm install`, conservar el lockfile generado, `npm run check`, `npm test` y `npm run build`. Ejecutar las pruebas PostgreSQL en una base desechable llamada `allnutrition_test`, nunca sobre producción. Ejecutar Playwright, probar Docker o Vercel según la infraestructura elegida y realizar la lista de `ACEPTACION_Y_PENDIENTES.md`.
+Ejecutar las pruebas PostgreSQL en una base desechable llamada `allnutrition_test`, nunca sobre producción. Después validar Docker o Vercel según la infraestructura elegida y realizar la lista de `ACEPTACION_Y_PENDIENTES.md`.
 
 La configuración CI incluida realiza estas comprobaciones en GitHub cuando el titular suba y habilite el repositorio; esa ejecución aún no ocurrió aquí. La entrega es código implementado con evidencia parcial de verificación, **no una certificación de aplicación lista para producción**.
