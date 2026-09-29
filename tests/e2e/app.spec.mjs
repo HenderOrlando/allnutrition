@@ -27,19 +27,27 @@ test('crea y edita un producto usando únicamente un enlace',async({page},info)=
  await drawer.getByLabel('Precio en pesos colombianos').fill('25000');
  await expect(drawer.locator('input[type=file]')).toHaveCount(0);
  await drawer.getByRole('button',{name:'Guardar cambios'}).click();await expect(drawer).toHaveCount(0);
- await expect(page.getByText(name,{exact:true})).toBeVisible();
+ const row=page.getByRole('row').filter({hasText:name});
+ await expect(row).toHaveCount(1);
+ await row.getByRole('button',{name:'Editar'}).click();
+ await drawer.getByLabel('Precio en pesos colombianos').fill('26000');
+ await drawer.getByRole('button',{name:'Guardar cambios'}).click();await expect(drawer).toHaveCount(0);
+ await row.getByRole('button',{name:'Editar'}).click();
+ await expect(drawer.getByLabel('Precio en pesos colombianos')).toHaveValue('26000');
+ await drawer.getByRole('button',{name:'Cerrar editor'}).click();
+ await expect(drawer).toHaveCount(0);
 });
 
 test('pedido manual: alta, estado, validación de guía e historial',async({page},info)=>{
  await login(page);await page.getByRole('navigation',{name:'Administración'}).getByRole('button',{name:'Pedidos',exact:true}).click();
  await page.getByRole('button',{name:'Nuevo pedido',exact:true}).click();const drawer=page.getByRole('dialog');
  const name=`Comprador E2E ${info.project.name}`;
- await drawer.getByLabel('Nombre completo').fill(name);await drawer.getByLabel('Celular').fill('3001234567');await drawer.getByLabel('Ciudad',{exact:false}).fill('Bogotá');await drawer.getByLabel('Departamento').fill('Cundinamarca');await drawer.getByLabel('Dirección exacta').fill('Dirección de prueba');
+ await drawer.getByRole('textbox',{name:/Nombre completo/}).fill(name);await drawer.getByRole('textbox',{name:/Celular/}).fill('3001234567');await drawer.getByRole('textbox',{name:/Ciudad/}).fill('Bogotá');await drawer.getByRole('textbox',{name:'Departamento',exact:true}).fill('Cundinamarca');await drawer.getByRole('textbox',{name:'Dirección exacta',exact:true}).fill('Dirección de prueba');
  await drawer.getByRole('button',{name:'Agregar referencia'}).click();
- await drawer.getByLabel('Producto o combo',{exact:true}).selectOption({label:'Creatina Monohidrato Vital Force · 70 servicios'});
+ await drawer.getByRole('combobox',{name:'Producto o combo',exact:true}).selectOption({label:'Creatina Monohidrato Vital Force · 70 servicios'});
  await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);
- await page.getByLabel('Buscar pedidos').fill(name);const row=page.getByRole('row').filter({hasText:name});await expect(row).toHaveCount(1);await row.getByRole('button',{name:'Abrir'}).click();
- await drawer.getByLabel('Estado del pedido',{exact:true}).selectOption('preparing');await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);
- await row.getByRole('button',{name:'Abrir'}).click();await drawer.getByLabel('Estado del pedido',{exact:true}).selectOption('sent');await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer.getByRole('alert')).toContainText('transportadora y guía');
- await drawer.getByLabel('Transportadora',{exact:true}).fill('Transportadora prueba');await drawer.getByLabel('Número de guía').fill(`E2E-${info.project.name}`);await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);await row.getByRole('button',{name:'Abrir'}).click();await expect(drawer.getByRole('heading',{name:'Historial de cambios'})).toBeVisible();
+ await page.getByRole('textbox',{name:'Buscar pedidos'}).fill(name);const row=page.getByRole('row').filter({hasText:name});await expect(row).toHaveCount(1);await row.getByRole('button',{name:'Abrir'}).click();
+ await drawer.getByRole('combobox',{name:'Estado del pedido',exact:true}).selectOption('preparing');await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);
+ await row.getByRole('button',{name:'Abrir'}).click();await drawer.getByRole('combobox',{name:'Estado del pedido',exact:true}).selectOption('sent');await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer.getByRole('alert')).toContainText('transportadora y guía');
+ await drawer.getByRole('textbox',{name:'Transportadora',exact:true}).fill('Transportadora prueba');await drawer.getByRole('textbox',{name:'Número de guía',exact:true}).fill(`E2E-${info.project.name}`);await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);await row.getByRole('button',{name:'Abrir'}).click();await expect(drawer.getByRole('heading',{name:'Historial de cambios'})).toBeVisible();
 });
