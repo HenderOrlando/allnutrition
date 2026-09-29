@@ -8,7 +8,7 @@ export default function OrderEditor({ record, all, csrf, onClose, onSaved }) {
   const [initial] = useState(() => record ? { ...blank(), ...record, items:record.items.map(line => ({ ...line, lineId:line.lineId || crypto.randomUUID() })) } : blank());
   const [form,setForm] = useState(initial), [busy,setBusy] = useState(false), [error,setError] = useState('');
   const dialog = useRef(null), close = useDialog(dialog,{busy,dirty:JSON.stringify(form)!==JSON.stringify(initial),onClose});
-  const options = [...all.products.map(p=>({...p,kind:'products'})),...all.combos.map(p=>({...p,kind:'combos'}))];
+  const options = [...(all?.products || []).map(p=>({...p,kind:'products'})), ...(all?.combos || []).map(p=>({...p,kind:'combos'}))];
   const frozen = record && ['sent','delivered','returned','cancelled'].includes(record.status);
   const total = form.items.reduce((sum,line)=>sum+(line.unitPrice||0)*(line.quantity||0),0)+(form.shippingCost||0);
   const allowedStates = record ? [record.status,...(orderTransitions[record.status]||[])] : ['new','preparing'];
