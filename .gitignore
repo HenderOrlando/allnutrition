@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.env
+.env.local
+.env.*.local
+.env.production
+.vercel/
+data/
+backups/
+.test-data/
+test-results/
+playwright-report/
+*.sqlite*

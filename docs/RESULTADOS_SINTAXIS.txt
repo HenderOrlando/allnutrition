@@ -1,0 +1,5 @@
+
+> all-nutrition-fase-1@2.0.0 check
+> node scripts/check.mjs
+
+56 archivos JavaScript/JSX revisados; 0 errores de sintaxis/imports locales. No sustituye next build.

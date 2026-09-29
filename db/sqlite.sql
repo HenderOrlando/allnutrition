@@ -1,0 +1,20 @@
+-- Mantiene los nombres de v1 para abrir sus archivos SQLite sin borrar datos.
+CREATE TABLE IF NOT EXISTS migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,kind TEXT NOT NULL,slug TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,data TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(kind,slug));
+CREATE INDEX IF NOT EXISTS records_kind_status ON records(kind,status,sort_order);
+CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,password TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,csrf TEXT NOT NULL,expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS attempts(key TEXT PRIMARY KEY,count INTEGER NOT NULL,reset_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY,number INTEGER NOT NULL UNIQUE,data TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS order_events(id TEXT PRIMARY KEY,order_id TEXT NOT NULL REFERENCES orders(id),actor_id TEXT NOT NULL,previous_status TEXT,next_status TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS events_order ON order_events(order_id,created_at);
+CREATE TABLE IF NOT EXISTS order_audit(id TEXT PRIMARY KEY,order_id TEXT NOT NULL REFERENCES orders(id),actor_id TEXT NOT NULL,data TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS audit_order ON order_audit(order_id,created_at);
+CREATE TABLE IF NOT EXISTS counters(id TEXT PRIMARY KEY,value INTEGER NOT NULL);
+INSERT OR IGNORE INTO counters VALUES('orders',0);
+UPDATE counters SET value=MAX(value,(SELECT COALESCE(MAX(number),0) FROM orders)) WHERE id='orders';
+CREATE TABLE IF NOT EXISTS idempotency(key TEXT PRIMARY KEY,actor_id TEXT NOT NULL,payload_hash TEXT NOT NULL,order_id TEXT NOT NULL REFERENCES orders(id));
+CREATE INDEX IF NOT EXISTS orders_status ON orders(json_extract(data,'$.status'));
+CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);
+INSERT OR IGNORE INTO migrations VALUES(2,datetime('now'));

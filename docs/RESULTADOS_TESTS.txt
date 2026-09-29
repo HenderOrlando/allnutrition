@@ -1,0 +1,487 @@
+
+> all-nutrition-fase-1@2.0.0 test
+> node --test tests/*.test.mjs
+
+TAP version 13
+# (node:1618) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: SQLite conserva pedidos después de cerrar y reabrir el archivo
+ok 1 - SQLite conserva pedidos después de cerrar y reabrir el archivo
+  ---
+  duration_ms: 13.483897
+  type: 'test'
+  ...
+# Subtest: respaldo e importación conservan productos, pedido e historial
+ok 2 - respaldo e importación conservan productos, pedido e historial
+  ---
+  duration_ms: 7.360175
+  type: 'test'
+  ...
+# Subtest: Contrato completo con PostgreSQL real (base descartable)
+ok 3 - Contrato completo con PostgreSQL real (base descartable) # SKIP
+  ---
+  duration_ms: 0.48482
+  type: 'test'
+  ...
+# (node:1620) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: Contrato completo con SQLite real
+    # Subtest: inicializa una base vacía sin inventar pedidos
+    ok 1 - inicializa una base vacía sin inventar pedidos
+      ---
+      duration_ms: 5.965794
+      type: 'test'
+      ...
+    # Subtest: seed usa datos entregados y es repetible sin duplicarlos
+    ok 2 - seed usa datos entregados y es repetible sin duplicarlos
+      ---
+      duration_ms: 3.569485
+      type: 'test'
+      ...
+    # Subtest: crea edita publica y archiva productos
+    ok 3 - crea edita publica y archiva productos
+      ---
+      duration_ms: 2.607887
+      type: 'test'
+      ...
+    # Subtest: evita direcciones cortas repetidas
+    ok 4 - evita direcciones cortas repetidas
+      ---
+      duration_ms: 1.884117
+      type: 'test'
+      ...
+    # Subtest: no sobrescribe ediciones concurrentes
+    ok 5 - no sobrescribe ediciones concurrentes
+      ---
+      duration_ms: 1.572328
+      type: 'test'
+      ...
+    # Subtest: guarda enlaces externos sin contenido binario
+    ok 6 - guarda enlaces externos sin contenido binario
+      ---
+      duration_ms: 1.327429
+      type: 'test'
+      ...
+    # Subtest: validaciones de publicación no impiden guardar borradores
+    ok 7 - validaciones de publicación no impiden guardar borradores
+      ---
+      duration_ms: 0.914477
+      type: 'test'
+      ...
+    # Subtest: catálogos se asocian a productos y protegen dependencias
+    ok 8 - catálogos se asocian a productos y protegen dependencias
+      ---
+      duration_ms: 1.44056
+      type: 'test'
+      ...
+    # Subtest: relaciones inexistentes no se guardan
+    ok 9 - relaciones inexistentes no se guardan
+      ---
+      duration_ms: 1.17529
+      type: 'test'
+      ...
+    # Subtest: combos requieren productos publicados
+    ok 10 - combos requieren productos publicados
+      ---
+      duration_ms: 1.289882
+      type: 'test'
+      ...
+    # Subtest: oculta combos con componentes archivados
+    ok 11 - oculta combos con componentes archivados
+      ---
+      duration_ms: 1.523444
+      type: 'test'
+      ...
+    # Subtest: indica combo agotado y no permite nuevos pedidos
+    ok 12 - indica combo agotado y no permite nuevos pedidos
+      ---
+      duration_ms: 2.826277
+      type: 'test'
+      ...
+    # Subtest: preguntas frecuentes y mensajes solo publicados en web
+    ok 13 - preguntas frecuentes y mensajes solo publicados en web
+      ---
+      duration_ms: 1.66691
+      type: 'test'
+      ...
+    # Subtest: datos de envío editables y públicos solo al publicar
+    ok 14 - datos de envío editables y públicos solo al publicar
+      ---
+      duration_ms: 1.1887
+      type: 'test'
+      ...
+    # Subtest: redes sociales y WhatsApp usan configuración guardada
+    ok 15 - redes sociales y WhatsApp usan configuración guardada
+      ---
+      duration_ms: 1.295692
+      type: 'test'
+      ...
+    # Subtest: los datos públicos no incluyen configuración interna o pedidos
+    ok 16 - los datos públicos no incluyen configuración interna o pedidos
+      ---
+      duration_ms: 2.345603
+      type: 'test'
+      ...
+    # Subtest: el total se calcula en servidor y no se confía en el navegador
+    ok 17 - el total se calcula en servidor y no se confía en el navegador
+      ---
+      duration_ms: 1.323824
+      type: 'test'
+      ...
+    # Subtest: un reintento idéntico devuelve el mismo pedido
+    ok 18 - un reintento idéntico devuelve el mismo pedido
+      ---
+      duration_ms: 1.318566
+      type: 'test'
+      ...
+    # Subtest: no reutiliza el identificador de guardado con otros datos
+    ok 19 - no reutiliza el identificador de guardado con otros datos
+      ---
+      duration_ms: 1.437215
+      type: 'test'
+      ...
+    # Subtest: los números de pedidos concurrentes son únicos
+    ok 20 - los números de pedidos concurrentes son únicos
+      ---
+      duration_ms: 5.008883
+      type: 'test'
+      ...
+    # Subtest: pedidos invalidos revierten contador y registros
+    ok 21 - pedidos invalidos revierten contador y registros
+      ---
+      duration_ms: 1.404485
+      type: 'test'
+      ...
+    # Subtest: aplica secuencia de estados e historial
+    ok 22 - aplica secuencia de estados e historial
+      ---
+      duration_ms: 2.734038
+      type: 'test'
+      ...
+    # Subtest: no despacha por transportadora sin guía
+    ok 23 - no despacha por transportadora sin guía
+      ---
+      duration_ms: 2.149157
+      type: 'test'
+      ...
+    # Subtest: permite entrega local sin exigir transportadora
+    ok 24 - permite entrega local sin exigir transportadora
+      ---
+      duration_ms: 1.425637
+      type: 'test'
+      ...
+    # Subtest: cancelación requiere motivo y conserva registro
+    ok 25 - cancelación requiere motivo y conserva registro
+      ---
+      duration_ms: 1.835053
+      type: 'test'
+      ...
+    # Subtest: el pago completo requiere monto y fecha; no cambia envío
+    ok 26 - el pago completo requiere monto y fecha; no cambia envío
+      ---
+      duration_ms: 1.707852
+      type: 'test'
+      ...
+    # Subtest: abonos manuales requieren valores parciales válidos
+    ok 27 - abonos manuales requieren valores parciales válidos
+      ---
+      duration_ms: 1.715254
+      type: 'test'
+      ...
+    # Subtest: no cambia totales después del despacho
+    ok 28 - no cambia totales después del despacho
+      ---
+      duration_ms: 1.519428
+      type: 'test'
+      ...
+    # Subtest: conserva nombres y composición histórica de combos
+    ok 29 - conserva nombres y composición histórica de combos
+      ---
+      duration_ms: 1.819661
+      type: 'test'
+      ...
+    # Subtest: no elimina referencias asociadas a pedidos
+    ok 30 - no elimina referencias asociadas a pedidos
+      ---
+      duration_ms: 1.315071
+      type: 'test'
+      ...
+    # Subtest: protege pedidos de edición concurrente
+    ok 31 - protege pedidos de edición concurrente
+      ---
+      duration_ms: 1.572649
+      type: 'test'
+      ...
+    # Subtest: busca y pagina pedidos en la base
+    ok 32 - busca y pagina pedidos en la base
+      ---
+      duration_ms: 7.753647
+      type: 'test'
+      ...
+    # Subtest: comodines y SQL ingresados se tratan como datos
+    ok 33 - comodines y SQL ingresados se tratan como datos
+      ---
+      duration_ms: 1.405737
+      type: 'test'
+      ...
+    # Subtest: exporta negocio sin secretos de autenticación
+    ok 34 - exporta negocio sin secretos de autenticación
+      ---
+      duration_ms: 44.847522
+      type: 'test'
+      ...
+    # Subtest: cuentas individuales, sesiones revocables y contraseñas con hash
+    ok 35 - cuentas individuales, sesiones revocables y contraseñas con hash
+      ---
+      duration_ms: 78.594742
+      type: 'test'
+      ...
+    # Subtest: cambiar contraseña revoca sesiones anteriores
+    ok 36 - cambiar contraseña revoca sesiones anteriores
+      ---
+      duration_ms: 146.472323
+      type: 'test'
+      ...
+    # Subtest: limita intentos de acceso con estado persistente
+    ok 37 - limita intentos de acceso con estado persistente
+      ---
+      duration_ms: 281.785749
+      type: 'test'
+      ...
+    # Subtest: importa solo en destino vacío, conserva IDs y exige revisar publicación
+    ok 38 - importa solo en destino vacío, conserva IDs y exige revisar publicación
+      ---
+      duration_ms: 1.883076
+      type: 'test'
+      ...
+    # Subtest: revierte una importación inválida completa
+    ok 39 - revierte una importación inválida completa
+      ---
+      duration_ms: 0.967377
+      type: 'test'
+      ...
+    1..39
+ok 4 - Contrato completo con SQLite real
+  ---
+  duration_ms: 628.451115
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: javascript / caso 19
+ok 5 - rechaza imagen no permitida: javascript / caso 19
+  ---
+  duration_ms: 1.014438
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: data / caso 26
+ok 6 - rechaza imagen no permitida: data / caso 26
+  ---
+  duration_ms: 0.102685
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: file / caso 17
+ok 7 - rechaza imagen no permitida: file / caso 17
+  ---
+  duration_ms: 0.170346
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: http / caso 24
+ok 8 - rechaza imagen no permitida: http / caso 24
+  ---
+  duration_ms: 0.082894
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: https / caso 37
+ok 9 - rechaza imagen no permitida: https / caso 37
+  ---
+  duration_ms: 0.076515
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: https / caso 23
+ok 10 - rechaza imagen no permitida: https / caso 23
+  ---
+  duration_ms: 0.117186
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: https / caso 23
+ok 11 - rechaza imagen no permitida: https / caso 23
+  ---
+  duration_ms: 0.164117
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: https / caso 22
+ok 12 - rechaza imagen no permitida: https / caso 22
+  ---
+  duration_ms: 0.129485
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: https / caso 24
+ok 13 - rechaza imagen no permitida: https / caso 24
+  ---
+  duration_ms: 0.288324
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: https / caso 25
+ok 14 - rechaza imagen no permitida: https / caso 25
+  ---
+  duration_ms: 0.298881
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: https / caso 29
+ok 15 - rechaza imagen no permitida: https / caso 29
+  ---
+  duration_ms: 0.190367
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: https / caso 19
+ok 16 - rechaza imagen no permitida: https / caso 19
+  ---
+  duration_ms: 0.136686
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: /api/media/old / caso 14
+ok 17 - rechaza imagen no permitida: /api/media/old / caso 14
+  ---
+  duration_ms: 0.082414
+  type: 'test'
+  ...
+# Subtest: rechaza imagen no permitida: //example.com/image.png / caso 23
+ok 18 - rechaza imagen no permitida: //example.com/image.png / caso 23
+  ---
+  duration_ms: 0.05318
+  type: 'test'
+  ...
+# Subtest: acepta HTTPS directo y las imágenes ya entregadas
+ok 19 - acepta HTTPS directo y las imágenes ya entregadas
+  ---
+  duration_ms: 0.113331
+  type: 'test'
+  ...
+# Subtest: auto sin credenciales usa SQLite
+ok 20 - auto sin credenciales usa SQLite
+  ---
+  duration_ms: 0.148433
+  type: 'test'
+  ...
+# Subtest: auto con credenciales usa Supabase
+ok 21 - auto con credenciales usa Supabase
+  ---
+  duration_ms: 0.088944
+  type: 'test'
+  ...
+# Subtest: rechaza supabase sin conexión y no finge fallback
+ok 22 - rechaza supabase sin conexión y no finge fallback
+  ---
+  duration_ms: 0.078288
+  type: 'test'
+  ...
+# Subtest: rechaza conexión API en lugar de PostgreSQL
+ok 23 - rechaza conexión API en lugar de PostgreSQL
+  ---
+  duration_ms: 0.07246
+  type: 'test'
+  ...
+# Subtest: impide SQLite efímero en Vercel
+ok 24 - impide SQLite efímero en Vercel
+  ---
+  duration_ms: 0.71727
+  type: 'test'
+  ...
+# Subtest: no permite desactivar TLS remoto
+ok 25 - no permite desactivar TLS remoto
+  ---
+  duration_ms: 0.111628
+  type: 'test'
+  ...
+# Subtest: configuración usa URL de Supabase con prioridad explícita
+ok 26 - configuración usa URL de Supabase con prioridad explícita
+  ---
+  duration_ms: 0.083335
+  type: 'test'
+  ...
+# Subtest: origin: no confía en dominios arbitrarios
+ok 27 - origin: no confía en dominios arbitrarios
+  ---
+  duration_ms: 0.464229
+  type: 'test'
+  ...
+# Subtest: admite únicamente preview de Vercel proporcionado por entorno
+ok 28 - admite únicamente preview de Vercel proporcionado por entorno
+  ---
+  duration_ms: 0.412862
+  type: 'test'
+  ...
+# Subtest: CSRF rechaza tokens ausentes, incorrectos y largos distintos
+ok 29 - CSRF rechaza tokens ausentes, incorrectos y largos distintos
+  ---
+  duration_ms: 0.168744
+  type: 'test'
+  ...
+# Subtest: WhatsApp recibe el producto codificado correctamente
+ok 30 - WhatsApp recibe el producto codificado correctamente
+  ---
+  duration_ms: 0.280452
+  type: 'test'
+  ...
+# Subtest: rechaza nombres de secciones arbitrarias
+ok 31 - rechaza nombres de secciones arbitrarias
+  ---
+  duration_ms: 0.202905
+  type: 'test'
+  ...
+# Subtest: rechaza enlaces de redes que no son los perfiles oficiales
+ok 32 - rechaza enlaces de redes que no son los perfiles oficiales
+  ---
+  duration_ms: 0.299291
+  type: 'test'
+  ...
+# Subtest: rechaza precios negativos o decimales y texto nulo
+ok 33 - rechaza precios negativos o decimales y texto nulo
+  ---
+  duration_ms: 0.387224
+  type: 'test'
+  ...
+# Subtest: JSON de pedido mal formado falla como validación
+ok 34 - JSON de pedido mal formado falla como validación
+  ---
+  duration_ms: 0.418831
+  type: 'test'
+  ...
+# Subtest: estados finales no se reabren accidentalmente
+ok 35 - estados finales no se reabren accidentalmente
+  ---
+  duration_ms: 0.124388
+  type: 'test'
+  ...
+# Subtest: PostgreSQL convierte parámetros de sentencias estáticas
+ok 36 - PostgreSQL convierte parámetros de sentencias estáticas
+  ---
+  duration_ms: 0.087552
+  type: 'test'
+  ...
+# Subtest: comprobantes también rechazan protocolos peligrosos
+ok 37 - comprobantes también rechazan protocolos peligrosos
+  ---
+  duration_ms: 0.071798
+  type: 'test'
+  ...
+# Subtest: hash mal formado no autoriza
+ok 38 - hash mal formado no autoriza
+  ---
+  duration_ms: 0.129515
+  type: 'test'
+  ...
+# Subtest: no acepta fecha imposible en pago
+ok 39 - no acepta fecha imposible en pago
+  ---
+  duration_ms: 0.725102
+  type: 'test'
+  ...
+1..39
+# tests 78
+# suites 0
+# pass 77
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 687.739987

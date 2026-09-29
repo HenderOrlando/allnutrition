@@ -1,0 +1,9 @@
+La primera etapa de All Nutrition está planteada para que puedas administrar tu página: actualizar productos, catálogos, combos, enlaces de redes, preguntas frecuentes, mensajes y condiciones de envío desde un panel privado.
+
+WhatsApp seguirá siendo el canal principal. El equipo registrará manualmente los pedidos que acuerde con los clientes, con sus datos de despacho, pago y estados separados. La página no lee conversaciones, verifica pagos ni genera guías automáticamente.
+
+Para agregar imágenes nuevas se utilizarán enlaces públicos de las imágenes; no tendrás que subirlas al servidor de la página. El logo y la foto que ya entregaste están incorporados en la base inicial.
+
+Antes de publicar debemos aprobar el contenido y confirmar las reglas de los pedidos, las redes oficiales y las condiciones de envío. También debemos configurar el alojamiento, la base de datos y las cuentas, y realizar las pruebas finales.
+
+Más adelante se puede evaluar una segunda etapa para organizar personas interesadas que todavía no compran, próximos contactos y seguimiento del equipo. Esa ampliación se define y contrata por separado; no es necesaria para utilizar las funciones incluidas en esta etapa.

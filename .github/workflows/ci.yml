@@ -1,0 +1,43 @@
+name: Verificar All Nutrition
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: allnutrition_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d allnutrition_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/allnutrition_test
+      TEST_ALLOW_DATABASE_RESET: allnutrition_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node scripts/install.mjs
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fallos-navegador
+          path: |
+            playwright-report/
+            test-results/

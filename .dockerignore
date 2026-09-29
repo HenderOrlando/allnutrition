@@ -1,0 +1,13 @@
+node_modules
+.next
+.env
+.env.local
+.env.production
+.env.*.local
+.vercel
+data
+backups
+.test-data
+.git
+test-results
+playwright-report

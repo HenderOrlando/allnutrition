@@ -1,0 +1,45 @@
+$ node scripts/migrate.mjs
+Migración v2 completada en sqlite. No se borraron registros.
+
+(node:1534) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Exit: 0
+$ node scripts/setup.mjs
+Base sqlite: administrador listo. Material inicial cargado para revisión.
+La página pública no muestra el catálogo hasta aprobarlo. El administrador lo ve en /?preview=1.
+
+(node:1545) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Exit: 0
+$ node scripts/setup.mjs
+Base sqlite: administrador listo. Contenido existente conservado.
+La página pública no muestra el catálogo hasta aprobarlo. El administrador lo ve en /?preview=1.
+
+(node:1556) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Exit: 0
+$ node scripts/backup.mjs --full-sqlite
+Respaldo comercial creado: /tmp/allnutrition-cli-xul_2nfd/backups/allnutrition-2026-09-28T06-15-54.853Z.json. Contiene datos privados. No incluye cuentas ni sesiones.
+Copia completa SQLite creada: /tmp/allnutrition-cli-xul_2nfd/backups/allnutrition-2026-09-28T06-15-54.853Z.sqlite. Incluye cuentas y sesiones; protégela.
+
+(node:1567) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Exit: 0
+$ node scripts/migrate.mjs
+Migración v2 completada en sqlite. No se borraron registros.
+
+(node:1578) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Exit: 0
+$ node scripts/import.mjs /tmp/allnutrition-cli-xul_2nfd/backups/allnutrition-2026-09-28T06-15-54.853Z.json
+Importados 8 contenidos y 0 pedidos. Revisa todo y vuelve a aprobar la publicación. Crea o conserva las cuentas del destino.
+
+(node:1589) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Exit: 0

@@ -1,0 +1,21 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      SQLITE_PATH: /app/data/all-nutrition.sqlite
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - allnutrition_data:/app/data
+      - allnutrition_backups:/app/backups
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+volumes:
+  allnutrition_data:
+  allnutrition_backups:

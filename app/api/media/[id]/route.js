@@ -1,0 +1,1 @@
+export async function GET() { return Response.json({ error: 'El almacenamiento de archivos se retiró. Reemplaza las imágenes antiguas por enlaces externos.' }, { status: 410, headers: { 'Cache-Control': 'no-store' } }); }
