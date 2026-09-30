@@ -102,7 +102,7 @@ Credenciales: `ADMIN_EMAIL` y `ADMIN_PASSWORD` en `.env.staging.local`, nunca en
 
 ## 5. Promoción a un servidor Linux real
 
-Requiere acceso autorizado a Docker/Compose, almacenamiento persistente suficiente, dominio real apuntando al servidor, firewall/NAT con 80/443 accesibles y correo real del administrador. No se han validado DNS, ACME, carga, recursos, firewall ni recuperación en un servidor remoto.
+Requiere acceso autorizado a Docker/Compose, almacenamiento persistente suficiente, dominio real apuntando al servidor, firewall/NAT con 80/443 accesibles y correo real del administrador. La guía Caddy es genérica; validar DNS, ACME, recursos, firewall, carga, recuperación y flujos funcionales en el destino antes de aceptar cada despliegue.
 
 Transportar el código/configuración correspondiente al release sin `node_modules`, `.env*` privados, datos ni backups. Exportar imagen y evidencia sanitizada, sin secretos:
 
@@ -128,10 +128,16 @@ En el servidor generar configuración nueva, con Node 24/OpenSSL, valores reales
 npm run deploy:env -- production --domain DOMINIO_REAL --admin-email CORREO_REAL
 ```
 
-Editar privadamente **solo `APP_IMAGE`** en `.env.server.local` para fijarlo al release comprobado. No copiar secretos ni volúmenes del staging. Después:
+No copiar secretos ni volúmenes del staging. En la VM dejar `.env.server.local` intacto y fijar la imagen probada en un archivo aparte `.env.release.local`, privado y con solo `APP_IMAGE`:
 
 ```sh
-pc() { docker compose -p allnutrition-production --env-file .env.server.local -f compose.yaml -f compose.production.yaml "$@"; }
+RESULT=.test-data/docker/RUN_ID/artifacts/result.json
+RELEASE=$(node -e 'const r=require("./"+process.argv[1]); if(r.exitCode!==0 || !r.releaseTag) process.exit(1); console.log(r.releaseTag)' "$RESULT")
+(umask 077; set -o noclobber; printf 'APP_IMAGE=%s\n' "$RELEASE" > .env.release.local)
+```
+
+```sh
+pc() { docker compose -p allnutrition-production --env-file .env.server.local --env-file .env.release.local -f compose.yaml -f compose.production.yaml "$@"; }
 pc config --quiet
 pc up -d --no-build --wait --wait-timeout 120 db
 pc run --rm --pull never migrate
@@ -155,15 +161,14 @@ systemctl daemon-reload
 systemctl enable --now allnutrition-prod-forwarding.service
 ```
 
-
 ```sh
 npm run deploy:env -- production --domain allnutrition.wintimeapp.co --admin-email CORREO_REAL
 ```
 
-Generar `.env.server.local` privadamente **dentro de la VM** y fijar `APP_IMAGE` al release que registró ese verificador. Para operar detrás del Nginx del host, no usar `compose.production.yaml` ni iniciar Caddy:
+Generar `.env.server.local` privadamente **dentro de la VM**. Para operar detrás del Nginx del host, fijar la imagen del verificador en `.env.release.local`; no usar `compose.production.yaml` ni iniciar Caddy:
 
 ```sh
-np() { docker compose -p allnutrition-production --env-file .env.server.local -f compose.yaml -f compose.nginx.yaml "$@"; }
+np() { docker compose -p allnutrition-production --env-file .env.server.local --env-file .env.release.local -f compose.yaml -f compose.nginx.yaml "$@"; }
 np config --quiet
 np up -d --no-build --wait --wait-timeout 120 db
 np run --rm --pull never migrate
