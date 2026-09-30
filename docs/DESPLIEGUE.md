@@ -191,6 +191,12 @@ Confiar en la CA pública normal desde clientes; validar `/api/health`, login, c
 - El backup manual inicial es `backups/production/allnutrition-20260930T041653Z.dump`, formato PostgreSQL custom, 20 291 bytes, modo `0600`, SHA-256 `cee7606ba026a9349fe9b419af86540cbe21ccd168caafedd0405a73ebb37bc2`. Se comprobó con `pg_restore --list`. Reside solo en el disco persistente de esta VM: **aún no hay programación, retención ni copia fuera del host**.
 - Setup creó un producto y cuatro catálogos para revisión; el público ve “Estamos preparando nuestro catálogo” hasta que el responsable apruebe la vitrina desde **Contacto y redes**. No se publicó contenido comercial sin aprobación.
 
+### Actualización del panel de usuarios (2026-09-30)
+
+- Código `f15b9db76e8628192fa1dab8f14520e1cfed0d48`, commit `feat: add administrator user management`. `npm run verify:docker` pasó en el guest `amd64`; imagen `allnutrition:release-719f42285a22`, `sha256:719f42285a22a0e0ec405270f9143003cdadf41914338eea869c7cb6474e97d5`.
+- Se cambió únicamente `APP_IMAGE`; se conservó `allnutrition:release-8efed7d1630b` para rollback. La migración v2 documentada terminó sin borrar registros.
+- `web` y `db` quedaron saludables. Login real, sección **Usuarios** y `GET /api/admin/users` autenticado respondieron correctamente; petición anónima recibió `401`. La lista expuso solo cuentas administradoras, sin contraseña ni hash. No se creó ninguna cuenta real.
+
 ## 6. Backups y restauración aislada
 
 ```sh
