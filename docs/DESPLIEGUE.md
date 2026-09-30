@@ -150,7 +150,7 @@ Producción usa Caddy con HTTPS público automático, **sin `tls internal`**. No
 
 ### VM privada detrás de un Nginx existente
 
-Cuando el servidor ya sirve otros dominios con Nginx, crear una red NAT/libvirt independiente con DHCP reservado `192.168.201.10` para la VM `allnutrition-prod`; no conectar esta VM a redes de otras cargas. Instalar Ubuntu 24.04, Docker/Compose y Node 24 en la VM; clonar el repositorio y ejecutar `npm run verify:docker` allí para producir la imagen nativa de arquitectura. No instalar Docker ni PostgreSQL directamente en el host compartido.
+Cuando el servidor ya sirve otros dominios con Nginx, crear una red NAT/libvirt independiente con DHCP reservado `192.168.201.10` para la VM `allnutrition-prod`; no conectar esta VM a redes de otras cargas. Instalar Ubuntu 24.04, Docker/Compose y Node 24 en la VM; clonar el repositorio e instalar dependencias con `npm ci --legacy-peer-deps`. En una VM Ubuntu limpia instalar también Chromium y bibliotecas del runner E2E con `npx playwright install --with-deps chromium`; después ejecutar `npm run verify:docker` en la arquitectura destino y promover únicamente si deja evidencia aprobada. No instalar Docker ni PostgreSQL directamente en el host compartido.
 
 En este host compartido la política global `FORWARD` es `DROP`. Antes de que el guest necesite salida, instalar la unidad del mismo commit: añade permisos solo desde `virbr-anprod` hacia `enp4s0` y para las respuestas establecidas, después de las cadenas `DOCKER-USER`/`DOCKER-FORWARD`; no cambia la política global ni otras reglas.
 
