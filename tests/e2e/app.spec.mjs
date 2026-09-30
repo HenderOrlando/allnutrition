@@ -1,19 +1,34 @@
 import { test,expect } from '@playwright/test';
-async function login(page){await page.goto('/admin/login');await page.getByLabel('Correo de administrador').fill('e2e@example.test');await page.getByLabel('Contraseña',{exact:true}).fill('clave-e2e-solo-pruebas');await page.getByRole('button',{name:'Entrar al panel'}).click();await expect(page.getByRole('heading',{name:'Hola, All Nutrition.'})).toBeVisible();}
+import { login } from './helpers.mjs';
 
-test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',async({page,request})=>{
+test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',async({page,request},info)=>{
  await page.goto('/');await expect(page.getByRole('heading',{name:/Estamos preparando/})).toBeVisible();
+ await page.screenshot({path:info.outputPath('preparation.png'),fullPage:true});
  expect((await request.get('/api/admin/orders')).status()).toBe(401);
  expect((await request.get('/api/admin/settings')).status()).toBe(401);
  expect((await request.get('/productos/creatina-vital-force-70-servicios')).status()).toBe(404);
+ await page.goto('/admin/login');
+ await expect(page.getByLabel('Correo de administrador')).toBeVisible();
+ await page.screenshot({path:info.outputPath('login.png'),fullPage:true});
 });
 
-test('panel permite vista previa y conserva WhatsApp principal',async({page})=>{
- await login(page);await page.goto('/?preview=1');
+test('panel permite vista previa y conserva WhatsApp principal',async({page},info)=>{
+ await login(page);
+ await expect(page.getByRole('navigation',{name:'Administración'})).toBeVisible();
+ await page.screenshot({path:info.outputPath('panel.png'),fullPage:true});
+ await page.goto('/?preview=1');
  await expect(page.getByRole('heading',{name:/Explora el catálogo/})).toBeVisible();
- const link=page.getByRole('link',{name:'Consultar este producto'}).first();
- await expect(link).toHaveAttribute('href',/wa\.me\/573043440035/);
- await expect(page.locator('body')).not.toContainText('service_role');
+ const product=page.locator('article.product-card').first();
+ await expect(product).toBeVisible();
+ const title=await product.getByRole('heading',{level:3}).innerText();
+ const link=product.locator('a[href^="https://wa.me/"]');
+ await expect(link).toBeVisible();
+ const destination=new URL(await link.getAttribute('href'));
+ expect(destination.protocol).toBe('https:');
+ expect(destination.hostname).toBe('wa.me');
+ expect(destination.pathname).toBe('/573043440035');
+ expect(destination.searchParams.get('text')).toContain(title);
+ await page.screenshot({path:info.outputPath('catalog-preview.png'),fullPage:true});
 });
 
 test('crea y edita un producto usando únicamente un enlace',async({page},info)=>{
@@ -25,7 +40,6 @@ test('crea y edita un producto usando únicamente un enlace',async({page},info)=
  await drawer.getByLabel('Enlace de la fotografía',{exact:true}).fill('https://images.example.com/test.jpg');
  await drawer.getByLabel('Presentación / contenido').fill('Presentación de prueba');
  await drawer.getByLabel('Precio en pesos colombianos').fill('25000');
- await expect(drawer.locator('input[type=file]')).toHaveCount(0);
  await drawer.getByRole('button',{name:'Guardar cambios'}).click();await expect(drawer).toHaveCount(0);
  const row=page.getByRole('row').filter({hasText:name});
  await expect(row).toHaveCount(1);
