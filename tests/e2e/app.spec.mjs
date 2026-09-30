@@ -65,3 +65,60 @@ test('pedido manual: alta, estado, validación de guía e historial',async({page
  await row.getByRole('button',{name:'Abrir'}).click();await drawer.getByRole('combobox',{name:'Estado del pedido',exact:true}).selectOption('sent');await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer.getByRole('alert')).toContainText('transportadora y guía');
  await drawer.getByRole('textbox',{name:'Transportadora',exact:true}).fill('Transportadora prueba');await drawer.getByRole('textbox',{name:'Número de guía',exact:true}).fill(`E2E-${info.project.name}`);await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);await row.getByRole('button',{name:'Abrir'}).click();await expect(drawer.getByRole('heading',{name:'Historial de cambios'})).toBeVisible();
 });
+
+test('crea cuentas nuevas únicamente con rol administrador',async({page,context},info)=>{
+ const anonymous=await context.request.get('/api/admin/users');
+ expect(anonymous.status()).toBe(401);
+ await login(page);
+ const origin=new URL(page.url()).origin;
+ const nav=page.getByRole('navigation',{name:'Administración'});
+ const listResponsePromise=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/admin/users'&&response.request().method()==='GET');
+ await nav.getByRole('button',{name:'Usuarios',exact:true}).click();
+ const listResponse=await listResponsePromise;
+ expect(listResponse.status()).toBe(200);
+ const accounts=await listResponse.json();
+ expect(accounts.users).toContainEqual({id:expect.any(String),email:'e2e@example.test',active:true,role:'administrator'});
+ expect(accounts.users.every(user=>!Object.hasOwn(user,'password'))).toBe(true);
+ expect(JSON.stringify(accounts)).not.toContain('scrypt:');
+ const csrf=await listResponse.request().headerValue('x-csrf-token');
+ expect(Boolean(csrf)).toBe(true);
+ await expect(page.getByRole('heading',{name:'Agregar usuario'})).toBeVisible();
+ await expect(page.getByText('Rol único disponible')).toBeVisible();
+
+ const noCsrf=await context.request.post('/api/admin/users',{headers:{Origin:origin},data:{email:'sin-csrf@example.test',password:'clave-nueva-e2e-administrador',role:'administrator'}});
+ expect(noCsrf.status()).toBe(403);
+ const invalidRole=await context.request.post('/api/admin/users',{headers:{Origin:origin,'x-csrf-token':csrf},data:{email:'rol-invalido@example.test',password:'clave-nueva-e2e-administrador',role:'user'}});
+ expect(invalidRole.status()).toBe(400);
+ const afterRejection=await context.request.get('/api/admin/users');
+ expect((await afterRejection.json()).users.some(user=>['sin-csrf@example.test','rol-invalido@example.test'].includes(user.email))).toBe(false);
+
+ const email=`nuevo-admin-${info.project.name}-${info.retry}@example.test`;
+ const password='clave-nueva-e2e-administrador';
+ await page.getByLabel('Correo electrónico').fill(email);
+ await page.getByLabel('Contraseña inicial').fill(password);
+ await page.getByLabel('Confirmar contraseña').fill(`${password}-incorrecta`);
+ await page.getByRole('button',{name:'Crear usuario'}).click();
+ await expect(page.getByRole('region',{name:'Agregar usuario'}).getByRole('alert')).toContainText('Las contraseñas no coinciden.');
+ await page.getByLabel('Confirmar contraseña').fill(password);
+ const createResponsePromise=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/admin/users'&&response.request().method()==='POST');
+ await page.getByRole('button',{name:'Crear usuario'}).click();
+ const createResponse=await createResponsePromise;
+ expect(createResponse.status()).toBe(201);
+ expect(await createResponse.json()).toEqual({user:{email,role:'administrator'}});
+ const row=page.getByRole('row').filter({hasText:email});
+ await expect(row).toHaveCount(1);
+ await expect(row).toContainText('Administrador');
+
+ const duplicate=await context.request.post('/api/admin/users',{headers:{Origin:origin,'x-csrf-token':csrf},data:{email,password,role:'administrator'}});
+ expect(duplicate.status()).toBe(409);
+ const afterDuplicate=await context.request.get('/api/admin/users');
+ expect((await afterDuplicate.json()).users.filter(user=>user.email===email)).toHaveLength(1);
+
+ await page.locator('header').getByRole('button',{name:'Cerrar sesión',exact:true}).click();
+ await expect(page).toHaveURL(url=>url.pathname==='/admin/login');
+ await page.getByLabel('Correo de administrador').fill(email);
+ await page.getByLabel('Contraseña',{exact:true}).fill(password);
+ await page.getByRole('button',{name:'Entrar al panel'}).click();
+ await expect(page).toHaveURL(url=>url.pathname==='/admin');
+ expect((await page.request.get('/api/admin/orders')).status()).toBe(200);
+});

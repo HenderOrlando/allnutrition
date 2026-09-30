@@ -76,6 +76,8 @@ El enlace tiene que apuntar a la imagen pública, no a una carpeta o página de 
 
 Productos y referencias, catálogos/colecciones, combos, preguntas frecuentes, mensajes comerciales, condiciones de envío, WhatsApp, redes, datos de contacto y pedidos. Incluye borradores/publicación/archivo, filtros, búsqueda, paginación de pedidos, prevención de conflictos de edición, datos históricos de líneas, historial de cambios y exportación comercial.
 
+La sección **Usuarios** permite crear y consultar cuentas; todas reciben rol **Administrador**. Quien las crea define la contraseña inicial y debe compartirla por un canal seguro; no hay invitación automática ni roles de menor privilegio.
+
 Cada presentación/sabor con precio o disponibilidad propios es una referencia independiente. Los combos reúnen referencias y cantidades con precio manual. La disponibilidad es manual: no hay entradas/salidas ni descuento de stock.
 
 Pedidos: Nuevo → Preparando → Enviado → Entregado; Cancelado antes del despacho y Devuelto después del envío. Cancelar/devolver requiere motivo. Pago y pedido son independientes. El estado de pago puede ser Pendiente, Abono parcial, Pagado o Reembolsado; no se consulta a bancos. Los detalles y decisiones por confirmar están en `docs/REQUISITOS_Y_DECISIONES.md`.
