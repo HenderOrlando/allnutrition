@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": "22.x"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "next dev",
@@ -20,7 +20,9 @@
     "test:postgres": "node --test tests/postgres.integration.test.mjs",
     "check": "node scripts/check.mjs",
     "test:e2e": "playwright test",
-    "deploy": "node scripts/deploy.mjs"
+    "deploy": "node scripts/deploy.mjs",
+    "deploy:env": "node scripts/deploy-env.mjs",
+    "verify:docker": "node scripts/verify-docker.mjs"
   },
   "dependencies": {
     "next": "16.3.6",
