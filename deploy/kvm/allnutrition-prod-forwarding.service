@@ -1,0 +1,13 @@
+[Unit]
+Description=Scoped egress forwarding for the All Nutrition libvirt network
+Wants=network-online.target
+Requires=docker.service virtnetworkd.service
+After=network-online.target docker.service virtnetworkd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/allnutrition-prod-forwarding.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -146,10 +146,19 @@ Producción usa Caddy con HTTPS público automático, **sin `tls internal`**. No
 
 Cuando el servidor ya sirve otros dominios con Nginx, crear una red NAT/libvirt independiente con DHCP reservado `192.168.201.10` para la VM `allnutrition-prod`; no conectar esta VM a redes de otras cargas. Instalar Ubuntu 24.04, Docker/Compose y Node 24 en la VM; clonar el repositorio y ejecutar `npm run verify:docker` allí para producir la imagen nativa de arquitectura. No instalar Docker ni PostgreSQL directamente en el host compartido.
 
+En este host compartido la política global `FORWARD` es `DROP`. Antes de que el guest necesite salida, instalar la unidad del mismo commit: añade permisos solo desde `virbr-anprod` hacia `enp4s0` y para las respuestas establecidas, después de las cadenas `DOCKER-USER`/`DOCKER-FORWARD`; no cambia la política global ni otras reglas.
+
+```sh
+install -m 0755 deploy/kvm/allnutrition-prod-forwarding.sh /usr/local/sbin/allnutrition-prod-forwarding.sh
+install -m 0644 deploy/kvm/allnutrition-prod-forwarding.service /etc/systemd/system/allnutrition-prod-forwarding.service
+systemctl daemon-reload
+systemctl enable --now allnutrition-prod-forwarding.service
+```
+
+
 ```sh
 npm run deploy:env -- production --domain allnutrition.wintimeapp.co --admin-email CORREO_REAL
 ```
-
 
 Generar `.env.server.local` privadamente **dentro de la VM** y fijar `APP_IMAGE` al release que registró ese verificador. Para operar detrás del Nginx del host, no usar `compose.production.yaml` ni iniciar Caddy:
 
@@ -167,7 +176,6 @@ El enlace `3000:3000` de ese override solo es accesible en la interfaz privada d
 `deploy/kvm/allnutrition-prod-network.xml` define la red e IP reservada; los volúmenes de PostgreSQL, la imagen de Ubuntu, el disco y los env/certificados de aplicación deben residir en almacenamiento persistente del guest/host, nunca en el pool temporal de VMs de CI. Comprobar antes de registrar una red nueva que su nombre, bridge y subred no existen ni se solapan. Antes y después del reload validar al menos un dominio previo del host. Si DNS no apunta a ese host o no se puede expedir el certificado, detenerse sin tocar las otras cargas.
 
 Confiar en la CA pública normal desde clientes; validar `/api/health`, login, cookie segura y API autenticada `200`. La VM no recibe puertos públicos ni reemplaza al host proxy.
-
 
 ## 6. Backups y restauración aislada
 
