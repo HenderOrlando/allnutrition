@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { databaseConfig,allowedOrigins } from '../lib/db/config.mjs';
 import { imageUrl,publicUrl,validateRecord,validateSettings,validateOrder,validateTransition } from '../lib/validation.mjs';
 import { assertOrigin,assertCSRF,passwordMatches } from '../lib/auth.mjs';
@@ -15,6 +18,23 @@ test('rechaza conexión API en lugar de PostgreSQL',()=>assert.throws(()=>databa
 test('impide SQLite efímero en Vercel',()=>assert.throws(()=>databaseConfig({DB_DRIVER:'sqlite',VERCEL:'1'})));
 test('no permite desactivar TLS remoto',()=>assert.throws(()=>databaseConfig({DATABASE_URL:'postgresql://u:p@remote.example.com/db',DB_SSL:'disable'})));
 test('configuración usa URL de Supabase con prioridad explícita',()=>assert.equal(databaseConfig({SUPABASE_DATABASE_URL:'postgresql://u:p@chosen.example.com/db',DATABASE_URL:'postgresql://u:p@other.example.com/db'}).url,'postgresql://u:p@chosen.example.com/db'));
+test('PostgreSQL exige una CA legible y no ambigua sin debilitar TLS', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'allnutrition-ca-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = join(directory, 'ca.crt');
+  const env = { DB_DRIVER: 'supabase', DATABASE_URL: 'postgresql://u:p@db/allnutrition_test', DB_CA_CERT_FILE: file };
+  assert.throws(() => databaseConfig(env), /No se puede leer DB_CA_CERT_FILE/);
+  writeFileSync(file, ' \n');
+  assert.throws(() => databaseConfig(env), /DB_CA_CERT_FILE está vacío/);
+  assert.throws(() => databaseConfig({ ...env, DB_CA_CERT_FILE: directory }), /No se puede leer DB_CA_CERT_FILE/);
+  const pem = '-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n';
+  writeFileSync(file, pem);
+  assert.equal(databaseConfig(env).ca, pem);
+  assert.equal(databaseConfig(env).ssl, 'verify');
+  assert.throws(() => databaseConfig({ ...env, DB_CA_CERT: pem }), /Configura solo DB_CA_CERT o DB_CA_CERT_FILE/);
+  assert.throws(() => databaseConfig({ ...env, DB_SSL: 'disable' }), /No desactives TLS/);
+  assert.equal(databaseConfig({ DB_DRIVER: 'sqlite', DB_CA_CERT_FILE: '/missing' }).provider, 'sqlite');
+});
 test('origin: no confía en dominios arbitrarios',()=>{assert.throws(()=>assertOrigin('https://evil.example.com',['https://shop.example.com']),{status:403});assertOrigin('https://shop.example.com',['https://shop.example.com']);assert.throws(()=>assertOrigin(null,['https://shop.example.com']));});
 test('admite únicamente preview de Vercel proporcionado por entorno',()=>assert.deepEqual(allowedOrigins({NODE_ENV:'production',VERCEL:'1',VERCEL_URL:'test.vercel.app'}),['https://test.vercel.app']));
 test('CSRF rechaza tokens ausentes, incorrectos y largos distintos',()=>{assertCSRF('same','same');assert.throws(()=>assertCSRF('evil','same'),{status:403});assert.throws(()=>assertCSRF(null,'same'));assert.throws(()=>assertCSRF('longer','same'));});

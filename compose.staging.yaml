@@ -1,0 +1,6 @@
+services:
+  proxy:
+    ports:
+      - "127.0.0.1:${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./deploy/Caddyfile.staging:/etc/caddy/Caddyfile:ro
