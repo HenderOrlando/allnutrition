@@ -4,14 +4,14 @@ Vitrina autoadministrada y panel privado. WhatsApp es el canal principal; Facebo
 
 ## Estado de esta entrega
 
-El código está actualizado, con pruebas ejecutadas en SQLite y navegador, compilación Next.js y configuración para desplegar. **No está publicado ni conectado a un proyecto real de Supabase.** Consulta `docs/VERIFICACION.md`: la integración PostgreSQL, Docker, Vercel y la infraestructura real siguen pendientes. No interpretar el ZIP como una aplicación ya certificada en producción.
+La aceptación local con `npm run verify:docker` terminó con código 0 sobre la imagen de producción: 118 pruebas Node (SQLite y PostgreSQL, sin omisiones), 12 pruebas Playwright de escritorio/móvil y auditoría sin vulnerabilidades. También se comprobaron TLS, permisos limitados, caída/recuperación, persistencia y respaldo/restauración. La arquitectura elegida es **un único servidor Linux con Docker Compose, PostgreSQL y Caddy HTTPS**. Esto no acredita una publicación remota, una ejecución remota de CI ni una conexión a un proyecto alojado en Supabase. Consulta [la evidencia y los límites](docs/VERIFICACION.md) y [el procedimiento de despliegue](docs/DESPLIEGUE.md).
 
 ## Inicio local
 
-Node.js 22.16 o posterior dentro de la rama 22; npm. No hace falta Supabase para desarrollo local.
+Node.js **24.x** y npm. Usa el `package-lock.json` incluido mediante `npm ci`. No hace falta Supabase ni Docker para desarrollo local con SQLite.
 
 ```bash
-npm install
+npm ci
 cp .env.example .env
 # Editar .env: correo y contraseña únicos para el administrador.
 # DB_DRIVER=auto y DATABASE_URL vacío seleccionan SQLite local.
@@ -26,9 +26,9 @@ Abre `http://localhost:3000/admin/login`. La vitrina pública empieza en modo pr
 
 El comando setup no cambia contraseñas existentes ni duplica la carga inicial. No hay credenciales predefinidas. ADMIN_EMAIL y ADMIN_PASSWORD son solo para comandos locales de configuración; no hacen falta como secretos del frontend ni del runtime de Vercel después del alta.
 
-## Supabase: conexión real por PostgreSQL
+## PostgreSQL y alternativa Supabase
 
-Se utiliza el PostgreSQL de Supabase desde el servidor con `pg`. **No se utilizan la Data API, Supabase Auth ni Supabase Storage.** No necesitas anon key ni service-role key.
+El adaptador conserva el nombre de configuración `DB_DRIVER=supabase`, pero usa PostgreSQL estándar mediante `pg`; también conecta al servicio PostgreSQL de Docker sin una cuenta de Supabase. **No se utilizan la Data API, Supabase Auth ni Supabase Storage.** No necesitas anon key ni service-role key. Para la alternativa alojada en Supabase:
 
 ```dotenv
 DB_DRIVER=supabase
@@ -41,7 +41,7 @@ APP_URL=https://URL_REAL_DEL_DESPLIEGUE
 
 Las cadenas se copian desde Connect en el proyecto de Supabase; no construyas el host suponiendo la región. Usa transaction pooler en Vercel y conexión directa o session pooler para migrar. `DATABASE_DIRECT_URL` es opcional y solo lo usa `db:migrate`. `SUPABASE_DATABASE_URL` es un alias opcional de DATABASE_URL con prioridad explícita. Codifica los caracteres reservados de la contraseña, también para evitar expansión accidental de `$` en `.env`.
 
-Si la conexión necesita el certificado raíz del proyecto, configura `DB_CA_CERT` con ese PEM. TLS verifica el servidor; no se desactiva la verificación para resolver un error de certificado. `DB_SSL=disable` solo admite un PostgreSQL local para pruebas.
+Si la conexión necesita una CA específica, configura `DB_CA_CERT_FILE` con la ruta a un archivo PEM legible y no vacío, o `DB_CA_CERT` con el PEM inline, **nunca ambos**. TLS verifica cadena y hostname; no se desactiva la verificación para resolver un error de certificado. `DB_SSL=disable` solo admite loopback; no admite el hostname Docker `db`. La composición usa `DB_SSL=verify` y monta únicamente la CA en la aplicación.
 
 ```bash
 npm run db:migrate
@@ -55,14 +55,14 @@ La migración crea un esquema **privado** `allnutrition`. No lo agregues a los e
 
 | Configuración | Resultado |
 |---|---|
-| `auto` con cadena PostgreSQL | Supabase |
-| `auto` sin cadena, local o Docker | SQLite persistente |
+| `auto` con cadena PostgreSQL | PostgreSQL (adaptador `supabase`) |
+| `auto` sin cadena, desarrollo local | SQLite persistente |
 | `sqlite` explícito | SQLite, salvo en Vercel |
 | `supabase` sin cadena | Error de configuración |
-| Supabase configurado pero no responde | Error; se reintenta contra la misma base |
+| PostgreSQL configurado pero no responde | Error; no cambia de motor |
 | SQLite en Vercel | Error preventivo |
 
-No hay failover automático ni replicación. Una caída de Supabase NO crea otra base, NO copia datos y NO acepta pedidos en un SQLite vacío. Cambiar de motor requiere migración deliberada y comprobación. Esto evita dos fuentes diferentes de pedidos.
+No hay failover automático ni replicación. Una caída de PostgreSQL NO crea otra base, NO copia datos y NO acepta pedidos en un SQLite vacío. Cambiar de motor requiere migración deliberada y comprobación. La composición Docker entregada configura PostgreSQL explícitamente, no un fallback SQLite.
 
 ## Imágenes y enlaces
 
@@ -82,16 +82,18 @@ Pedidos: Nuevo → Preparando → Enviado → Entregado; Cancelado antes del des
 
 ## Despliegue
 
-Opción preparada: **Vercel + Supabase**. Alternativa: **Docker con SQLite persistente o Supabase**. Consulta `docs/DESPLIEGUE.md` para el procedimiento completo.
+Arquitectura elegida: **Linux + Docker Compose + PostgreSQL 16 + Caddy** en un único servidor. El staging local usa `https://localhost:8443` con CA local; no se instala confianza automáticamente en el sistema. Credenciales y certificados se generan en archivos privados, nunca se copian de las pruebas a producción.
 
 ```bash
-# CLI de Vercel: requiere acceso a tu cuenta y variables ya configuradas en el proyecto.
-npm run deploy
-# Producción, solo después de verificar el despliegue de revisión:
-npm run deploy -- --prod
+# Requiere Node 24, OpenSSL, Docker/Compose y Chromium de Playwright.
+npm run verify:docker
+# Genera o conserva configuración privada coherente; no arranca servicios.
+npm run deploy:env -- staging
 ```
 
-`vercel.json` configura Next.js. `.github/workflows/ci.yml` ejecuta chequeos, el mismo contrato de repositorio con SQLite y PostgreSQL local de pruebas, compilación y pruebas de navegador. La integración Git de Vercel debe conectarse desde la cuenta del titular; este ZIP no la conecta automáticamente.
+Sigue [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) para iniciar staging, migrar con el rol privilegiado separado del runtime, generar configuración de producción y promover la imagen comprobada sin reconstruirla. No se ha proporcionado servidor ni dominio remoto: DNS, HTTPS público, firewall, capacidad y copias fuera del host siguen requiriendo validación allí.
+
+**Vercel + Supabase sigue siendo una alternativa**, no el destino elegido. `npm run deploy` y `npm run deploy -- --prod` son exclusivamente el CLI de Vercel y requieren cuenta/proyecto configurados; no despliegan Compose. `vercel.json` conserva esa opción. El flujo CI reutiliza `npm run verify:docker`; la evidencia local no implica que CI remoto haya ejecutado correctamente.
 
 ## Cuentas, respaldos y cambio de motor
 
@@ -109,19 +111,22 @@ La importación solo acepta un destino sin productos ni pedidos; no sobrescribe 
 ## Pruebas y reproducibilidad
 
 ```bash
-npm test
+npm ci
+npm test               # SQLite; PostgreSQL opcional si no se configura su fixture
 npm run check
 npm run build
 npx playwright install chromium
-npm run test:e2e
+npm run verify:docker  # Aceptación completa obligatoria sobre PostgreSQL y runtime compilado
 ```
 
-La primera instalación genera `package-lock.json`. Revísalo y agrégalo al repositorio; las siguientes instalaciones usarán npm ci. No se incluyó un lock fabricado: el entorno no permitió resolver dependencias. El chequeo de sintaxis no sustituye la compilación ni la aceptación con el cliente.
+El lockfile real está incluido: no lo regeneres desde cero ni uses `npm update` para reproducir esta entrega. `verify:docker` construye la imagen, prepara una base descartable aislada `allnutrition_test`, ejecuta ambos contratos y E2E, comprueba operaciones y conserva evidencia sanitizada antes de eliminar exclusivamente su proyecto de pruebas.
+
+`npm run test:e2e` es un subcomando, no un arranque autónomo: exige `E2E_BASE_URL` con origen **HTTPS de `localhost`**, el servidor compilado ya disponible y PostgreSQL descartable previamente migrado y sembrado con `node tests/e2e/setup.mjs`. El fixture requiere `TEST_DATABASE_URL` apuntando exactamente a `allnutrition_test` y `TEST_ALLOW_DATABASE_RESET=allnutrition_test`, más la configuración TLS `TEST_DB_*`. No arranca `next dev`, no tiene `webServer` ni fallback SQLite. `E2E_ALLOW_SELF_SIGNED=1` permite solo la CA local en el navegador; no desactiva TLS de PostgreSQL. Usa el verificador para coordinar estos pasos: nunca ejecutes reset, E2E destructivo ni pruebas de caída sobre staging persistente o producción.
 
 ## Documentación
 
 - `docs/REQUISITOS_Y_DECISIONES.md`: trazabilidad de requisitos, flujos y decisiones de negocio pendientes.
-- `docs/DESPLIEGUE.md`: Vercel, Supabase, permisos, Docker, migración y vuelta atrás.
+- `docs/DESPLIEGUE.md`: Linux/Compose, staging HTTPS, promoción, permisos, respaldos y vuelta atrás; alternativas Vercel/Supabase y SQLite local.
 - `docs/VERIFICACION.md`: qué se probó y qué sigue pendiente.
 - `docs/ALCANCE_Y_FASES.md`: separación comercial, sin precio de fase 2.
 - `docs/FUENTES.md`: archivos aportados y documentación técnica consultada.

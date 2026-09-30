@@ -1,102 +1,215 @@
-# Despliegue v2 — Vercel, Supabase y alternativa SQLite
+# Despliegue — Node 24, Docker Compose y PostgreSQL
 
-Esta guía configura infraestructura. No acredita un despliegue ya realizado. No hay proyectos, dominios, claves ni bases reales creados desde esta conversación.
+La arquitectura elegida es **un servidor Linux con Docker Compose: Next.js + PostgreSQL 16 + Caddy HTTPS**. Staging usa la misma imagen runtime y composición, con HTTPS local. SQLite local y Vercel/Supabase siguen siendo alternativas, no la topología del Compose común.
 
-## 1. Preparar Supabase
+La aceptación local terminó con exit 0; evidencia sanitizada: `.test-data/docker/10199872067871b1/artifacts/result.json`. Release: `allnutrition:release-d73775caf9a9`, ID `sha256:d73775caf9a97224255ef6544989d1b565c15fd56762a7a78db03564a2e4619b`, plataforma `linux/arm64`; Node host `24.14.1`, runtime `24.21.0`. Incluye contratos SQLite/PostgreSQL, navegador desktop/mobile, TLS, privilegios, caída/recuperación, persistencia y restauración. Ver [VERIFICACION.md](VERIFICACION.md) para resultados y superficie observada. **Esto no acredita publicación remota ni ejecución de CI**: no se ha proporcionado servidor o dominio real.
 
-Crear o seleccionar un proyecto del titular. Copiar sus cadenas reales desde Connect. Para Vercel usar Transaction pooler (normalmente puerto 6543); para migraciones, Direct connection o Session pooler. Copiar usuario, host y puerto del panel, no deducirlos por región.
+## 1. Prerrequisitos y aceptación de una imagen
 
-En .env LOCAL establecer DB_DRIVER=supabase, DATABASE_URL (runtime), DATABASE_DIRECT_URL (DDL, opcional), DB_SSL=verify y DB_CA_CERT si lo exige la cadena TLS. Las credenciales se mantienen privadas. El certificado se usa para verificar el servidor; no se reemplaza por rejectUnauthorized:false.
+Ejecutar desde la raíz del repositorio, con Node 24 (`.nvmrc`), npm, OpenSSL CLI, Docker Engine/Desktop activo y Docker Compose. En este Mac se puede iniciar Docker Desktop con `open -a Docker`; esperar a que `docker info` responda, con un límite de 120 segundos. En Linux instalar previamente Engine/Compose. No continuar sin daemon ni sustituir PostgreSQL por SQLite.
 
-```bash
-npm install
-npm run db:migrate
-npm run setup
-npm run check
-npm test
-npm run build
+```sh
+node --version
+openssl version
+docker info
+docker compose version
+npm ci
+npx playwright install chromium
+# En Linux/CI, usar en su lugar:
+# npx playwright install --with-deps chromium
+npm run verify:docker
 ```
 
-La migración también puede ejecutarse pegando `db/supabase.sql` en el SQL Editor. Es no destructiva y se puede repetir. El setup carga material inicial solo cuando no hay productos/catálogos. Para migrar una SQLite con contenido, **no ejecutar setup/seed primero en el destino**: migrar estructura, importar, y luego crear la cuenta con admin:add.
+El verificador exige Node major 24 y el puerto local 9443 libre. Construye runtime y checks, verifica el contenedor compilado y PostgreSQL real; no arranca `next dev`. Cada ejecución usa `allnutrition-test-ID` y `.test-data/docker/ID/`. Elimina únicamente sus contenedores/volúmenes efímeros al terminar, preservando evidencia. Solo tras aprobar etiqueta el ID comprobado como `allnutrition:release-<12 hex>`; no reconstruir bajo ese tag ni sustituirlo por otra imagen.
 
-## 2. Privacidad del esquema y permisos
+`artifacts/result.json` registra ID, plataforma, release, pruebas y exit code. Los reportes Playwright quedan en las rutas indicadas allí. `operational.json`, dumps, env y claves son privados: contienen datos/sesiones o secretos; no adjuntarlos a CI, incidencias ni soporte. El workflow utiliza el mismo verificador; una ejecución local no demuestra que CI remoto haya pasado.
 
-El esquema `allnutrition` no se expone por la Data API. La migración revoca acceso de PUBLIC, anon y authenticated cuando esos roles existen. Mantener desactivada su exposición. No se utilizan API keys públicas ni service-role keys en el navegador.
+## 2. Configuración privada e idempotencia
 
-Para producción, usar un rol PostgreSQL de ejecución con acceso únicamente al esquema. Crear el rol mediante una operación administrativa segura con contraseña propia. Luego otorgar, sustituyendo `allnutrition_app` por ese rol real:
-
-```sql
-GRANT USAGE ON SCHEMA allnutrition TO allnutrition_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA allnutrition TO allnutrition_app;
+```sh
+npm run deploy:env -- staging
+# Producción: sustituir ambos argumentos por valores reales del titular.
+npm run deploy:env -- production --domain DOMINIO_REAL --admin-email CORREO_REAL
+# Solo lo invoca el verificador en su entorno descartable:
+# npm run deploy:env -- test --id IDENTIFICADOR
 ```
 
-El role no necesita permisos DDL para operar. DATABASE_DIRECT_URL puede pertenecer al administrador de migraciones y DATABASE_URL al role limitado. Las cuentas del panel se almacenan aparte, con contraseña derivada mediante scrypt; no son los usuarios de PostgreSQL ni Supabase Auth.
+| Entorno | Archivo privado | TLS / evidencia | Dumps |
+| --- | --- | --- | --- |
+| Staging | `.env.staging.local` | `data/deploy/staging/{tls,artifacts}` | `backups/staging` |
+| Producción | `.env.server.local` | `data/deploy/production/{tls,artifacts}` | `backups/production` |
+| Test | `.test-data/docker/ID/env` | `.test-data/docker/ID/{tls,artifacts}` | `.test-data/docker/ID/backups` |
 
-La cadena de conexión de un rol personalizado mediante pooler usa el formato que indique Supabase para ese rol y proyecto. No colocar valores secretos en el código, cliente, repositorio o mensajes de soporte.
+El generador usa rutas absolutas y el UID/GID del usuario administrador del host. Generarlo en el host definitivo; no copiar el env de staging a producción ni mover las carpetas después. Los directorios privados son `0700`, env/claves/certificado de servidor `0600`; la CA pública `ca.crt` es `0644`. Las contraseñas aleatorias de PostgreSQL, rol limitado y administrador se guardan solo en el env. Abrirlo con un editor privado o gestor de secretos, no imprimirlo ni ejecutar `docker compose config` sin `--quiet`.
 
-## 3. Publicar Next.js en Vercel
+La CA PostgreSQL RSA-3072 dura 10 años; el certificado del servidor, 365 días, con SAN `DNS:db`. Reejecutar conserva configuración/certificados válidos, sin rotar contraseñas ni claves. Configuración parcial, permisos incoherentes, certificados caducados, hostname/clave incompatibles o cambio de host/rutas producen error sin sobrescribir datos. Avisa si faltan menos de 30 días: planificar renovación controlada antes del vencimiento; el generador no es un renovador automático. No borrar el env para intentar reparar un volumen existente. Tampoco cambia contraseñas de cuentas existentes al repetir setup.
 
-Subir el proyecto a un repositorio propio (sin .env, datos, respaldos ni node_modules). La raíz debe contener package.json y vercel.json. Generar y guardar package-lock.json en un equipo que sí tenga acceso a npm.
+`DB_CA_CERT_FILE` permite leer la CA PEM para PostgreSQL. No combinarlo con `DB_CA_CERT`; archivo ausente/vacío o ambas opciones fallan explícitamente. Nunca desactivar verificación TLS para resolver un error.
 
-En Vercel importar ese repositorio, seleccionar Next.js y Node 22. Configurar las variables de **servidor** según `.env.production.example`. DATABASE_URL debe ser real; APP_URL debe ser el origen HTTPS correcto del despliegue. No agregar prefijo NEXT_PUBLIC_. ADMIN_EMAIL y ADMIN_PASSWORD solo se necesitan en los comandos de alta local, no en el runtime después del setup.
+## 3. Staging persistente
 
-Usar proyectos/bases separados para revisión y producción. Las variables de Preview no deben apuntar sin control a los pedidos reales. El origen específico de preview se obtiene de VERCEL_URL; el código no confía ciegamente en el Host de una solicitud. El esquema se migra antes del deploy, no en cada build.
+Origen: **https://localhost:8443**. No se publica a la LAN. Primero aprobar `verify:docker`; elegir su evidencia y confirmar que el tag local sigue apuntando al ID probado. Este ejemplo usa la aceptación registrada; en releases nuevos actualizar `RESULT`:
 
-Publicar desde la integración Git o usar:
-
-```bash
-npm run deploy
-# Verificar el entorno de revisión, luego:
-npm run deploy -- --prod
+```sh
+RESULT=.test-data/docker/10199872067871b1/artifacts/result.json
+RELEASE=$(node -e 'const r=require("./"+process.argv[1]); if(r.exitCode!==0 || !r.releaseTag) process.exit(1); console.log(r.releaseTag)' "$RESULT")
+EXPECTED_IMAGE=$(node -e 'console.log(require("./"+process.argv[1]).imageId)' "$RESULT")
+test "$(docker image inspect --format '{{.Id}}' "$RELEASE")" = "$EXPECTED_IMAGE" || exit 1
+npm run deploy:env -- staging
 ```
 
-La CLI requiere acceso a la cuenta de Vercel. El script no copia automáticamente .env a la nube. Configurar las variables del proyecto por su panel o CLI de forma privada. Una vez publicado, comprobar `/api/health` (debe responder 200), acceso al panel, lectura/escritura y rechazo de API sin sesión. Después de aprobar contenido se activa la vitrina pública.
+En un editor privado, cambiar **solo `APP_IMAGE`** de `.env.staging.local` al valor de `RELEASE`. No cambiar contraseñas. Los comandos siguientes, en la misma sesión de shell, fijan siempre proyecto/env/ambos archivos:
 
-Se puede iniciar con la URL de despliegue asignada y conectar el dominio cuando se registre. Después, actualizar APP_URL y redes/enlaces que dependan de esa dirección. No se ha comprado ni supuesto un dominio.
-
-## 4. Comprobación continua
-
-`.github/workflows/ci.yml` contiene un servicio PostgreSQL de pruebas, comprobación de sintaxis, contrato de repositorio en ambos motores, next build y pruebas Playwright de escritorio/celular. Las credenciales incluidas en ese servicio son únicamente para una base efímera llamada allnutrition_test.
-
-Vercel publica mediante su propia integración Git. Para no publicar cambios sin verificar, proteger main y exigir el check verify antes de fusionar. El workflow no crea automáticamente una cuenta de Vercel ni sustituye las comprobaciones del entorno de producción.
-
-Las pruebas de navegador usan `.test-data/e2e.sqlite` con datos ficticios. No usar la base de producción para pruebas. El contrato PostgreSQL se niega a limpiar una base que no se llame allnutrition_test y requiere autorización explícita de la variable TEST_ALLOW_DATABASE_RESET.
-
-## 5. Docker y SQLite persistente
-
-Configurar .env con DB_DRIVER=sqlite, APP_URL real y credenciales de alta. Los volúmenes guardan SQLite y respaldos fuera del ciclo de vida del contenedor. No usar múltiples réplicas independientes para escribir sobre copias distintas.
-
-```bash
-docker compose build
-docker compose run --rm web npm run db:migrate
-docker compose run --rm web npm run setup
-docker compose up -d
-docker compose exec web npm run backup
+```sh
+sc() { docker compose -p allnutrition-staging --env-file .env.staging.local -f compose.yaml -f compose.staging.yaml "$@"; }
+sc config --quiet
+sc up -d --no-build --wait --wait-timeout 120 db
+sc run --rm --pull never migrate
+sc run --rm --pull never setup
+sc up -d --no-build --wait --wait-timeout 120 web proxy
+test "$(docker inspect --format '{{.Image}}' "$(sc ps -q web)")" = "$EXPECTED_IMAGE" || exit 1
+sc ps
 ```
 
-El puerto 3000 se expone solo en 127.0.0.1 para colocarlo detrás de un reverse proxy con HTTPS. Configurar TLS en ese proxy; no exponer el panel por HTTP abierto. El contenedor ejecuta Node como usuario no root. Quitar ADMIN_PASSWORD del env de runtime después del alta y conservar las credenciales en un gestor privado.
+`migrate` provisiona/verifica `allnutrition_app` y concede DML, sin ownership ni DDL; comprueba también la conexión limitada. `setup` crea el administrador y contenido inicial sin duplicarlos. No importar cuentas E2E ni pedidos del verificador. No ejecutar fixtures, resetters, checks destructivos ni outage sobre este staging. Conservar los servicios funcionando.
 
-El mismo Docker puede usar Supabase estableciendo DB_DRIVER=supabase y su DATABASE_URL. Tener un volumen no implica que SQLite reciba copia de Supabase.
+### HTTPS verificable y acceso
 
-## 6. Caídas y cambio de motor
+Caddy utiliza una CA HTTPS local **distinta de la CA PostgreSQL**. Exportar solo su certificado público desde su API interna y comprobar cadena/hostname, sin `curl -k`:
 
-Si Supabase deja de responder, no se aceptan escrituras en otra base. El panel debe mostrar error, no un éxito ficticio. La siguiente solicitud vuelve a intentar la misma base. Este proyecto no implementa replicación, cola offline ni alta disponibilidad entre motores.
+```sh
+sc exec -T proxy wget -qO- http://127.0.0.1:2019/pki/ca/local | node --input-type=module -e '
+import { writeFileSync } from "node:fs";
+let body=""; for await (const chunk of process.stdin) body+=chunk;
+const cert=JSON.parse(body).root_certificate;
+if (!cert?.includes("BEGIN CERTIFICATE")) throw new Error("CA HTTPS ausente");
+writeFileSync("data/deploy/staging/artifacts/https-ca.crt",cert,{mode:0o644});'
+curl --fail --silent --show-error --ipv4 --max-time 15 --cacert data/deploy/staging/artifacts/https-ca.crt https://localhost:8443/api/health
+curl --silent --show-error --ipv4 --max-time 15 --cacert data/deploy/staging/artifacts/https-ca.crt --output /dev/null --write-out '%{http_code}\n' https://localhost:8443/api/admin/orders
+```
 
-Para mover datos: detener nuevas escrituras, generar respaldo, preparar la estructura del destino vacío, importar, crear cuentas, probar totales/cantidades/historial, configurar el nuevo entorno y solo entonces reabrir la operación. Conservar la base anterior respaldada sin seguir usándola en paralelo.
+Esperar `200` con `{"ok":true}` en salud y `401` en pedidos sin sesión. `--wait-timeout 120` limita readiness de Compose; si falla, revisar `sc ps` y logs de forma privada, no ignorar errores TLS. El navegador puede advertir sobre la CA local: no se instala confianza en el sistema automáticamente. La excepción Playwright solo se admite en localhost y no reemplaza la comprobación con CA explícita anterior.
 
-```bash
-# Con .env apuntando a la base de origen:
+Credenciales: `ADMIN_EMAIL` y `ADMIN_PASSWORD` en `.env.staging.local`, nunca en esta guía. Comprobar login al panel, cookie Secure/HttpOnly/SameSite=Strict, preview autenticado del catálogo en escritorio/móvil y logout seguido de pedidos `401`. La portada anónima debe permanecer en preparación hasta la aprobación comercial (`launchApproved`); preview no implica publicación. Guardar capturas sin secretos en `data/deploy/staging/artifacts/`.
+
+## 4. Fronteras de infraestructura
+
+- Solo proxy publica puertos: staging `127.0.0.1:8443 → 443`; producción `80/tcp`, `443/tcp` y `443/udp`. Ni PostgreSQL 5432, Next 3000 ni la administración Caddy 2019 se publican al host.
+- `backend` es interna para DB/web/herramientas; `frontend` conecta proxy/web (checks también necesita salida para audit). Proxy no entra en backend y DB no entra en frontend.
+- PostgreSQL persiste en `postgres_data`; Caddy en `caddy_data`/`caddy_config`. Los volúmenes quedan aislados por proyecto, sin nombres globales. Logs persistentes rotan a 10 MB × 3.
+- PostgreSQL recibe únicamente `tls/server/server.crt` y `server.key`; el wrapper copia la clave como `postgres:postgres`, `0600`. La CA privada no se monta. Web recibe solo la CA pública y exige TLS verificado; HBA rechaza todo TCP sin TLS y usa SCRAM para TLS. La confianza del socket Unix queda dentro del contenedor.
+- Web ejecuta como `node`, sin credenciales ADMIN ni conexión DDL. La conexión DDL de aplicación queda en migrate; backup usa `postgres` para `pg_dump` y checks recibe una conexión privilegiada solo para la base descartable. Setup recibe las credenciales de alta. `DB_DRIVER=supabase` designa PostgreSQL estándar, sin SDK ni dependencia de Supabase alojado.
+
+## 5. Promoción a un servidor Linux real
+
+Requiere acceso autorizado a Docker/Compose, almacenamiento persistente suficiente, dominio real apuntando al servidor, firewall/NAT con 80/443 accesibles y correo real del administrador. No se han validado DNS, ACME, carga, recursos, firewall ni recuperación en un servidor remoto.
+
+Transportar el código/configuración correspondiente al release sin `node_modules`, `.env*` privados, datos ni backups. Exportar imagen y evidencia sanitizada, sin secretos:
+
+```sh
+# En el host que aprobó la imagen; RELEASE y RESULT son los del apartado 3.
+docker image save --output data/deploy/staging/artifacts/allnutrition-release.tar "$RELEASE"
+# Transferir por un canal autorizado el tar y result.json al servidor.
+# En el servidor, desde la raíz del proyecto:
+docker image load --input /RUTA_FUERA_DEL_REPOSITORIO/allnutrition-release.tar
+RESULT=result.json
+RELEASE=$(node -e 'const r=require("./"+process.argv[1]); if(r.exitCode!==0 || !r.releaseTag) process.exit(1); console.log(r.releaseTag)' "$RESULT")
+EXPECTED_IMAGE=$(node -e 'console.log(require("./"+process.argv[1]).imageId)' "$RESULT")
+test "$(docker image inspect --format '{{.Id}}' "$RELEASE")" = "$EXPECTED_IMAGE" || exit 1
+docker info --format '{{.OSType}}/{{.Architecture}}'
+docker image inspect --format '{{.Os}}/{{.Architecture}}' "$RELEASE"
+```
+
+La plataforma debe coincidir con el servidor (Docker puede mostrar `aarch64` para `arm64`, `x86_64` para `amd64`). **Si difiere, ejecutar el mismo verificador nativamente en la arquitectura destino y usar su nuevo release/evidencia**. No promover por emulación ni reconstruir una imagen con el tag ya probado.
+
+En el servidor generar configuración nueva, con Node 24/OpenSSL, valores reales y usuario de operación definitivo:
+
+```sh
+npm run deploy:env -- production --domain DOMINIO_REAL --admin-email CORREO_REAL
+```
+
+Editar privadamente **solo `APP_IMAGE`** en `.env.server.local` para fijarlo al release comprobado. No copiar secretos ni volúmenes del staging. Después:
+
+```sh
+pc() { docker compose -p allnutrition-production --env-file .env.server.local -f compose.yaml -f compose.production.yaml "$@"; }
+pc config --quiet
+pc up -d --no-build --wait --wait-timeout 120 db
+pc run --rm --pull never migrate
+pc run --rm --pull never setup
+pc up -d --no-build --wait --wait-timeout 120 web proxy
+test "$(docker inspect --format '{{.Image}}' "$(pc ps -q web)")" = "$EXPECTED_IMAGE" || exit 1
+```
+
+Producción usa Caddy con HTTPS público automático, **sin `tls internal`**. No iniciar ese proxy con dominios ficticios ni intentar ACME para `production.example.invalid`: el verificador solo emplea ese nombre como fixture de sintaxis de Compose/Caddy, no como publicación. Con el dominio real comprobar salud HTTPS mediante confianza pública normal, login/preview/logout y API anónima `401`, antes de aprobar la vitrina.
+
+## 6. Backups y restauración aislada
+
+```sh
+# Usar la función del entorno correspondiente definida arriba:
+sc run --rm --pull never backup
+# En producción:
+pc run --rm --pull never backup
+```
+
+El servicio usa `pg_dump --format=custom`, conexión TLS `verify-full`, CA explícita y `umask 077`. Los dumps `allnutrition-<UTC>.dump` son `0600` en `backups/staging` o `backups/production`, propiedad del UID/GID del operador del host. Contienen cuentas/sesiones y datos comerciales: tratarlos como secretos. No equivalen al JSON comercial del panel, que omite cuentas. Las imágenes externas no se respaldan, solo sus URLs; los recursos estáticos versionados viajan con la imagen.
+
+**Antes de datos reales**, configurar manualmente frecuencia, retención, copia cifrada fuera del servidor y responsables; no hay scheduler, destino off-host ni SLA implementados. Comprobar restauraciones periódicas, no solo existencia del archivo.
+
+Restaurar exclusivamente en una base distinta y vacía, sin reconectar web ni sustituir la base activa. Este ejemplo de producción crea `allnutrition_restore`; si existe, detenerse y elegir una base de recuperación nueva, no borrarla:
+
+```sh
+pc exec -T db createdb -U postgres allnutrition_restore || exit 1
+# Sustituir NOMBRE_REAL.dump por un dump existente de backups/production.
+pc run --rm --pull never -e PGDATABASE=allnutrition_restore backup pg_restore --exit-on-error --dbname=allnutrition_restore /backups/NOMBRE_REAL.dump || exit 1
+# Conexión TLS y comprobación básica con el mismo rol limitado que web:
+pc run --rm --pull never --no-deps web node --input-type=module -e '
+import { databaseConfig } from "./lib/db/config.mjs";
+import { openPostgres } from "./lib/db/postgres.mjs";
+const url=new URL(process.env.DATABASE_URL); url.pathname="/allnutrition_restore";
+const db=await openPostgres(databaseConfig({...process.env,DATABASE_URL:url.href}));
+try {
+  const row=await db.get("SELECT current_database() AS database, current_user AS role, ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()");
+  if (row.database!=="allnutrition_restore" || row.role!=="allnutrition_app" || !row.ssl) throw new Error("Conexión de restauración incompatible");
+  console.log("Restauración: esquema v2 y conexión limitada TLS verificados");
+} finally { await db.close(); }'
+```
+
+Esa salud es solo comprobación básica, no aceptación integral. Antes de utilizar una recuperación, comprobar con acceso limitado cuentas, sesiones, productos, totales, numeración, historial y replay/idempotencia contra evidencia privada tomada del origen, en una instancia aislada sin tráfico real. Confirmar también que el runtime no puede crear tablas. No ejecutar seed ni fixtures sobre el dump.
+
+El verificador ya restaura su pedido exacto de **119000**, cuenta, sesión e historial y comprueba replay/privilegios con `tests/docker/operations.mjs`. Ese auxiliar requiere las guardas de prueba y su snapshot privado; `prepare`/reset solo permiten `allnutrition_test` y `assert` también `allnutrition_restore`. **No es un procedimiento de reset ni un validador genérico de los datos de producción**. No ejecutar la suite contra staging/producción para probar un backup.
+
+## 7. Actualizaciones, rollback y fallos
+
+1. Aprobar el nuevo release con `verify:docker` en la arquitectura destino, transportar/cargarlo y comparar ID/evidencia como arriba. Guardar el tag anterior.
+2. Hacer backup y coordinar una ventana sin escrituras cuando el cambio lo requiera. Revisar compatibilidad de migración con la aplicación anterior.
+3. Cambiar únicamente `APP_IMAGE` al nuevo release. Ejecutar `pc run --rm --pull never migrate` **antes** de `pc up -d --no-build --wait --wait-timeout 120 web proxy`. Comprobar ID en ejecución, salud y flujos autenticados.
+4. Para rollback de aplicación, fijar `APP_IMAGE` al release anterior compatible y recrear web con el mismo comando, verificando salud. **No retroceder automáticamente la base**. Una restauración/cutover de datos requiere decisión y recuperación ensayada aparte.
+
+En staging aplicar la misma secuencia usando `sc`. **Nunca ejecutar `down -v` sobre staging o producción** ni eliminar volúmenes para arreglar una migración. Reinicios conservan datos/sesiones. Si PostgreSQL cae, salud y escrituras fallan con `503`; no hay fallback SQLite, cola offline, réplica ni alta disponibilidad. No comunicar guardados exitosos hasta confirmar recuperación. Proteger evidencia y logs: no publicar cadenas de conexión.
+
+## 8. Alternativas conservadas
+
+### Vercel y PostgreSQL remoto / Supabase
+
+Son una ruta alternativa, no el destino elegido. Usar Node 24, `npm ci` y las variables de servidor de `.env.production.example`, con `APP_URL` HTTPS real. `npm run deploy` y `npm run deploy -- --prod` siguen siendo el CLI de **Vercel**, no comandos para este servidor Docker. Requieren cuenta/proyecto autorizados; no copian automáticamente el env privado.
+
+En Supabase copiar cadenas reales desde Connect: Transaction pooler para runtime cuando corresponda; Direct connection o Session pooler para DDL. No deducir host/usuario/región. Configurar `DB_DRIVER=supabase`, `DATABASE_URL`, `DATABASE_DIRECT_URL` para migraciones y `DB_SSL=verify`; usar `DB_CA_CERT` o `DB_CA_CERT_FILE` si lo requiere la CA, nunca `rejectUnauthorized:false`. En Vercel el archivo CA debe estar disponible realmente en runtime si se usa esa opción.
+
+Migrar con `npm run db:migrate` antes de publicar y usar `npm run setup` solo al inicializar un destino sin contenido. Separar rol administrativo del rol limitado runtime y retirar ADMIN del entorno de aplicación. `--provision-app-role` automatiza el rol del Compose con `DB_APP_PASSWORD`; en servicios gestionados comprobar las capacidades y formato de conexión del proveedor. El esquema `allnutrition` no se expone por Data API; no se utilizan API keys públicas/service-role en el navegador ni Supabase Auth para las cuentas del panel. Separar bases de preview y producción; exigir aceptación antes de publicar y verificar luego salud/login/escrituras/logout en el destino real.
+
+### SQLite local y cambio de motor
+
+SQLite permanece disponible con `DB_DRIVER=sqlite` para desarrollo/instalación local de un único escritor; **el Compose común ya no lo configura ni monta su archivo**. Usar el entorno local documentado en README, `npm ci`, `npm run db:migrate` y `npm run setup`. Una instalación pública alternativa necesitaría su propio HTTPS y persistencia administrada; no reutilizar los comandos Compose antiguos.
+
+Para cambiar de motor: detener escrituras, respaldar, migrar estructura del destino vacío, importar y validar cantidades/totales/historial antes de reabrir. No ejecutar setup/seed primero en el destino de una importación:
+
+```sh
+# Con .env privado apuntando al origen:
 npm run backup
-# Cambiar .env al destino vacío:
+# Configurar .env para el destino vacío:
 npm run db:migrate
 npm run db:import -- backups/ARCHIVO_REAL.json
 npm run admin:add
 ```
 
-También se admite `npm run db:import -- --sqlite ./COPIA_DE_LA_BASE.sqlite` con .env apuntando al destino. Hacer primero una copia del original: abrir una SQLite v1 añade las tablas v2 no destructivas. Imágenes antiguas `/api/media/...` deben reemplazarse por URLs antes de esa importación. No se exportan archivos binarios ni sesiones.
-
-## 7. Respaldos y límites de operación
-
-El panel exporta un JSON comercial sin cuentas, no un volcado completo de PostgreSQL. Para un respaldo integral de Supabase usar también el mecanismo del proveedor o pg_dump desde conexión adecuada. Establecer frecuencia/retención y hacer una restauración de prueba; este ZIP no configura por sí solo una tarea programada ni un SLA.
-
-Las imágenes externas no forman parte del respaldo: solo sus URLs. No hay upload ni caché de archivos en el servidor. Las dos imágenes iniciales son recursos estáticos versionados del proyecto. Los dominios, planes del host y costes del proveedor los decide el titular; no se presupone gratuidad ni están confundidos con el mantenimiento de cinco meses.
+También se admite `npm run db:import -- --sqlite ./COPIA_DE_LA_BASE.sqlite`; hacer una copia antes, pues abrir SQLite v1 añade tablas v2 de forma no destructiva. Reemplazar imágenes antiguas `/api/media/...` por URLs antes de importar. La exportación comercial no migra binarios ni sesiones. Conservar respaldo del origen sin operar simultáneamente sobre dos bases independientes.

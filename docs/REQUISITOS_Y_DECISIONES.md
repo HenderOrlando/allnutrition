@@ -69,8 +69,8 @@ Los datos personales y enlaces de comprobantes no aparecen en las consultas púb
 
 | Tema | Valor de trabajo en el código | Confirmación necesaria |
 |---|---|---|
-| Plataforma de publicación | Vercel con Supabase, Docker alternativo | Confirmar Vercel o indicar otro host. Falta crear/configurar proyecto real. |
-| Fallback | SQLite local/Docker; sin failover por caída | Confirmar que se busca alternativa de despliegue, no continuidad automática con replicación. |
+| Plataforma de publicación | Elegida: servidor Linux único con Docker Compose, PostgreSQL y Caddy HTTPS | Faltan servidor/dominio reales y validación remota. Vercel/Supabase queda como alternativa no desplegada. |
+| Fallback | SQLite para desarrollo local; sin failover por caída | Docker usa PostgreSQL explícitamente. Cambiar de motor exige migración deliberada, no continuidad automática ni replicación. |
 | Catálogos | Colecciones navegables dentro de la web | Confirmar que no significa archivos PDF descargables ni varios catálogos de precios. |
 | Presentaciones y sabores | Referencias independientes | Confirmar si necesitan un selector de variantes dentro de un único producto. |
 | Alta de pedidos | Manual después de WhatsApp | Confirmar que el visitante no debe crear directamente un pedido en esta fase. |
@@ -84,4 +84,4 @@ Los datos personales y enlaces de comprobantes no aparecen en las consultas púb
 
 ## Criterios para entrega y publicación real
 
-Ejecutar compilación y navegador; ejecutar contrato PostgreSQL y conectar un proyecto de revisión; registrar/editar un pedido completo con datos ficticios en staging; probar enlaces desde celular; verificar que un usuario sin sesión no accede a pedidos; verificar respaldo y restauración; confirmar las reglas pendientes y aprobar contenido. Luego publicar y entregar cuentas individuales e instrucciones.
+La aceptación técnica local de compilación, contratos SQLite/PostgreSQL, navegador HTTPS, permisos, caída/recuperación y respaldo/restauración se registra en [VERIFICACION.md](VERIFICACION.md). Los pedidos ficticios, cuentas E2E, resets y pruebas de caída se ejecutan exclusivamente en la base descartable `allnutrition_test`; la restauración se comprueba en otra base vacía del mismo proyecto descartable. El staging persistente usa el seed de contenido aportado y su administrador propio, sin copiar cuentas ni pedidos de prueba: revisar allí portada de preparación, login, panel, preview y enlaces desde celular. Antes de publicar en el servidor Linux con Compose elegido, validar la infraestructura remota según [DESPLIEGUE.md](DESPLIEGUE.md), confirmar reglas pendientes y aprobar contenido; luego entregar cuentas individuales e instrucciones.
