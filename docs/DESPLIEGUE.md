@@ -182,6 +182,15 @@ El enlace `3000:3000` de ese override solo es accesible en la interfaz privada d
 
 Confiar en la CA pública normal desde clientes; validar `/api/health`, login, cookie segura y API autenticada `200`. La VM no recibe puertos públicos ni reemplaza al host proxy.
 
+### Registro de despliegue probado (2026-09-30)
+
+- VM independiente `allnutrition-prod`, Ubuntu 24.04 `amd64`, 2 vCPU, 8 GiB RAM, disco qcow2 de 60 GiB; pool dedicado `allnutrition-prod`, `/var/lib/libvirt/images/allnutrition-prod`. Imagen cloud Ubuntu Noble verificada con SHA-256 `6a81c37564db9b1ee84e141922625e1d7c5b389b99bb3c572e0243607d5bb4d2`.
+- Red NAT libvirt `allnutrition-prod`, bridge `virbr-anprod`, guest `192.168.201.10`; VM, red y pool configurados para autostart. El guest no tiene dirección/puertos públicos; el único puerto publicado es `web:3000` en la red privada, y PostgreSQL permanece sin puertos publicados.
+- Código probado en `3199e460e617b3ebc4e0ec26a652b7e8514de881`; `npm run verify:docker` aprobó y promovió `allnutrition:release-8efed7d1630b`, `amd64`, `sha256:8efed7d1630b8e943cf234217bd355dac8eebe103074e5c9996ea9d16280f44e`. Docker 29.8.1, Compose 5.5.1, Node 24.21.0; los 12 casos Playwright escritorio/móvil y las verificaciones TLS, caída/recuperación y pg_dump/restore terminaron aprobados.
+- El DNS ya apuntaba al host; no se modificaron registros. Certificado público Let's Encrypt ECDSA válido hasta 2026-12-29; el timer existente y el hook `reload-nginx.sh` renuevan y recargan Nginx. Único vhost añadido: `/etc/nginx/sites-enabled/allnutrition-wintimeapp.co.conf`. La regla de salida está aislada en `allnutrition-prod-forwarding.service`; no cambió la política global del firewall.
+- El backup manual inicial es `backups/production/allnutrition-20260930T041653Z.dump`, formato PostgreSQL custom, 20 291 bytes, modo `0600`, SHA-256 `cee7606ba026a9349fe9b419af86540cbe21ccd168caafedd0405a73ebb37bc2`. Se comprobó con `pg_restore --list`. Reside solo en el disco persistente de esta VM: **aún no hay programación, retención ni copia fuera del host**.
+- Setup creó un producto y cuatro catálogos para revisión; el público ve “Estamos preparando nuestro catálogo” hasta que el responsable apruebe la vitrina desde **Contacto y redes**. No se publicó contenido comercial sin aprobación.
+
 ## 6. Backups y restauración aislada
 
 ```sh
