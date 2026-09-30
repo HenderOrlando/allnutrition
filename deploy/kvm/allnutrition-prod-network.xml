@@ -1,0 +1,15 @@
+<network>
+  <name>allnutrition-prod</name>
+  <forward mode="nat">
+    <nat>
+      <port start="1024" end="65535"/>
+    </nat>
+  </forward>
+  <bridge name="virbr-anprod" stp="on" delay="0"/>
+  <ip address="192.168.201.1" netmask="255.255.255.0">
+    <dhcp>
+      <range start="192.168.201.50" end="192.168.201.200"/>
+      <host mac="52:54:00:a1:19:01" name="allnutrition-prod" ip="192.168.201.10"/>
+    </dhcp>
+  </ip>
+</network>

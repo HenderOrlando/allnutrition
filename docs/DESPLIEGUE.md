@@ -94,7 +94,7 @@ Credenciales: `ADMIN_EMAIL` y `ADMIN_PASSWORD` en `.env.staging.local`, nunca en
 
 ## 4. Fronteras de infraestructura
 
-- Solo proxy publica puertos: staging `127.0.0.1:8443 → 443`; producción `80/tcp`, `443/tcp` y `443/udp`. Ni PostgreSQL 5432, Next 3000 ni la administración Caddy 2019 se publican al host.
+- Si Caddy termina TLS en el servidor, solo ese proxy publica puertos; PostgreSQL 5432 y Next 3000 no se exponen. Para una VM privada detrás del Nginx ya existente, usar `compose.nginx.yaml`: solo publica `web:3000` en la red NAT privada; la base continúa exclusivamente en `backend`. Nunca usar ese override en una VM con interfaz pública.
 - `backend` es interna para DB/web/herramientas; `frontend` conecta proxy/web (checks también necesita salida para audit). Proxy no entra en backend y DB no entra en frontend.
 - PostgreSQL persiste en `postgres_data`; Caddy en `caddy_data`/`caddy_config`. Los volúmenes quedan aislados por proyecto, sin nombres globales. Logs persistentes rotan a 10 MB × 3.
 - PostgreSQL recibe únicamente `tls/server/server.crt` y `server.key`; el wrapper copia la clave como `postgres:postgres`, `0600`. La CA privada no se monta. Web recibe solo la CA pública y exige TLS verificado; HBA rechaza todo TCP sin TLS y usa SCRAM para TLS. La confianza del socket Unix queda dentro del contenedor.
@@ -141,6 +141,33 @@ test "$(docker inspect --format '{{.Image}}' "$(pc ps -q web)")" = "$EXPECTED_IM
 ```
 
 Producción usa Caddy con HTTPS público automático, **sin `tls internal`**. No iniciar ese proxy con dominios ficticios ni intentar ACME para `production.example.invalid`: el verificador solo emplea ese nombre como fixture de sintaxis de Compose/Caddy, no como publicación. Con el dominio real comprobar salud HTTPS mediante confianza pública normal, login/preview/logout y API anónima `401`, antes de aprobar la vitrina.
+
+### VM privada detrás de un Nginx existente
+
+Cuando el servidor ya sirve otros dominios con Nginx, crear una red NAT/libvirt independiente con DHCP reservado `192.168.201.10` para la VM `allnutrition-prod`; no conectar esta VM a redes de otras cargas. Instalar Ubuntu 24.04, Docker/Compose y Node 24 en la VM; clonar el repositorio y ejecutar `npm run verify:docker` allí para producir la imagen nativa de arquitectura. No instalar Docker ni PostgreSQL directamente en el host compartido.
+
+```sh
+npm run deploy:env -- production --domain allnutrition.wintimeapp.co --admin-email CORREO_REAL
+```
+
+
+Generar `.env.server.local` privadamente **dentro de la VM** y fijar `APP_IMAGE` al release que registró ese verificador. Para operar detrás del Nginx del host, no usar `compose.production.yaml` ni iniciar Caddy:
+
+```sh
+np() { docker compose -p allnutrition-production --env-file .env.server.local -f compose.yaml -f compose.nginx.yaml "$@"; }
+np config --quiet
+np up -d --no-build --wait --wait-timeout 120 db
+np run --rm --pull never migrate
+np run --rm --pull never setup
+np up -d --no-build --wait --wait-timeout 120 web
+```
+
+El enlace `3000:3000` de ese override solo es accesible en la interfaz privada del guest; no publicar PostgreSQL, Docker ni la API directamente en la IP pública. En el host Nginx instalar primero `deploy/nginx/allnutrition-acme.conf` como vhost exclusivo, crear `/var/lib/letsencrypt`, ejecutar `nginx -t` y recargar. Solicitar el certificado con `certbot certonly --webroot -w /var/lib/letsencrypt -d allnutrition.wintimeapp.co --email CORREO_REAL --agree-tos --non-interactive`; luego instalar `deploy/nginx/allnutrition.wintimeapp.co.conf` en su lugar, repetir `nginx -t` y solo si pasa ejecutar `systemctl reload nginx`. El vhost final reenvía únicamente a `192.168.201.10:3000`; no reemplazar el Nginx compartido ni cambiar sus otros archivos.
+
+`deploy/kvm/allnutrition-prod-network.xml` define la red e IP reservada; los volúmenes de PostgreSQL, la imagen de Ubuntu, el disco y los env/certificados de aplicación deben residir en almacenamiento persistente del guest/host, nunca en el pool temporal de VMs de CI. Comprobar antes de registrar una red nueva que su nombre, bridge y subred no existen ni se solapan. Antes y después del reload validar al menos un dominio previo del host. Si DNS no apunta a ese host o no se puede expedir el certificado, detenerse sin tocar las otras cargas.
+
+Confiar en la CA pública normal desde clientes; validar `/api/health`, login, cookie segura y API autenticada `200`. La VM no recibe puertos públicos ni reemplaza al host proxy.
+
 
 ## 6. Backups y restauración aislada
 

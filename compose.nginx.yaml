@@ -1,0 +1,7 @@
+# Use only inside the dedicated, private libvirt NAT guest behind host Nginx.
+services:
+  web:
+    ports:
+      - "3000:3000"
+  proxy:
+    profiles: [standalone-caddy]
