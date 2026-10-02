@@ -16,11 +16,12 @@ test('sesión HTTPS, CSRF, origen, concurrencia y cierre de sesión', async ({ p
   const slug = `seguridad-e2e-${info.project.name}-${info.retry}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
   await drawer.getByLabel('Nombre', { exact: false }).fill(`Producto ${slug}`);
   await drawer.getByLabel('Dirección corta (sin espacios)', { exact: false }).fill(slug);
-  await drawer.getByLabel('Enlace de la fotografía', { exact: true }).fill('/brand/creatina-vital-force.jpg');
+  await drawer.getByRole('button', { name: 'Ingresar URL HTTPS' }).click();
+  await drawer.getByLabel('URL pública de la fotografía', { exact: true }).fill('/brand/creatina-vital-force.jpg');
   await drawer.getByLabel('Presentación / contenido').fill('Presentación de seguridad');
   await drawer.getByLabel('Precio en pesos colombianos').fill('25000');
   const savedResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/products' && response.request().method() === 'POST');
-  await drawer.getByRole('button', { name: 'Guardar cambios' }).click();
+  await drawer.getByRole('button', { name: 'Crear producto' }).click();
   const createdResponse = await savedResponse;
   expect(createdResponse.status()).toBe(201);
   const csrf = await createdResponse.request().headerValue('x-csrf-token');
