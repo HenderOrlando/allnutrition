@@ -1,3 +1,15 @@
+# Estado de verificación actual — carga local de imágenes
+
+Ejecuciones locales del 2 de octubre de 2026. `npm run verify:docker` se intentó tres veces, sin completar una ejecución con exit 0:
+
+| Intento | Resultado observado |
+|---|---|
+| 1 | Build aprobó; 126/127 pruebas pasaron. Falló el caso nuevo de limpieza porque el test guardó el archivo en un directorio temporal y el helper buscó en el directorio predeterminado. Se añadió el directorio como opción explícita. |
+| 2 | Build, 127/127 pruebas (SQLite y PostgreSQL) y auditoría de producción sin vulnerabilidades aprobados. Playwright terminó 14 casos y falló en escritorio/móvil por un selector de heading ambiguo: la ficha muestra el título como `h1` y otra vez como tarjeta recomendada. La captura real de Chromium muestra la imagen local en la página pública. El selector quedó limitado a `h1`. |
+| 3 | Next.js compiló sin la advertencia de trazado dinámico. BuildKit falló al exportar la imagen de checks (`parent snapshot ... does not exist`), antes de ejecutar las pruebas. |
+
+La función de carga, conversión WebP, cuota y referencia compartida pasó sus pruebas unitarias y los contratos PostgreSQL/SQLite en el segundo intento. La suite E2E todavía no tiene una ejecución exitosa después de corregir el selector; por eso esta aceptación queda **pendiente**, no aprobada. No se modificó producción ni sus cuentas/datos: cada intento usó un proyecto Compose `allnutrition-test-*` descartable, que el verificador eliminó.
+
 # Verificación observada — Node 24 y staging Docker
 
 Ejecución local del 29 de septiembre de 2026. No acredita publicación remota ni una ejecución de GitHub Actions. Los archivos `RESULTADOS_*.txt` anteriores son registros históricos; la evidencia vigente es la indicada aquí.

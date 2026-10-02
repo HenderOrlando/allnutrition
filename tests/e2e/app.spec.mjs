@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import sharp from 'sharp';
 import { test,expect } from '@playwright/test';
 import { login } from './helpers.mjs';
 
@@ -6,6 +10,8 @@ test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',a
  await page.screenshot({path:info.outputPath('preparation.png'),fullPage:true});
  expect((await request.get('/api/admin/orders')).status()).toBe(401);
  expect((await request.get('/api/admin/settings')).status()).toBe(401);
+ expect((await request.get('/api/admin/upload')).status()).toBe(401);
+ expect((await request.post('/api/admin/upload',{data:'not-an-image'})).status()).toBe(401);
  expect((await request.get('/productos/creatina-vital-force-70-servicios')).status()).toBe(404);
  await page.goto('/admin/login');
  await expect(page.getByLabel('Correo de administrador')).toBeVisible();
@@ -31,7 +37,7 @@ test('panel permite vista previa y conserva WhatsApp principal',async({page},inf
  await page.screenshot({path:info.outputPath('catalog-preview.png'),fullPage:true});
 });
 
-test('crea y edita un producto usando únicamente un enlace',async({page},info)=>{
+test('crea y edita un producto conservando un enlace HTTPS externo',async({page},info)=>{
  await login(page);await page.getByRole('navigation',{name:'Administración'}).getByRole('button',{name:'Productos',exact:false}).click();
  await page.getByRole('button',{name:'Crear producto',exact:true}).click();
  const drawer=page.getByRole('dialog');
@@ -50,6 +56,38 @@ test('crea y edita un producto usando únicamente un enlace',async({page},info)=
  await expect(drawer.getByLabel('Precio en pesos colombianos')).toHaveValue('26000');
  await drawer.getByRole('button',{name:'Cerrar editor'}).click();
  await expect(drawer).toHaveCount(0);
+});
+test('sube una imagen local optimizada y la muestra en la vitrina pública',async({page,request},info)=>{
+ await login(page);await page.getByRole('navigation',{name:'Administración'}).getByRole('button',{name:'Productos',exact:false}).click();
+ await page.getByRole('button',{name:'Crear producto',exact:true}).click();
+ const drawer=page.getByRole('dialog'),name=`Producto imagen local ${info.project.name}`;
+ await drawer.getByLabel('Nombre',{exact:false}).fill(name);
+ await drawer.getByLabel('Presentación / contenido').fill('Presentación de prueba');
+ await drawer.getByLabel('Precio en pesos colombianos').fill('25000');
+ await drawer.getByLabel('Publicación').selectOption('published');
+ const temp=mkdtempSync(join(tmpdir(),'allnutrition-e2e-media-')),file=join(temp,'product-upload.png');
+ writeFileSync(file,await sharp({create:{width:3200,height:1600,channels:3,background:{r:38,g:112,b:83}}}).png().toBuffer());
+ try{await drawer.getByLabel('Archivo de imagen del producto').setInputFiles(file);}finally{rmSync(temp,{recursive:true,force:true});}
+ const imageField=drawer.getByLabel('Enlace de la fotografía',{exact:true});
+ await expect(imageField).toHaveValue(/^\/api\/media\/[0-9a-f-]{36}$/);
+ const imageUrl=await imageField.inputValue(),slug=await drawer.getByLabel('Dirección corta (sin espacios)').inputValue(),preview=drawer.locator('.image-picker img');
+ await expect(preview).toHaveAttribute('src',imageUrl);
+ await expect.poll(()=>preview.evaluate(image=>image.naturalWidth)).toBe(2400);
+ await expect(drawer.getByRole('status').filter({hasText:'Almacenamiento local de imágenes'})).toContainText('1 GB');
+ await drawer.getByRole('button',{name:'Guardar cambios'}).click();await expect(drawer).toHaveCount(0);
+ await page.goto(`/productos/${slug}`);
+ const productImage=page.locator('.detail-photo img');
+ await expect(page.getByRole('heading',{level:1,name,exact:true})).toBeVisible();
+ await expect(productImage).toHaveAttribute('src',imageUrl);
+ await expect.poll(()=>productImage.evaluate(image=>image.naturalWidth)).toBe(2400);
+ await page.screenshot({path:info.outputPath('product-local-image.png'),fullPage:true});
+ await page.goto('/?preview=1');
+ const card=page.locator('article.product-card').filter({hasText:name});
+ await expect(card).toHaveCount(1);await expect(card.locator('img')).toHaveAttribute('src',imageUrl);
+ const response=await request.get(imageUrl);expect(response.status()).toBe(200);expect(response.headers()['content-type']).toContain('image/webp');
+ const metadata=await sharp(await response.body()).metadata();
+ expect(metadata.width).toBe(2400);expect(metadata.height).toBe(1200);
+ if(process.env.PLAYWRIGHT_MEDIA_SMOKE_FILE){const manifest=process.env.PLAYWRIGHT_MEDIA_SMOKE_FILE;mkdirSync(dirname(manifest),{recursive:true});writeFileSync(manifest,JSON.stringify({url:imageUrl})+'\n',{mode:0o600});}
 });
 
 test('pedido manual: alta, estado, validación de guía e historial',async({page},info)=>{

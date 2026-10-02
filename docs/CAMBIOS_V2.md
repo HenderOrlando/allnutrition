@@ -2,7 +2,7 @@
 
 Base de datos: repositorio asíncrono común, adaptadores SQLite y PostgreSQL/Supabase, migraciones privadas, configuración .env y selección segura sin conmutación automática por caída. SQLite no se permite en Vercel.
 
-Imágenes: se retiraron cargas y almacenamiento del administrador; ahora se guardan URLs y el navegador carga la imagen. Los endpoints de carga/media antiguos responden 410. Las dos imágenes de marca entregadas se conservan como recursos estáticos. Antes de migrar una base v1 con imágenes `/api/media/...`, reemplazar esas direcciones por enlaces.
+Imágenes: el editor de Productos admite carga local JPEG/JPG, PNG y WebP (entrada máxima 10 MiB), optimiza a WebP de hasta 2400 px por lado y muestra una cuota de 1.000.000.000 bytes. Los archivos se sirven por `/api/media/<id>` y persisten fuera de PostgreSQL. En desarrollo local el directorio predeterminado es `data/product-images` (ignorado por Git); en Docker el volumen `product_images` se monta en `/app/data/product-images`. Catálogos, combos, logo y comprobantes siguen usando enlaces/recursos estáticos; no hay conectores externos. Antes de migrar referencias locales antiguas `/api/media/...`, copiar también sus binarios o reemplazarlas por enlaces.
 
 Pedidos: campos de destinatario y despacho de la Planilla, valores/fechas/referencia/comprobante de pago, control separado de pago y envío, transiciones propuestas y razones, historiales, idempotencia, instantáneas históricas y protección ante ediciones simultáneas.
 

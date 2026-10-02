@@ -5,10 +5,10 @@
 - `ALL NUTRITION COLOMBIA - planilla.pdf`, página 1: marca/eslogan, tono, categorías, logo como respuesta 5 y foto/datos de creatina como respuesta 7. Página 2: WhatsApp, responsables, pagos y datos solicitados para despachar.
 - `Formulario_All_Nutrition_Paquete_Completo_Corto.pdf`: preguntas numeradas que corresponden a la Planilla; no tratar el formulario sin respuestas impresas como información no entregada.
 - `Alcance_All_Nutrition_Mantenimiento_Inventario.pdf`: referencia histórica de página base, módulo opcional, responsabilidades y límites. No se traslada automáticamente todo ese alcance a fase 1.
-- Instrucciones posteriores del usuario: panel autoadministrado Next.js con productos/catálogos/combos/redes/FAQ/mensajes/envíos/pedidos; WhatsApp principal, redes complementarias, dominio aún en búsqueda; Supabase por .env, alternativa SQLite y archivos mediante enlaces; separación de fase 2 sin precio.
+- Instrucciones posteriores del usuario: panel autoadministrado Next.js con productos/catálogos/combos/redes/FAQ/mensajes/envíos/pedidos; WhatsApp principal, redes complementarias, dominio aún en búsqueda; Supabase por .env, alternativa SQLite, carga local de imágenes de producto y enlaces para otros archivos; separación de fase 2 sin precio.
 - Decisión posterior de infraestructura: Node 24 y un único servidor Linux con Docker Compose, PostgreSQL y Caddy; staging HTTPS local y aceptación descartable sobre la imagen de producción. No se suministraron servidor ni dominio remoto.
 
-Los dos JPEG de public/brand provienen de las imágenes de la página 1 de la Planilla. Son recursos estáticos ya incluidos, no archivos nuevos cargados por el administrador. Las imágenes nuevas se enlazan; no se usa almacenamiento integrado.
+Los dos JPEG de `public/brand` provienen de las imágenes de la página 1 de la Planilla. Son recursos estáticos ya incluidos, no cargas del administrador. El administrador puede subir imágenes locales solo para productos; las imágenes de logo/catálogos/combos y los comprobantes conservan sus mecanismos estáticos o por URL.
 
 Las 50 unidades son el umbral consultado, no una existencia inicial. Textos propuestos, transiciones, pago parcial y opciones de entrega se identifican como decisiones de diseño; no se atribuyen al cliente como respuestas confirmadas. La elección posterior de infraestructura se registra por separado.
 

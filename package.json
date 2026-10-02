@@ -26,13 +26,14 @@
   },
   "dependencies": {
     "next": "16.3.6",
+    "pg": "^8.16.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "0.0.1",
-    "pg": "^8.16.3"
+    "sharp": "0.35.5"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
-    "@playwright/test": "^1.55.1"
+    "@playwright/test": "^1.55.1",
+    "typescript": "^5.8.3"
   }
 }

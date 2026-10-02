@@ -66,11 +66,11 @@ No hay failover automático ni replicación. Una caída de PostgreSQL NO crea ot
 
 ## Imágenes y enlaces
 
-Pegar URL HTTPS → ver vista previa → guardar contenido → publicar. Solo se guarda la URL. La imagen la solicita directamente el navegador; no hay upload, copia del archivo, proxy de imágenes, optimización en disco ni integración con almacenamiento.
+En **Productos** se puede pegar una URL pública HTTPS o subir JPEG/JPG, PNG y WebP de hasta 10 MiB. La carga validada se optimiza a WebP, conserva la proporción y limita cada lado a 2400 px. El panel muestra el uso de la cuota local exacta de 1.000.000.000 bytes; el archivo se guarda fuera de la base de datos y el servidor lo entrega a la vitrina. En desarrollo local el directorio predeterminado es `data/product-images` (ignorado por Git); `MEDIA_DIR` permite configurarlo.
 
-Las dos imágenes originales (logo y creatina) siguen en `public/brand` como recursos estáticos entregados con el código, no como un sistema de cargas. Pueden sustituirse por enlaces. No se generan imágenes de productos ni precios ficticios. Los comprobantes de pago también pueden enlazarse desde el panel. Ocultar el enlace en el panel no hace privado el archivo externo: conserva los permisos de acceso apropiados en su sitio de origen.
+El volumen Docker persistente `product_images` conserva las imágenes locales de productos entre reinicios. El logo, las portadas de catálogos/combos y los comprobantes siguen usando los mecanismos existentes (recursos estáticos o enlaces HTTPS); no se copian al almacenamiento local. Si el selector del dispositivo ofrece iCloud Drive, un archivo JPEG/PNG/WebP compatible puede importarse desde allí como archivo local y consume esta misma cuota: no es una conexión de cuenta iCloud.
 
-El enlace tiene que apuntar a la imagen pública, no a una carpeta o página de Facebook/Instagram/Drive. Su continuidad depende del servidor de origen. Una URL expirable o un sitio que impida enlazar imágenes puede dejar de funcionar. La vista previa detecta errores de carga; no certifica propiedad ni disponibilidad futura.
+Las imágenes remotas se solicitan directamente desde el navegador y su disponibilidad depende del sitio de origen. Enlaces a carpetas o páginas sociales no son imágenes directas. La vista previa detecta errores de carga, pero no certifica propiedad ni disponibilidad futura.
 
 ## Funciones del panel
 
@@ -132,3 +132,4 @@ El lockfile real está incluido: no lo regeneres desde cero ni uses `npm update`
 - `docs/VERIFICACION.md`: qué se probó y qué sigue pendiente.
 - `docs/ALCANCE_Y_FASES.md`: separación comercial, sin precio de fase 2.
 - `docs/FUENTES.md`: archivos aportados y documentación técnica consultada.
+- `docs/REGISTRO_PROVEEDORES_ALMACENAMIENTO.md`: pasos oficiales y límites verificados para registrar futuras aplicaciones de almacenamiento; no configura conectores ni cuentas.

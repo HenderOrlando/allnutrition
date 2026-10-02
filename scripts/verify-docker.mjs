@@ -54,7 +54,7 @@ function request(path, { method = 'GET', headers = {}, body, timeout = 12000 } =
       response.on('end', () => {
         try {
           const json = response.headers['content-type']?.includes('application/json');
-          resolve({ status: response.statusCode, data: json ? JSON.parse(data) : null });
+          resolve({ status: response.statusCode, contentType: response.headers['content-type'] || '', data: json ? JSON.parse(data) : null });
         } catch { reject(new Error(`JSON inválido en ${path}.`)); }
       });
       response.on('error', reject);
@@ -138,9 +138,9 @@ try {
   ensure(runningImage === result.imageId, 'El contenedor ejecutado no coincide con el imageId construido.');
   run('npm', ['run', 'test:e2e'], 'E2E escritorio/móvil y fronteras HTTP', {
     timeout: 300000,
-    env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright },
+    env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright, PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json') },
   });
-  passed('Playwright desktop/mobile: flujos, cookies, CSRF, Origin, versiones, logout y publicación');
+  passed('Playwright desktop/mobile: upload local, render público, límites HTTP, autenticación y CSRF');
 
   const operations = command => compose(['run', '--rm', 'checks', 'node', 'tests/docker/operations.mjs', command], `Operaciones PostgreSQL: ${command}`);
   operations('prepare');
@@ -166,6 +166,10 @@ try {
   compose(['restart', 'web', 'db'], 'Reinicio de aplicación y base');
   await healthy();
   operations('assert');
+  const mediaSmoke = JSON.parse(readFileSync(join(artifacts, 'media-smoke.json'), 'utf8'));
+  const persistedMedia = await request(mediaSmoke.url);
+  ensure(persistedMedia.status === 200 && persistedMedia.contentType.startsWith('image/webp'), 'La imagen local dejó de servirse después del reinicio de web/DB.');
+  passed('imagen WebP local disponible y servida tras restart web/db');
   passed('persistencia y sesiones tras restart web/db');
 
   const oldBackups = new Set(readdirSync(values.BACKUP_DIR));

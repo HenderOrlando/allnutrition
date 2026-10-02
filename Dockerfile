@@ -15,7 +15,7 @@ FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 COPY --from=production-deps --chown=node:node /app /app
-RUN mkdir -p /app/data /app/backups && chown -R node:node /app/data /app/backups && chmod 700 /app/data /app/backups
+RUN mkdir -p /app/data/product-images /app/backups && chown -R node:node /app/data /app/backups && chmod 700 /app/data /app/data/product-images /app/backups
 USER node
 EXPOSE 3000
 CMD ["node","node_modules/next/dist/bin/next","start","--hostname","0.0.0.0"]

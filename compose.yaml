@@ -57,7 +57,9 @@ services:
       context: .
       target: runtime
     environment: *runtime-environment
-    volumes: [*db-ca]
+    volumes:
+      - *db-ca
+      - product_images:/app/data/product-images
     networks: [backend, frontend]
     depends_on:
       db:
@@ -181,3 +183,4 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  product_images:

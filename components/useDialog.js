@@ -16,7 +16,7 @@ export default function useDialog(ref, { busy, dirty, onClose }) {
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }
     };
-    const unload = event => { if (current.current.dirty) { event.preventDefault(); event.returnValue = ''; } };
+    const unload = event => { if (current.current.dirty || current.current.busy) { event.preventDefault(); event.returnValue = ''; } };
     document.addEventListener('keydown', key); window.addEventListener('beforeunload', unload);
     return () => { document.body.style.overflow = overflow; document.removeEventListener('keydown', key); window.removeEventListener('beforeunload', unload); prior?.focus?.(); };
   }, [ref]);

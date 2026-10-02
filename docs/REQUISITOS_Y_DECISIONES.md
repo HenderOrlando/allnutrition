@@ -12,7 +12,7 @@ Esta matriz describe lo programado y las decisiones aún por aceptar. No sustitu
 |---|---|---|
 | Marca y tono fitness | Planilla respuestas 1–5 | Nombre y eslogan cargados; logo incorporado; contenido modificable. |
 | Catálogo inicial | Formulario 6–8; Planilla 6–8 | Categorías Creatinas, Proteínas, Preentrenos y Aminoácidos. Una creatina con fotografía, 70 servicios, sin sabor y precio informado 55.000 COP; pendiente confirmar vigencia antes de publicar. |
-| Productos autoadministrados | Instrucción del desarrollador | Alta/edición/publicación/archivo; imagen por URL; precio COP entero; descripción; presentación; sabor; información de etiqueta; destacado; disponibilidad manual. |
+| Productos autoadministrados | Instrucción del desarrollador | Alta/edición/publicación/archivo; imagen por URL HTTPS o carga local JPEG/JPG, PNG y WebP (máximo 10 MiB); optimización WebP a 2400 px por lado y cuota local de 1.000.000.000 bytes; precio COP entero, descripción, presentación, sabor, información de etiqueta, destacado y disponibilidad manual. |
 | Catálogos | Instrucción del desarrollador | Colecciones con portada y descripción; un producto/ combo puede pertenecer a varias. Página propia `/catalogos/slug`. No PDF ni sincronización del catálogo de WhatsApp. |
 | Combos | Planilla respuesta 9; instrucción del desarrollador | Productos y cantidades con precio y condiciones manuales. No se cargaron combos ficticios ni precios supuestos. |
 | Disponibilidad | Planilla respuesta 10 | Disponible, Consultar y Agotado, elegidos por el administrador. No descuento de existencias. |
@@ -28,16 +28,16 @@ Esta matriz describe lo programado y las decisiones aún por aceptar. No sustitu
 | Pagos manuales | Formulario 18–19; Planilla 18–19 | Nequi, Daviplata, transferencia y efectivo contraentrega. Valor, fecha, referencia, estado y comprobante por enlace; no verificación bancaria. |
 | Autoadministración | Instrucción del desarrollador | El propietario puede actualizar los módulos desde el panel; no hay caducidad de acceso ligada al mantenimiento. |
 | Next.js + Supabase y SQLite | Última instrucción técnica | App Router y backend Node; repositorio común con dos adaptadores y selección por .env. |
-| Enlaces de archivos | Última instrucción técnica | Nuevas imágenes y comprobantes por URL; no carga al servidor ni servicio de almacenamiento. |
+| Enlaces y archivos | Última instrucción técnica | Productos: URL HTTPS o binario optimizado en volumen local persistente Docker; la base conserva solo la referencia. Logo, catálogos, combos y comprobantes conservan recursos estáticos o URL. Exportaciones PostgreSQL/comerciales no incluyen el volumen de medios; debe respaldarse por separado. |
 | Fase 2 sin precio ni entrega anticipada | Instrucción comercial | Explicación opcional y discreta en el panel. Sin embudo, captación, asignación de leads ni seguimiento de no compradores. |
 
 ## Flujos implementados
 
 ### Publicación del catálogo
 
-Administrador inicia sesión → crea/selecciona catálogo → completa producto y enlace de imagen → verifica visualmente el enlace → guarda borrador o publica → revisa la página privada → aprueba la vitrina pública.
+Administrador inicia sesión → crea/selecciona catálogo → completa el producto y pega una URL o sube una imagen compatible → revisa la vista previa y el uso de cuota → guarda borrador o publica → revisa la página privada → aprueba la vitrina pública.
 
-La validación del servidor comprueba datos y enlaces, no descarga imágenes. Publicar un producto exige nombre, dirección corta, foto/enlace, presentación y precio positivo. No se exige completar redes o todos los productos para empezar a diseñar. Al editar una referencia, si otro administrador cambió su versión, se informa el conflicto en lugar de sobrescribir.
+La validación del servidor comprueba los campos y la referencia de imagen. Las cargas de producto verifican formato, tamaño de entrada y cuota antes de guardar el binario optimizado; se aceptan referencias locales únicamente en Productos. Publicar un producto exige nombre, dirección corta, foto/enlace, presentación y precio positivo. No se exige completar redes o todos los productos para empezar a diseñar. Al editar una referencia, si otro administrador cambió su versión, se informa el conflicto en lugar de sobrescribir.
 
 Un combo publicado requiere referencias publicadas. Si después se archiva una de ellas, el combo deja de aparecer públicamente. Si se marca agotada, no admite nuevos pedidos de ese combo. El combo conserva precio manual; no existe cálculo de inventario.
 
@@ -63,7 +63,7 @@ Al guardar se conserva la composición histórica de productos/combos. Cambiar u
 
 Sesiones privadas de ocho horas con cookies HttpOnly; origen y token CSRF en escrituras; contraseñas con scrypt; intentos de acceso limitados en la base, no solo en memoria. Registro público de cuentas desactivado. Las cuentas adicionales se crean mediante comando local por el responsable técnico y tienen los mismos permisos administrativos. Eso no es un sistema de asignación de interesados a asesores.
 
-Los datos personales y enlaces de comprobantes no aparecen en las consultas públicas. La privacidad del archivo externo depende de los permisos en su origen; no se vuelve privado por guardar su URL en el panel. La exportación del panel incluye datos comerciales e historial, no contraseñas ni sesiones. Debe guardarse como información privada. Los enlaces de imágenes públicas implican solicitudes del navegador al sitio de origen; su disponibilidad no la controla All Nutrition.
+Los datos personales y enlaces de comprobantes no aparecen en las consultas públicas. La privacidad del archivo externo depende de los permisos en su origen; no se vuelve privado por guardar su URL en el panel. Las imágenes locales de productos se sirven desde el servidor y no se guardan en la base. La exportación del panel incluye datos comerciales e historial, no contraseñas, sesiones ni binarios; debe guardarse como información privada. Las imágenes enlazadas siguen dependiendo de la disponibilidad de su sitio de origen.
 
 ## Decisiones que faltan confirmar
 

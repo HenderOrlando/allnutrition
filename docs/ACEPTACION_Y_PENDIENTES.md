@@ -14,9 +14,10 @@ Realizar estas comprobaciones en Next.js compilado y en un entorno de revisión 
 
 ## Productos, catálogos e imágenes
 
-- Crear producto con nombre, precio, presentación y URL pública HTTPS de imagen. Verificar vista previa, publicación y ficha individual.
-- Confirmar que no se suben archivos al servidor ni a un servicio Storage. La base guarda URLs.
-- Probar URL rota y marcador de imagen no disponible. Probar rechazo de esquemas peligrosos y destinos privados.
+- Crear producto con URL HTTPS o carga local JPEG/PNG/WebP de hasta 10 MiB. Verificar vista previa, guardado, publicación y ficha/vitrina pública.
+- Confirmar detección por contenido, rechazo de formatos ajenos y archivos corruptos, optimización WebP con proporción preservada y máximo 2400 px por lado.
+- Probar cuota local exacta: uso mostrado en el panel, subida que llega al límite, rechazo al excederlo y persistencia del archivo tras reiniciar web.
+- Confirmar que solo la fotografía de producto acepta referencias `/api/media/<uuid>`; logo, catálogos, combos y comprobantes conservan sus mecanismos existentes.
 - Confirmar que las imágenes existentes de marca y creatina se mantienen; no solicitarlas nuevamente como si faltaran.
 - Cambiar precio/disponibilidad, archivar, crear colecciones con portada y editar su orden.
 - Crear combo con dos referencias, cantidades, precio y condiciones. Probar producto archivado/agotado dentro de combo.

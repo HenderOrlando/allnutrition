@@ -96,7 +96,7 @@ Credenciales: `ADMIN_EMAIL` y `ADMIN_PASSWORD` en `.env.staging.local`, nunca en
 
 - Si Caddy termina TLS en el servidor, solo ese proxy publica puertos; PostgreSQL 5432 y Next 3000 no se exponen. Para una VM privada detrás del Nginx ya existente, usar `compose.nginx.yaml`: solo publica `web:3000` en la red NAT privada; la base continúa exclusivamente en `backend`. Nunca usar ese override en una VM con interfaz pública.
 - `backend` es interna para DB/web/herramientas; `frontend` conecta proxy/web (checks también necesita salida para audit). Proxy no entra en backend y DB no entra en frontend.
-- PostgreSQL persiste en `postgres_data`; Caddy en `caddy_data`/`caddy_config`. Los volúmenes quedan aislados por proyecto, sin nombres globales. Logs persistentes rotan a 10 MB × 3.
+- PostgreSQL persiste en `postgres_data`; las imágenes locales de productos, en `product_images`; Caddy, en `caddy_data`/`caddy_config`. Son volúmenes distintos, aislados por proyecto y sin nombres globales. Reiniciar web conserva los archivos locales. Logs persistentes rotan a 10 MB × 3.
 - PostgreSQL recibe únicamente `tls/server/server.crt` y `server.key`; el wrapper copia la clave como `postgres:postgres`, `0600`. La CA privada no se monta. Web recibe solo la CA pública y exige TLS verificado; HBA rechaza todo TCP sin TLS y usa SCRAM para TLS. La confianza del socket Unix queda dentro del contenedor.
 - Web ejecuta como `node`, sin credenciales ADMIN ni conexión DDL. La conexión DDL de aplicación queda en migrate; backup usa `postgres` para `pg_dump` y checks recibe una conexión privilegiada solo para la base descartable. Setup recibe las credenciales de alta. `DB_DRIVER=supabase` designa PostgreSQL estándar, sin SDK ni dependencia de Supabase alojado.
 
@@ -206,9 +206,8 @@ sc run --rm --pull never backup
 pc run --rm --pull never backup
 ```
 
-El servicio usa `pg_dump --format=custom`, conexión TLS `verify-full`, CA explícita y `umask 077`. Los dumps `allnutrition-<UTC>.dump` son `0600` en `backups/staging` o `backups/production`, propiedad del UID/GID del operador del host. Contienen cuentas/sesiones y datos comerciales: tratarlos como secretos. No equivalen al JSON comercial del panel, que omite cuentas. Las imágenes externas no se respaldan, solo sus URLs; los recursos estáticos versionados viajan con la imagen.
-
-**Antes de datos reales**, configurar manualmente frecuencia, retención, copia cifrada fuera del servidor y responsables; no hay scheduler, destino off-host ni SLA implementados. Comprobar restauraciones periódicas, no solo existencia del archivo.
+El servicio usa `pg_dump --format=custom`, conexión TLS `verify-full`, CA explícita y `umask 077`. Los dumps `allnutrition-<UTC>.dump` son `0600` en `backups/staging` o `backups/production`, propiedad del UID/GID del operador del host. Contienen cuentas/sesiones y datos comerciales: tratarlos como secretos. No equivalen al JSON comercial del panel, que omite cuentas. El dump PostgreSQL y la exportación comercial **no incluyen** imágenes locales del volumen `product_images`; las imágenes externas solo se representan por sus URLs y los recursos estáticos versionados viajan con la imagen.
+La operación de archivos del volumen `product_images` no tiene aún un backup/restore automatizado. Antes de guardar datos reales, incluirlo en una copia cifrada fuera del servidor y ensayar su restauración junto con la base; no considerar el `pg_dump` una copia completa. También configurar frecuencia, retención y responsables: no hay scheduler, destino off-host ni SLA implementados.
 
 Restaurar exclusivamente en una base distinta y vacía, sin reconectar web ni sustituir la base activa. Este ejemplo de producción crea `allnutrition_restore`; si existe, detenerse y elegir una base de recuperación nueva, no borrarla:
 
@@ -267,4 +266,4 @@ npm run db:import -- backups/ARCHIVO_REAL.json
 npm run admin:add
 ```
 
-También se admite `npm run db:import -- --sqlite ./COPIA_DE_LA_BASE.sqlite`; hacer una copia antes, pues abrir SQLite v1 añade tablas v2 de forma no destructiva. Reemplazar imágenes antiguas `/api/media/...` por URLs antes de importar. La exportación comercial no migra binarios ni sesiones. Conservar respaldo del origen sin operar simultáneamente sobre dos bases independientes.
+También se admite `npm run db:import -- --sqlite ./COPIA_DE_LA_BASE.sqlite`; hacer una copia antes, pues abrir SQLite v1 añade tablas v2 de forma no destructiva. La exportación/importación de base no transporta binarios del volumen `product_images`: copiar ese volumen por un procedimiento autorizado o reemplazar las referencias locales `/api/media/...` antes de importar. La exportación comercial tampoco migra sesiones. Conservar respaldo del origen sin operar simultáneamente sobre dos bases independientes.

@@ -67,6 +67,6 @@ La interpretación manual/seguimiento de esta propuesta es una delimitación act
 
 ## 9. Ajuste técnico v2
 
-Supabase/PostgreSQL por variables privadas es la base del despliegue Vercel. SQLite queda como motor alternativo local o Docker con disco persistente; no hay conmutación automática ni replicación entre motores. Las imágenes nuevas se enlazan por URL, sin carga al servidor ni Storage. Las dos imágenes ya entregadas se conservan como recursos estáticos.
+Supabase/PostgreSQL por variables privadas es la base del despliegue Vercel. SQLite queda como motor alternativo local o Docker con disco persistente; no hay conmutación automática ni replicación entre motores. Los productos admiten imágenes por URL HTTPS o carga local optimizada con cuota de 1 GB; en Docker los binarios persisten en el volumen `product_images`, independiente de PostgreSQL. Las imágenes del logo, catálogos y combos siguen usando recursos estáticos o URLs. No hay conectores de almacenamiento externos; iCloud solo puede actuar como origen de un archivo elegido por el selector local del dispositivo.
 
 El registro de pedidos conserva precios/composición y añade los datos de despacho solicitados en la Planilla. Las reglas específicas de transición, abonos y permisos son propuestas pendientes; consultar REQUISITOS_Y_DECISIONES.md. Esta actualización no convierte el sitio en un CRM ni incorpora precios de una fase posterior.
