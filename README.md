@@ -1,10 +1,12 @@
-# All Nutrition — Next.js, Supabase y SQLite · v2
+# All Nutrition — administración de negocio · v3
 
-Vitrina autoadministrada y panel privado. WhatsApp es el canal principal; Facebook e Instagram son enlaces complementarios. La fase 1 incluye administración de contenidos y pedidos manuales. No incluye captación de leads, seguimiento de oportunidades, chatbot, pasarela de pago, lectura de WhatsApp ni inventario automático.
+Vitrina autoadministrada y panel privado para pedidos, inventario por referencia, seguimiento, recaudos, caja, gastos, liquidaciones, sueldos e informes. WhatsApp sigue siendo el canal comercial principal. No incluye CRM de interesados, chatbot, pasarela de pago, integración bancaria/logística ni facturación legal.
 
 ## Estado de esta entrega
 
-La aceptación local con `npm run verify:docker` terminó con código 0 sobre la imagen de producción: 118 pruebas Node (SQLite y PostgreSQL, sin omisiones), 12 pruebas Playwright de escritorio/móvil y auditoría sin vulnerabilidades. También se comprobaron TLS, permisos limitados, caída/recuperación, persistencia y respaldo/restauración. La arquitectura elegida es **un único servidor Linux con Docker Compose, PostgreSQL y Caddy HTTPS**. Esto no acredita una publicación remota, una ejecución remota de CI ni una conexión a un proyecto alojado en Supabase. Consulta [la evidencia y los límites](docs/VERIFICACION.md) y [el procedimiento de despliegue](docs/DESPLIEGUE.md).
+La vitrina está publicada en **https://allnutrition.wintimeapp.co**. El destino real es una **VM Linux aislada con Docker Compose y PostgreSQL 16, detrás del Nginx del host**; Caddy se conserva para pruebas/staging y despliegues autónomos. Las aceptaciones, versiones, parches y límites se registran en [VERIFICACION.md](docs/VERIFICACION.md). El [procedimiento de despliegue](docs/DESPLIEGUE.md) exige validar la imagen en la arquitectura destino antes de promoverla; una aceptación local no acredita CI remoto ni una conexión a Supabase alojado.
+
+La administración v3 de este repositorio es una actualización independiente de ese despliegue histórico. Su aceptación local no publica ni migra producción. Antes de promoverla, respaldar y probar la migración en la arquitectura destino.
 
 ## Inicio local
 
@@ -21,6 +23,16 @@ npm test
 npm run check
 npm run dev
 ```
+
+En **otra terminal**, desde la misma raíz y con las mismas variables DB:
+
+```bash
+npm run business:jobs
+# Un turno acotado para operación puntual:
+npm run business:jobs:once
+```
+
+El worker procesa Excel, devengos, alertas e informes aunque nadie abra el panel. La web sola no lo sustituye. Inicio y Configuración muestran su heartbeat; tras tres minutos sin avance indican que la actualización automática está detenida.
 
 Abre `http://localhost:3000/admin/login`. La vitrina pública empieza en modo preparación. El propietario puede revisar el catálogo en `http://localhost:3000/?preview=1` después de iniciar sesión. Para publicarlo debe activar **Publicar la vitrina** en Contacto y redes, después de revisar productos, textos, enlaces y envíos.
 
@@ -64,6 +76,16 @@ La migración crea un esquema **privado** `allnutrition`. No lo agregues a los e
 
 No hay failover automático ni replicación. Una caída de PostgreSQL NO crea otra base, NO copia datos y NO acepta pedidos en un SQLite vacío. Cambiar de motor requiere migración deliberada y comprobación. La composición Docker entregada configura PostgreSQL explícitamente, no un fallback SQLite.
 
+## Vitrina y pedido por WhatsApp
+
+Inicio, tarjetas, fichas de producto, combos y pedido comparten una identidad de gimnasio de alto contraste: titulares condensados, etiquetas técnicas y acentos rojos sobre claro/oscuro. Las imágenes siguen ampliadas y las acciones de compra son visibles sin hover. Las selecciones de dos a cuatro productos se equilibran en dos columnas en escritorio; en móvil el destacado aparece primero con precio y compra. El tema respeta inicialmente el dispositivo y conserva la elección en este navegador; los estilos están aislados del panel.
+
+**Añadir a mi pedido** reúne referencias y cantidades en **Mi pedido**, muestra el subtotal y conserva la selección durante la sesión de la pestaña, incluso al navegar entre fichas. Los agotados permiten consultar reposición, pero no añadirse al pedido. Las consultas individuales incluyen producto, presentación y sabor. Los mensajes comerciales editables, descripciones, precios y condiciones se conservan. **Selección para tu entrenamiento** identifica la selección editorial, no un ranking de ventas ni popularidad.
+
+**Continuar por WhatsApp** abre el número comercial configurado con la plantilla de consulta, una línea por producto con cantidad/presentación/sabor y un único total de productos. No repite precios unitarios, subtotales de línea ni añade otra solicitud al final; respeta el texto de la plantilla. Si la presentación o el sabor ya aparecen en el nombre, no se vuelven a añadir: la comparación usa palabras completas sin distinguir mayúsculas ni puntuación. El visitante revisa y envía el mensaje en WhatsApp; disponibilidad, pago y envío se acuerdan con el equipo. No hay checkout, cobro, reserva de inventario ni creación automática de pedidos en administración.
+
+La tipografía [Barlow Condensed ExtraBold](https://github.com/google/fonts/tree/main/ofl/barlowcondensed) se sirve localmente mediante `next/font/local`, sin consultar a Google durante las visitas. El archivo original y su licencia SIL OFL 1.1 están incluidos en `public/brand/barlow-condensed-extrabold.ttf` y `public/brand/barlow-condensed-OFL.txt`. No se añaden afirmaciones de ventas, descuentos, urgencia o resultados.
+
 ## Imágenes y enlaces
 
 En **Productos** se puede pegar una URL pública HTTPS o subir JPEG/JPG, PNG y WebP de hasta 10 MiB. La carga validada se optimiza a WebP, conserva la proporción y limita cada lado a 2400 px. El panel muestra el uso de la cuota local exacta de 1.000.000.000 bytes; el archivo se guarda fuera de la base de datos y el servidor lo entrega a la vitrina. En desarrollo local el directorio predeterminado es `data/product-images` (ignorado por Git); `MEDIA_DIR` permite configurarlo.
@@ -74,26 +96,40 @@ Las imágenes remotas se solicitan directamente desde el navegador y su disponib
 
 ## Funciones del panel
 
-Productos y referencias, catálogos/colecciones, combos, preguntas frecuentes, mensajes comerciales, condiciones de envío, WhatsApp, redes, datos de contacto y pedidos. Incluye borradores/publicación/archivo, filtros, búsqueda, paginación de pedidos, prevención de conflictos de edición, datos históricos de líneas, historial de cambios y exportación comercial.
+Seis áreas: **Inicio, Pedidos, Productos, Caja, Informes y Configuración**. En móvil: Inicio/Pedidos/Caja/Más. Combos, catálogos, contenidos de la vitrina y Usuarios siguen disponibles como subdestinos y en «Ir a…». Los filtros y detalles usan URL normalizada; nunca se serializan formularios, contactos ni tokens. Atrás/adelante, Escape y cambios pendientes conservan el borrador hasta aceptar descartarlo.
+
+**Configuración** abre un directorio de tareas separado en operación del negocio, vitrina pública y acceso al panel. Cada destino está a una pulsación; crear o abrir una ficha requiere una segunda. **Configurar cuentas del negocio** permite revisar cuentas y preferencias sin pasar por el asistente. Los primeros pasos siguen disponibles sin bloquear pedidos. Las pantallas secundarias ofrecen **Volver a Configuración** y **Cambiar de tarea**; los formularios conservan sus confirmaciones de cambios pendientes.
 
 La sección **Usuarios** permite crear y consultar cuentas; todas reciben rol **Administrador**. Quien las crea define la contraseña inicial y debe compartirla por un canal seguro; no hay invitación automática ni roles de menor privilegio.
 
-Cada presentación/sabor con precio o disponibilidad propios es una referencia independiente. Los combos reúnen referencias y cantidades con precio manual. La disponibilidad es manual: no hay entradas/salidas ni descuento de stock.
+Cada presentación/sabor con precio o existencias propios es una referencia independiente. Combos y obsequios conservan composición histórica; un obsequio puede tener precio cero y costo real. Los costos y las cantidades son privados. Productos permite registrar existencias físicas, reservadas y disponibles: guardar un pedido reserva unidades, editar ajusta la reserva, cancelar la libera y despachar descuenta las unidades asignadas. Las devoluciones recuperables reingresan solo las unidades despachadas; combos y obsequios utilizan sus componentes. Vacío significa sin contar, no cero: bloquea nuevas reservas y despachos hasta registrar un conteo real. Las operaciones son transaccionales y auditadas, sin crear movimientos de caja.
 
-Pedidos: Nuevo → Preparando → Enviado → Entregado; Cancelado antes del despacho y Devuelto después del envío. Cancelar/devolver requiere motivo. Pago y pedido son independientes. El estado de pago puede ser Pendiente, Abono parcial, Pagado o Reembolsado; no se consulta a bancos. Los detalles y decisiones por confirmar están en `docs/REQUISITOS_Y_DECISIONES.md`.
+La migración de inventario **4** conserva los despachos históricos sin volver a descontarlos y toma las reservas de pedidos pendientes; no inventa cantidades iniciales. SQLite actualiza al abrir una conexión nueva. En PostgreSQL, respaldar, detener todos los escritores antiguos, ejecutar `npm run db:migrate` con la nueva versión y reiniciar web/scheduler con esa misma versión. No mezclar procesos anteriores y nuevos. Los respaldos comerciales conservan el formato v3 con `inventoryVersion:1`; los anteriores reciben una línea base histórica al restaurarlos. Detalles y límites en [REQUISITOS_Y_DECISIONES.md](docs/REQUISITOS_Y_DECISIONES.md).
+
+Pedidos: destinatario, productos, vendedor opcional y acuerdo económico; envíos, cobros y rentabilidad dentro del detalle. Guías/eventos, devoluciones, recaudos y reembolsos son documentos separados y auditables, no un campo «Pagado» editable. El recaudo de plataforma queda pendiente hasta confirmar la recepción de una liquidación. Después del despacho se preserva el acuerdo histórico; las correcciones explícitas conservan el registro anterior.
+
+Caja registra cuentas con apertura explícita —también cero—, ingresos no comerciales, transferencias, gastos/pagos, anticipos y cierres. Un aporte del propietario no es una venta; una transferencia no altera el consolidado. Personas responsables y vendedores no necesitan credenciales de acceso. Sueldos/comisiones distinguen devengo, compensación y salida efectiva de dinero. Responsables, cuentas y vigencias se encuentran en **Configuración**, mediante **Gestionar personas y sueldos**, **Configurar cuentas del negocio** y **Revisar reglas y preferencias**.
+
+## Excel e informes
+
+**Pedidos → Importaciones** permite guardar el original, seleccionar plataforma/cuenta y hoja, mapear columnas/estados, resolver productos/vendedores reales y revisar grupos completos antes de aceptar. Admite `.xlsx`, `.xls`, `.xlsb` y `.xlsm`: máximo 10 MiB, 20 hojas, 200 columnas y 10.000 filas por hoja seleccionada. No ejecuta macros ni recalcula fórmulas; valores guardados de fórmulas requieren revisión. Un archivo aceptado conserva su revisión y puede reanudarse sin repetir dinero ni ventas. Originales privados: 7 días abandonados y 90 días después de finalizar; los hechos e historial no caducan con el archivo.
+
+Informes diarios, semanales, mensuales, trimestrales, semestrales y anuales en `America/Bogota`: consulta viva, detalle explicativo, snapshots inmutables y XLSX con Resumen/Detalle/Definiciones. Los períodos históricos anteriores a `reportsStartOn` se solicitan expresamente. Falta de costo/fecha se muestra como cobertura pendiente, no beneficio ficticio; un corte de archivo sin hora no adquiere la hora de subida. Los importes internos son centavos enteros seguros. Agregados con 16 o más dígitos en centavos se exportan como texto decimal COP exacto para evitar la pérdida de precisión de Excel.
 
 ## Despliegue
 
-Arquitectura elegida: **Linux + Docker Compose + PostgreSQL 16 + Caddy** en un único servidor. El staging local usa `https://localhost:8443` con CA local; no se instala confianza automáticamente en el sistema. Credenciales y certificados se generan en archivos privados, nunca se copian de las pruebas a producción.
+Producción usa la VM privada `allnutrition-prod` y el Nginx existente del host; no se publica PostgreSQL ni se inicia otro proxy sobre los puertos públicos. Caddy sirve el HTTPS local de las instancias de prueba y sigue disponible para un despliegue autónomo. Las credenciales y certificados privados del servidor se conservan entre actualizaciones; nunca se copian desde las pruebas a producción.
 
 ```bash
 # Requiere Node 24, OpenSSL, Docker/Compose y Chromium de Playwright.
 npm run verify:docker
+# Añade recorrido comercial visible y pausa de aceptación:
+npm run verify:docker -- --interactive
 # Genera o conserva configuración privada coherente; no arranca servicios.
 npm run deploy:env -- staging
 ```
 
-Sigue [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) para iniciar staging, migrar con el rol privilegiado separado del runtime, generar configuración de producción y promover la imagen comprobada sin reconstruirla. No se ha proporcionado servidor ni dominio remoto: DNS, HTTPS público, firewall, capacidad y copias fuera del host siguen requiriendo validación allí.
+Sigue [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) para la topología real, aceptación nativa, backup, migración con rol privilegiado separado y promoción de la imagen comprobada sin reconstruir su tag. Las actualizaciones conservan la configuración privada y los volúmenes de producción, cambian la selección de `APP_IMAGE` y verifican HTTPS, acceso y datos después del cambio. Las copias cifradas fuera del host y su política de retención siguen requiriendo operación explícita.
 
 **Vercel + Supabase sigue siendo una alternativa**, no el destino elegido. `npm run deploy` y `npm run deploy -- --prod` son exclusivamente el CLI de Vercel y requieren cuenta/proyecto configurados; no despliegan Compose. `vercel.json` conserva esa opción. El flujo CI reutiliza `npm run verify:docker`; la evidencia local no implica que CI remoto haya ejecutado correctamente.
 
@@ -102,13 +138,13 @@ Sigue [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) para iniciar staging, migrar con 
 ```bash
 npm run admin:add       # usa ADMIN_EMAIL / ADMIN_PASSWORD del .env local
 npm run admin:password  # modifica una cuenta existente y revoca sus sesiones
-npm run backup         # respaldo comercial JSON, sin cuentas ni sesiones
+npm run backup         # JSON comercial v3 privado: finanzas y Excel retenidos, sin autenticación
 npm run backup -- --full-sqlite # también copia completa SQLite, cuando corresponde
 npm run db:import -- respaldo.json
 npm run db:import -- --sqlite ./copia-original.sqlite
 ```
 
-La importación solo acepta un destino sin productos ni pedidos; no sobrescribe ni fusiona. Conserva identificadores, pedidos e historial; obliga a revisar otra vez la publicación. Las cuentas se configuran en el destino, no se exportan al navegador. Mantén la base anterior respaldada y fuera de escritura al cambiar de motor. Una vuelta a SQLite exige otro respaldo/importación, no cambiar solamente la variable.
+La importación exige un destino sin contenidos, pedidos ni entidades comerciales; admite defaults iniciales y usuarios locales, pero no fusiona ni sobrescribe un negocio existente. Conserva relaciones, importes, auditoría, snapshots, originales retenidos e idempotencia; obliga a revisar otra vez la publicación. Admite respaldo v3 y conversión v2. No transporta usuarios, sesiones ni leases; reconstruye trabajos pendientes con su actor original. Un vínculo de persona a usuario solo permanece si ese usuario existe localmente. Al importar SQLite se abre el origen solo lectura y se migra una copia temporal consistente con WAL, nunca el archivo original. Las imágenes se restauran por separado. Mantén el origen respaldado y fuera de escritura al cambiar de motor.
 
 ## Pruebas y reproducibilidad
 
@@ -118,10 +154,10 @@ npm test               # SQLite; PostgreSQL opcional si no se configura su fixtu
 npm run check
 npm run build
 npx playwright install chromium
-npm run verify:docker  # Aceptación completa obligatoria sobre PostgreSQL y runtime compilado
+npm run verify:docker -- --interactive # Aceptación completa con PostgreSQL, scheduler y recorrido comercial UI
 ```
 
-El lockfile real está incluido: no lo regeneres desde cero ni uses `npm update` para reproducir esta entrega. `verify:docker` construye la imagen, prepara una base descartable aislada `allnutrition_test`, ejecuta ambos contratos y E2E, comprueba operaciones y conserva evidencia sanitizada antes de eliminar exclusivamente su proyecto de pruebas.
+El lockfile real está incluido: no lo regeneres desde cero ni uses `npm update` para reproducir esta entrega. `verify:docker` construye la imagen, prepara únicamente `allnutrition_test`, ejecuta contratos/E2E, TLS, rol limitado, scheduler, caída/reinicio y restore, y conserva evidencia sanitizada antes de eliminar solo su proyecto. `--interactive` añade el escenario comercial real por UI y una pausa Enter; EOF/señal cancela. Sin flag conserva la ejecución automatizada. Nunca usa el env de producción.
 
 `npm run test:e2e` es un subcomando, no un arranque autónomo: exige `E2E_BASE_URL` con origen **HTTPS de `localhost`**, el servidor compilado ya disponible y PostgreSQL descartable previamente migrado y sembrado con `node tests/e2e/setup.mjs`. El fixture requiere `TEST_DATABASE_URL` apuntando exactamente a `allnutrition_test` y `TEST_ALLOW_DATABASE_RESET=allnutrition_test`, más la configuración TLS `TEST_DB_*`. No arranca `next dev`, no tiene `webServer` ni fallback SQLite. `E2E_ALLOW_SELF_SIGNED=1` permite solo la CA local en el navegador; no desactiva TLS de PostgreSQL. Usa el verificador para coordinar estos pasos: nunca ejecutes reset, E2E destructivo ni pruebas de caída sobre staging persistente o producción.
 
@@ -130,6 +166,7 @@ El lockfile real está incluido: no lo regeneres desde cero ni uses `npm update`
 - `docs/REQUISITOS_Y_DECISIONES.md`: trazabilidad de requisitos, flujos y decisiones de negocio pendientes.
 - `docs/DESPLIEGUE.md`: Linux/Compose, staging HTTPS, promoción, permisos, respaldos y vuelta atrás; alternativas Vercel/Supabase y SQLite local.
 - `docs/VERIFICACION.md`: qué se probó y qué sigue pendiente.
+- `docs/CAMBIOS_V2.md`: cambios v3 y antecedentes de versiones anteriores.
 - `docs/ALCANCE_Y_FASES.md`: separación comercial, sin precio de fase 2.
 - `docs/FUENTES.md`: archivos aportados y documentación técnica consultada.
 - `docs/REGISTRO_PROVEEDORES_ALMACENAMIENTO.md`: pasos oficiales y límites verificados para registrar futuras aplicaciones de almacenamiento; no configura conectores ni cuentas.

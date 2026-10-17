@@ -1,0 +1,94 @@
+.editor .section {
+  min-width: 0;
+  scroll-margin-block: 16px;
+}
+
+.editor .sectionStep {
+  margin: 0 0 8px;
+  color: var(--admin-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sectionNumber {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  margin-inline-end: 8px;
+  border-radius: 50%;
+  background: var(--admin-apricot);
+  color: var(--admin-apricot-ink);
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.editor .fullWidth {
+  grid-column: 1 / -1;
+}
+
+.checklistCount,
+.componentCount {
+  font-size: 13px;
+  font-weight: 600;
+  margin-block: 8px 12px;
+}
+
+.catalogChoices :global(.check-grid) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: 8px 16px;
+}
+
+.catalogChoices :global(.check-grid) label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.selectionCount {
+  color: var(--admin-muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.components {
+  min-width: 0;
+}
+
+.components .componentLine {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px 44px;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-paper);
+}
+
+.components .componentLine > label:nth-child(2) {
+  width: auto;
+}
+
+.components .componentLine > label,
+.components .componentLine select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 767px) {
+  .components .componentLine {
+    grid-template-columns: minmax(0, 1fr) 44px;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .components .componentLine > label:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .components .componentLine > label:nth-child(2) {
+    max-width: 120px;
+  }
+}

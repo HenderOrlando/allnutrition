@@ -1,0 +1,311 @@
+.editor,
+.wizard,
+.shipments,
+.shipmentControls {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.editor > header > div,
+.editor :global(.drawer-body),
+.editor fieldset,
+.wizard fieldset,
+.columnGrid > *,
+.taskHeading > div {
+  min-width: 0;
+}
+
+.editor :is(input, select, textarea),
+.wizard :is(input, select, textarea),
+.shipments :is(input, select, textarea) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.editor :global(.drawer-body) {
+  background: var(--admin-paper);
+}
+
+.editor :global(.editor-fieldset) > :global(.form-section),
+.editor :global(.drawer-body) > :global(.form-section),
+.shipmentControls > :global(.form-section) {
+  padding: clamp(16px, 2.5vw, 24px);
+  margin: 0 0 20px;
+  border: 1px solid var(--admin-line);
+  border-radius: 16px;
+  background: var(--admin-surface);
+}
+
+.editor :global(.form-section) > h3,
+.shipmentControls :global(.form-section) > h3 {
+  margin: 0 0 12px;
+}
+
+.editor :global(.form-section) > h3 + p {
+  margin: 0 0 20px;
+}
+
+.editor details:global(.form-section) > summary {
+  margin: -8px 0;
+}
+
+.editor details:global(.form-section)[open] > summary {
+  margin-bottom: 16px;
+}
+
+.detailNav {
+  margin-bottom: 20px;
+}
+
+.quickActions,
+.observation,
+.stepGuide {
+  border: 1px solid var(--admin-line);
+  border-radius: 16px;
+  padding: 16px;
+  margin: 0 0 20px;
+  background: var(--admin-lilac);
+}
+
+.quickActions :global(.order-primary-actions) {
+  margin: 12px 0;
+  padding: 0;
+  border: 0;
+}
+
+.quickActions p:last-child,
+.observation p:last-child,
+.stepGuide p:last-child {
+  margin-bottom: 0;
+}
+
+.sectionLabel {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.editor .itemCard {
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-paper);
+  margin: 0 0 16px;
+}
+
+.itemCard h4 {
+  margin: 0 0 16px;
+}
+
+.subheading {
+  margin: 24px 0 16px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.editor .agreementTotal {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--admin-apricot);
+  color: var(--admin-apricot-ink);
+}
+
+.agreementTotal strong {
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agreementTotal small {
+  flex-basis: 100%;
+}
+
+.emptyPrompt {
+  padding: 16px;
+  border: 1px dashed var(--admin-control-border);
+  border-radius: 12px;
+  background: var(--admin-paper);
+  font-size: 14px;
+}
+
+.editor :global(.summary-values) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.editor :global(.summary-values) > div {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-lilac);
+}
+
+.editor :global(.summary-values) dd {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.taskHeading h2 {
+  margin: 0 0 8px;
+}
+
+.taskHeading p {
+  margin: 0 0 12px;
+}
+
+.priorityFilters {
+  padding-bottom: 4px;
+}
+
+.wizard.wizard {
+  padding: clamp(16px, 3vw, 24px);
+  border: 1px solid var(--admin-line);
+  border-radius: 20px;
+  background: var(--admin-surface);
+}
+
+.wizard :global(.admin-heading) {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.wizard :global(.admin-heading) h2 {
+  margin: 8px 0;
+}
+
+.wizard :global(.admin-heading) p {
+  margin-block: 8px 0;
+}
+
+.wizard .progress {
+  margin-block: 20px;
+}
+
+.wizard .progress li[aria-current='step'] {
+  border-color: var(--admin-apricot-ink);
+  background: var(--admin-apricot);
+  color: var(--admin-apricot-ink);
+}
+
+.stepGuide h3 {
+  margin: 8px 0;
+}
+
+.stepGuide p {
+  font-size: 14px;
+}
+
+.wizard .importGroup {
+  padding: 20px 0 0;
+  border-top: 1px solid var(--admin-line);
+  margin-top: 24px;
+}
+
+.importGroup > legend {
+  padding: 0 12px 0 0;
+  font-size: 18px;
+}
+
+.wizard input[type='file'] {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  min-height: 44px;
+  font: inherit;
+  font-weight: 400;
+}
+
+.wizard input[type='file']::file-selector-button {
+  min-height: 44px;
+  margin: 0 8px 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--admin-control-border);
+  border-radius: 12px;
+  background: var(--admin-paper);
+  color: var(--admin-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.columnGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.wizard details {
+  min-width: 0;
+  margin-block: 16px;
+  padding: 8px 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-surface);
+}
+
+.wizard :global(.admin-actions) {
+  align-items: center;
+  margin-block: 16px;
+}
+
+.wizard .summaryMetrics {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: 12px;
+  margin-block: 20px;
+}
+
+.summaryMetrics > div {
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-paper);
+}
+
+.summaryMetrics dt {
+  font-size: 13px;
+  color: var(--admin-muted);
+}
+
+.summaryMetrics dd {
+  margin: 8px 0 0;
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard .resolver {
+  margin-block: 24px;
+  border: 2px solid var(--admin-lilac-ink);
+  background: var(--admin-lilac);
+  scroll-margin-block: 24px;
+}
+
+.resolver h3 {
+  margin-top: 0;
+}
+
+@media (max-width: 767px) {
+  .editor :global(.product-form-grid),
+  .editor :global(.form-grid),
+  .wizard :global(.form-grid) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detailNav > button {
+    flex: 1 1 120px;
+  }
+
+  .wizard :global(.admin-actions) > :global(.button) {
+    flex: 1 1 160px;
+    max-width: 100%;
+  }
+}

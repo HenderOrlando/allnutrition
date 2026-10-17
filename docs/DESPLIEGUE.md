@@ -1,8 +1,10 @@
 # Despliegue — Node 24, Docker Compose y PostgreSQL
 
-La arquitectura elegida es **un servidor Linux con Docker Compose: Next.js + PostgreSQL 16 + Caddy HTTPS**. Staging usa la misma imagen runtime y composición, con HTTPS local. SQLite local y Vercel/Supabase siguen siendo alternativas, no la topología del Compose común.
+La arquitectura usa **un servidor Linux con Docker Compose: Next.js + PostgreSQL 16**. La producción actual reside en una VM privada detrás del Nginx del host; staging y la topología autónoma usan Caddy HTTPS con la misma imagen runtime. SQLite local y Vercel/Supabase siguen siendo alternativas, no la topología del Compose común.
 
-La aceptación local terminó con exit 0; evidencia sanitizada: `.test-data/docker/10199872067871b1/artifacts/result.json`. Release: `allnutrition:release-d73775caf9a9`, ID `sha256:d73775caf9a97224255ef6544989d1b565c15fd56762a7a78db03564a2e4619b`, plataforma `linux/arm64`; Node host `24.14.1`, runtime `24.21.0`. Incluye contratos SQLite/PostgreSQL, navegador desktop/mobile, TLS, privilegios, caída/recuperación, persistencia y restauración. Ver [VERIFICACION.md](VERIFICACION.md) para resultados y superficie observada. **Esto no acredita publicación remota ni ejecución de CI**: no se ha proporcionado servidor o dominio real.
+La producción publicada es **https://allnutrition.wintimeapp.co**, en la VM privada `allnutrition-prod` (`amd64`) detrás del Nginx del host, según el apartado 5. Las imágenes `arm64` y resultados locales de septiembre son antecedentes, no candidatos válidos para esa VM. Cada actualización debe obtener su propia aceptación nativa con `verify:docker` y comparar la imagen ejecutada con la evidencia aprobada. Los resultados vigentes y sus límites se registran en [VERIFICACION.md](VERIFICACION.md); no acreditan una ejecución de CI remoto.
+
+**Corte de inventario (migración 4):** respaldar primero y detener web y scheduler de la versión anterior antes de ejecutar la migración con la nueva imagen. Reiniciar ambos con esa misma imagen después; no mezclar escritores anteriores y nuevos. La migración no descuenta despachos históricos ni asigna stock inicial: toma reservas pendientes y deja desconocidos los conteos no aportados. Registrar después el conteo físico real, incluidas las unidades reservadas. PostgreSQL rechaza el arranque de la nueva versión si falta la migración; SQLite la aplica al abrir una conexión nueva. Reiniciar también los servidores de desarrollo ya abiertos. La aceptación local de este cambio no promueve una imagen ni actualiza producción.
 
 ## 1. Prerrequisitos y aceptación de una imagen
 
@@ -21,6 +23,8 @@ npm run verify:docker
 ```
 
 El verificador exige Node major 24 y el puerto local 9443 libre. Construye runtime y checks, verifica el contenedor compilado y PostgreSQL real; no arranca `next dev`. Cada ejecución usa `allnutrition-test-ID` y `.test-data/docker/ID/`. Elimina únicamente sus contenedores/volúmenes efímeros al terminar, preservando evidencia. Solo tras aprobar etiqueta el ID comprobado como `allnutrition:release-<12 hex>`; no reconstruir bajo ese tag ni sustituirlo por otra imagen.
+
+Para el corte comercial v3 ejecutar `npm run verify:docker -- --interactive`. Mantiene la aceptación automatizada y añade el recorrido de importación, caja, sueldo, devolución, snapshot sin paneles, alerta y reinicio de lote. La pausa imprime las rutas/órdenes exactas de su proyecto descartable; no reemplazarlas por configuración de staging o producción. EOF/SIGINT cancela.
 
 `artifacts/result.json` registra ID, plataforma, release, pruebas y exit code. Los reportes Playwright quedan en las rutas indicadas allí. `operational.json`, dumps, env y claves son privados: contienen datos/sesiones o secretos; no adjuntarlos a CI, incidencias ni soporte. El workflow utiliza el mismo verificador; una ejecución local no demuestra que CI remoto haya pasado.
 
@@ -51,7 +55,7 @@ La CA PostgreSQL RSA-3072 dura 10 años; el certificado del servidor, 365 días,
 Origen: **https://localhost:8443**. No se publica a la LAN. Primero aprobar `verify:docker`; elegir su evidencia y confirmar que el tag local sigue apuntando al ID probado. Este ejemplo usa la aceptación registrada; en releases nuevos actualizar `RESULT`:
 
 ```sh
-RESULT=.test-data/docker/10199872067871b1/artifacts/result.json
+RESULT=.test-data/docker/27de6a7636ce20e2/artifacts/result.json
 RELEASE=$(node -e 'const r=require("./"+process.argv[1]); if(r.exitCode!==0 || !r.releaseTag) process.exit(1); console.log(r.releaseTag)' "$RESULT")
 EXPECTED_IMAGE=$(node -e 'console.log(require("./"+process.argv[1]).imageId)' "$RESULT")
 test "$(docker image inspect --format '{{.Id}}' "$RELEASE")" = "$EXPECTED_IMAGE" || exit 1
@@ -66,8 +70,9 @@ sc config --quiet
 sc up -d --no-build --wait --wait-timeout 120 db
 sc run --rm --pull never migrate
 sc run --rm --pull never setup
-sc up -d --no-build --wait --wait-timeout 120 web proxy
+sc up -d --no-build --wait --wait-timeout 120 web proxy scheduler
 test "$(docker inspect --format '{{.Image}}' "$(sc ps -q web)")" = "$EXPECTED_IMAGE" || exit 1
+test "$(docker inspect --format '{{.Image}}' "$(sc ps -q scheduler)")" = "$EXPECTED_IMAGE" || exit 1
 sc ps
 ```
 
@@ -95,7 +100,7 @@ Credenciales: `ADMIN_EMAIL` y `ADMIN_PASSWORD` en `.env.staging.local`, nunca en
 ## 4. Fronteras de infraestructura
 
 - Si Caddy termina TLS en el servidor, solo ese proxy publica puertos; PostgreSQL 5432 y Next 3000 no se exponen. Para una VM privada detrás del Nginx ya existente, usar `compose.nginx.yaml`: solo publica `web:3000` en la red NAT privada; la base continúa exclusivamente en `backend`. Nunca usar ese override en una VM con interfaz pública.
-- `backend` es interna para DB/web/herramientas; `frontend` conecta proxy/web (checks también necesita salida para audit). Proxy no entra en backend y DB no entra en frontend.
+- `backend` es interna para DB/web/scheduler/herramientas; `frontend` conecta proxy/web (checks también necesita salida para audit). Scheduler no publica puertos; proxy no entra en backend y DB no entra en frontend.
 - PostgreSQL persiste en `postgres_data`; las imágenes locales de productos, en `product_images`; Caddy, en `caddy_data`/`caddy_config`. Son volúmenes distintos, aislados por proyecto y sin nombres globales. Reiniciar web conserva los archivos locales. Logs persistentes rotan a 10 MB × 3.
 - PostgreSQL recibe únicamente `tls/server/server.crt` y `server.key`; el wrapper copia la clave como `postgres:postgres`, `0600`. La CA privada no se monta. Web recibe solo la CA pública y exige TLS verificado; HBA rechaza todo TCP sin TLS y usa SCRAM para TLS. La confianza del socket Unix queda dentro del contenedor.
 - Web ejecuta como `node`, sin credenciales ADMIN ni conexión DDL. La conexión DDL de aplicación queda en migrate; backup usa `postgres` para `pg_dump` y checks recibe una conexión privilegiada solo para la base descartable. Setup recibe las credenciales de alta. `DB_DRIVER=supabase` designa PostgreSQL estándar, sin SDK ni dependencia de Supabase alojado.
@@ -105,6 +110,8 @@ Credenciales: `ADMIN_EMAIL` y `ADMIN_PASSWORD` en `.env.staging.local`, nunca en
 Requiere acceso autorizado a Docker/Compose, almacenamiento persistente suficiente, dominio real apuntando al servidor, firewall/NAT con 80/443 accesibles y correo real del administrador. La guía Caddy es genérica; validar DNS, ACME, recursos, firewall, carga, recuperación y flujos funcionales en el destino antes de aceptar cada despliegue.
 
 Transportar el código/configuración correspondiente al release sin `node_modules`, `.env*` privados, datos ni backups. Exportar imagen y evidencia sanitizada, sin secretos:
+
+Al empaquetar desde macOS, desactivar AppleDouble y atributos extendidos (`COPYFILE_DISABLE=1` y tar con `--format=ustar --no-xattrs --no-acls`); excluir también `._*`, `.DS_Store` y `__MACOSX`. No relajar los chequeos para aceptar esos archivos binarios como código. Extraer en un directorio de candidato aislado, comprobar el SHA-256 del paquete y ejecutar allí la aceptación nativa antes de tocar la selección de producción.
 
 ```sh
 # En el host que aprobó la imagen; RELEASE y RESULT son los del apartado 3.
@@ -142,7 +149,7 @@ pc config --quiet
 pc up -d --no-build --wait --wait-timeout 120 db
 pc run --rm --pull never migrate
 pc run --rm --pull never setup
-pc up -d --no-build --wait --wait-timeout 120 web proxy
+pc up -d --no-build --wait --wait-timeout 120 web proxy scheduler
 test "$(docker inspect --format '{{.Image}}' "$(pc ps -q web)")" = "$EXPECTED_IMAGE" || exit 1
 ```
 
@@ -150,7 +157,7 @@ Producción usa Caddy con HTTPS público automático, **sin `tls internal`**. No
 
 ### VM privada detrás de un Nginx existente
 
-Cuando el servidor ya sirve otros dominios con Nginx, crear una red NAT/libvirt independiente con DHCP reservado `192.168.201.10` para la VM `allnutrition-prod`; no conectar esta VM a redes de otras cargas. Instalar Ubuntu 24.04, Docker/Compose y Node 24 en la VM; clonar el repositorio e instalar dependencias con `npm ci --legacy-peer-deps`. En una VM Ubuntu limpia instalar también Chromium y bibliotecas del runner E2E con `npx playwright install --with-deps chromium`; después ejecutar `npm run verify:docker` en la arquitectura destino y promover únicamente si deja evidencia aprobada. No instalar Docker ni PostgreSQL directamente en el host compartido.
+Cuando el servidor ya sirve otros dominios con Nginx, crear una red NAT/libvirt independiente con DHCP reservado `192.168.201.10` para la VM `allnutrition-prod`; no conectar esta VM a redes de otras cargas. Instalar Ubuntu 24.04, Docker/Compose y Node 24 en la VM; clonar el repositorio e instalar dependencias con `npm ci --legacy-peer-deps`. En una VM Ubuntu limpia instalar también Chromium y bibliotecas del runner E2E con `npx playwright install --with-deps chromium`; después ejecutar `npm run verify:docker -- --interactive` en la arquitectura destino, completar también el recorrido comercial indicado y promover únicamente si deja evidencia aprobada. No instalar Docker ni PostgreSQL directamente en el host compartido.
 
 En este host compartido la política global `FORWARD` es `DROP`. Antes de que el guest necesite salida, instalar la unidad del mismo commit: añade permisos solo desde `virbr-anprod` hacia `enp4s0` y para las respuestas establecidas, después de las cadenas `DOCKER-USER`/`DOCKER-FORWARD`; no cambia la política global ni otras reglas.
 
@@ -173,7 +180,7 @@ np config --quiet
 np up -d --no-build --wait --wait-timeout 120 db
 np run --rm --pull never migrate
 np run --rm --pull never setup
-np up -d --no-build --wait --wait-timeout 120 web
+np up -d --no-build --wait --wait-timeout 120 web scheduler
 ```
 
 El enlace `3000:3000` de ese override solo es accesible en la interfaz privada del guest; no publicar PostgreSQL, Docker ni la API directamente en la IP pública. En el host Nginx instalar primero `deploy/nginx/allnutrition-acme.conf` como vhost exclusivo, crear `/var/lib/letsencrypt`, ejecutar `nginx -t` y recargar. Solicitar el certificado con `certbot certonly --webroot -w /var/lib/letsencrypt -d allnutrition.wintimeapp.co --email CORREO_REAL --agree-tos --non-interactive`; luego instalar `deploy/nginx/allnutrition.wintimeapp.co.conf` en su lugar, repetir `nginx -t` y solo si pasa ejecutar `systemctl reload nginx`. El vhost final reenvía únicamente a `192.168.201.10:3000`; no reemplazar el Nginx compartido ni cambiar sus otros archivos.
@@ -197,6 +204,29 @@ Confiar en la CA pública normal desde clientes; validar `/api/health`, login, c
 - Se cambió únicamente `APP_IMAGE`; se conservó `allnutrition:release-8efed7d1630b` para rollback. La migración v2 documentada terminó sin borrar registros.
 - `web` y `db` quedaron saludables. Login real, sección **Usuarios** y `GET /api/admin/users` autenticado respondieron correctamente; petición anónima recibió `401`. La lista expuso solo cuentas administradoras, sin contraseña ni hash. No se creó ninguna cuenta real.
 
+### Actualización de Mesa de trabajo y seguridad (2026-10-14)
+
+- Imagen `allnutrition:release-5791e836302c`, `amd64`, ID `sha256:5791e836302c24ce93b3a0885ca45c8c4bfbd2f8d62ccecccd1ba8de7070bf50`. Aprobada con `verify:docker` nativo: 138 pruebas Node sin omisiones, 16 E2E, TLS, persistencia y restore descartable. Fuente exacta: paquete SHA-256 `4ce3890617c6178a1071c17b865afa8ee98036cf1eb0c8955a626787b0fd4243`.
+- Next `16.3.8` y `source-map-js 1.2.2`; auditoría dentro de web: 0 vulnerabilidades conocidas. La imagen en ejecución coincide con la aprobada. La vitrina se mantuvo publicada; datos, cuentas e imágenes se conservaron.
+- Rollback de aplicación disponible con `allnutrition:release-ef825a06fb21`. Selección anterior: `/home/allnutrition/update-20261014-73cfe2a7fde6/rollback.env.release.local`. Restaurar únicamente esa selección y recrear web mediante `np`; no restaurar ni degradar automáticamente la base.
+- Respaldos previos privados: `backups/production/allnutrition-20261014T152049Z.dump` y `allnutrition-images-update-20261014-73cfe2a7fde6.tar.gz`, ambos `0600`, verificados. Evidencia nativa en `/home/allnutrition/update-20261014-73cfe2a7fde6-candidate/.test-data/docker/78944180f50fffb2/artifacts/`.
+- Login, editor, preview, WebP, cookie segura y logout fueron ejercitados en el dominio real, sin escrituras comerciales. Nginx compartido, DNS y firewall no se modificaron. Detalle y límites en [VERIFICACION.md](VERIFICACION.md).
+
+## Automatización de negocio v3
+
+`scheduler` ejecuta `node scripts/business-jobs.mjs` con la misma `${APP_IMAGE}`, usuario `node`, conexión limitada y CA de web; solo usa backend y no publica puertos. Debe actualizarse junto con web. No es un cron del navegador ni se ejecuta por GET.
+
+- Loop secuencial: hasta 25 grupos de importación por turno; después devengos/comisiones, alertas vencidas y hasta 10 informes. Con backlog cede 100 ms y continúa; sin backlog espera hasta 60 s. Progreso, revisión aceptada y actor quedan en DB.
+- Lease de 120 s, renovación cada 30 s y verificación transaccional del token antes de cada commit. Reiniciar no autoriza al worker anterior a escribir.
+- Heartbeat independiente cada 30 s; Inicio/Configuración lo consideran detenido tras 180 s sin avance. Revisar logs privados y la conectividad si deja de avanzar; abrir la web no reanima el proceso.
+- Informes cerrados: primera corrida posterior a 06:00 Bogotá, con devengos completos; recupera períodos desde `reportsStartOn`. Históricos anteriores se solicitan expresamente. Datos tardíos producen revisión nueva, nunca reemplazan las cifras guardadas.
+
+Para observar un turno con todos los paneles cerrados, usar la función del entorno autorizado, por ejemplo `sc run --rm --no-deps scheduler npm run business:jobs:once`. Puede devolver `hasMore:true`: no implica que todo el backlog terminó. Detener scheduler **antes** de restauraciones, resets de pruebas o migraciones incompatibles; reiniciarlo después de validar la base. No ejecutar dos instancias sobre dos copias independientes del mismo negocio.
+
+En desarrollo local ejecutar `npm run dev` y `npm run business:jobs` en terminales separadas desde la raíz, con idéntica DB. La alternativa Vercel sirve la web, pero requiere este mismo proceso en un host persistente con acceso autorizado a PostgreSQL; Vercel no ejecuta el daemon.
+
+
+
 ## 6. Backups y restauración aislada
 
 ```sh
@@ -206,8 +236,9 @@ sc run --rm --pull never backup
 pc run --rm --pull never backup
 ```
 
-El servicio usa `pg_dump --format=custom`, conexión TLS `verify-full`, CA explícita y `umask 077`. Los dumps `allnutrition-<UTC>.dump` son `0600` en `backups/staging` o `backups/production`, propiedad del UID/GID del operador del host. Contienen cuentas/sesiones y datos comerciales: tratarlos como secretos. No equivalen al JSON comercial del panel, que omite cuentas. El dump PostgreSQL y la exportación comercial **no incluyen** imágenes locales del volumen `product_images`; las imágenes externas solo se representan por sus URLs y los recursos estáticos versionados viajan con la imagen.
-La operación de archivos del volumen `product_images` no tiene aún un backup/restore automatizado. Antes de guardar datos reales, incluirlo en una copia cifrada fuera del servidor y ensayar su restauración junto con la base; no considerar el `pg_dump` una copia completa. También configurar frecuencia, retención y responsables: no hay scheduler, destino off-host ni SLA implementados.
+El servicio usa `pg_dump --format=custom`, conexión TLS `verify-full`, CA explícita y `umask 077`. Los dumps `allnutrition-<UTC>.dump` son `0600` en `backups/staging` o `backups/production`, propiedad del UID/GID del operador. Contienen autenticación, negocio v3 y Excel retenidos: tratarlos como secretos. El JSON comercial v3 omite autenticación/leases, conserva finanzas, relaciones, originales, revisiones, snapshots e idempotencia y reconstruye intenciones pendientes. Ambos excluyen los binarios de `product_images`; las imágenes externas conservan solo su URL.
+
+El scheduler de negocio **no programa backups**. El volumen `product_images` sigue requiriendo copia/restore por separado, junto con política explícita de frecuencia, retención, cifrado fuera del host y responsables. Los dumps manuales no constituyen esa política ni un SLA.
 
 Restaurar exclusivamente en una base distinta y vacía, sin reconectar web ni sustituir la base activa. Este ejemplo de producción crea `allnutrition_restore`; si existe, detenerse y elegir una base de recuperación nueva, no borrarla:
 
@@ -224,20 +255,20 @@ const db=await openPostgres(databaseConfig({...process.env,DATABASE_URL:url.href
 try {
   const row=await db.get("SELECT current_database() AS database, current_user AS role, ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()");
   if (row.database!=="allnutrition_restore" || row.role!=="allnutrition_app" || !row.ssl) throw new Error("Conexión de restauración incompatible");
-  console.log("Restauración: esquema v2 y conexión limitada TLS verificados");
+  console.log("Conexión limitada TLS de la restauración verificada; validar estructura v3 y negocio por separado");
 } finally { await db.close(); }'
 ```
 
 Esa salud es solo comprobación básica, no aceptación integral. Antes de utilizar una recuperación, comprobar con acceso limitado cuentas, sesiones, productos, totales, numeración, historial y replay/idempotencia contra evidencia privada tomada del origen, en una instancia aislada sin tráfico real. Confirmar también que el runtime no puede crear tablas. No ejecutar seed ni fixtures sobre el dump.
 
-El verificador ya restaura su pedido exacto de **119000**, cuenta, sesión e historial y comprueba replay/privilegios con `tests/docker/operations.mjs`. Ese auxiliar requiere las guardas de prueba y su snapshot privado; `prepare`/reset solo permiten `allnutrition_test` y `assert` también `allnutrition_restore`. **No es un procedimiento de reset ni un validador genérico de los datos de producción**. No ejecutar la suite contra staging/producción para probar un backup.
+El verificador comprueba el pedido de control **119000**, cuenta, sesión, historial, replay y privilegios, además de comparar la exportación comercial v3 completa antes/después de restart y pg_dump/restore. `tests/docker/operations.mjs` requiere guardas y snapshot privado; `prepare`/reset solo permiten `allnutrition_test` y `assert` también `allnutrition_restore`. **No es un procedimiento de reset ni un validador genérico de producción**. No ejecutar la suite contra staging/producción para probar un backup.
 
 ## 7. Actualizaciones, rollback y fallos
 
 1. Aprobar el nuevo release con `verify:docker` en la arquitectura destino, transportar/cargarlo y comparar ID/evidencia como arriba. Guardar el tag anterior.
-2. Hacer backup y coordinar una ventana sin escrituras cuando el cambio lo requiera. Revisar compatibilidad de migración con la aplicación anterior.
-3. Cambiar únicamente `APP_IMAGE` al nuevo release. Ejecutar `pc run --rm --pull never migrate` **antes** de `pc up -d --no-build --wait --wait-timeout 120 web proxy`. Comprobar ID en ejecución, salud y flujos autenticados.
-4. Para rollback de aplicación, fijar `APP_IMAGE` al release anterior compatible y recrear web con el mismo comando, verificando salud. **No retroceder automáticamente la base**. Una restauración/cutover de datos requiere decisión y recuperación ensayada aparte.
+2. Hacer backup de DB/imágenes y coordinar una ventana sin escrituras. Detener web/scheduler cuando el cambio de contrato lo requiera. La migración v3 convierte registros v2 sin inventar costos, vendedor ni movimientos de caja; revisar los pagos históricos marcados pendientes.
+3. Cambiar únicamente `APP_IMAGE` al nuevo release. Ejecutar `pc run --rm --pull never migrate` **antes** de `pc up -d --no-build --wait --wait-timeout 120 web proxy scheduler`. Comprobar identidad de ambas imágenes, salud, heartbeat y flujos autenticados.
+4. Rollback solo entre aplicaciones demostrablemente compatibles con la base actual, recreando **web y scheduler** juntos. No ejecutar una aplicación v2 sobre negocio v3 ni degradar automáticamente la base. Un cutover/restauración de datos exige decisión y recuperación ensayada aparte.
 
 En staging aplicar la misma secuencia usando `sc`. **Nunca ejecutar `down -v` sobre staging o producción** ni eliminar volúmenes para arreglar una migración. Reinicios conservan datos/sesiones. Si PostgreSQL cae, salud y escrituras fallan con `503`; no hay fallback SQLite, cola offline, réplica ni alta disponibilidad. No comunicar guardados exitosos hasta confirmar recuperación. Proteger evidencia y logs: no publicar cadenas de conexión.
 
@@ -266,4 +297,4 @@ npm run db:import -- backups/ARCHIVO_REAL.json
 npm run admin:add
 ```
 
-También se admite `npm run db:import -- --sqlite ./COPIA_DE_LA_BASE.sqlite`; hacer una copia antes, pues abrir SQLite v1 añade tablas v2 de forma no destructiva. La exportación/importación de base no transporta binarios del volumen `product_images`: copiar ese volumen por un procedimiento autorizado o reemplazar las referencias locales `/api/media/...` antes de importar. La exportación comercial tampoco migra sesiones. Conservar respaldo del origen sin operar simultáneamente sobre dos bases independientes.
+También se admite `npm run db:import -- --sqlite ./COPIA_DE_LA_BASE.sqlite`: abre el original `READ ONLY`, realiza backup nativo consistente con WAL a un temporal privado y migra únicamente esa copia, que cierra/elimina al terminar. No ejecutar PRAGMA/DDL ni modificar permisos del respaldo original. El destino debe estar comercialmente vacío; admite defaults y usuarios locales. Validación/restore son atómicos y dejan `launchApproved=false`. No aplica el límite de filas Excel al respaldo completo. Imágenes se copian por separado; sesiones solo viajan en copia integral SQLite o pg_dump, no en importación comercial. Conservar el origen sin escrituras paralelas hasta aceptar el cambio.

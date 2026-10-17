@@ -75,6 +75,20 @@ services:
     restart: unless-stopped
     logging: *logging
 
+  scheduler:
+    image: ${APP_IMAGE:?}
+    environment: *runtime-environment
+    volumes: [*db-ca]
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["node", "scripts/business-jobs.mjs"]
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *logging
+
   proxy:
     image: caddy:2-alpine
     environment:

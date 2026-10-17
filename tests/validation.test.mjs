@@ -43,9 +43,13 @@ test('WhatsApp recibe el producto codificado correctamente',()=>{const url=new U
 test('rechaza nombres de secciones arbitrarias',()=>assert.throws(()=>validateRecord('users',{}),{status:404}));
 test('rechaza enlaces de redes que no son los perfiles oficiales',()=>assert.throws(()=>validateSettings({...defaults,instagram:'https://example.com/profile'})));
 test('rechaza precios negativos o decimales y texto nulo',()=>{assert.throws(()=>validateRecord('products',productData({price:-1})));assert.throws(()=>validateRecord('products',productData({price:1.5})));assert.throws(()=>validateRecord('products',null));});
+test('existencias contadas exigen enteros seguros no negativos y conservan cero frente a desconocido',()=>{
+ for(const stockQuantity of [-1,0.5,Number.MAX_SAFE_INTEGER+1,Infinity,NaN,'muchas','0'])assert.throws(()=>validateRecord('products',productData({stockQuantity})),{status:400});
+ for(const [input,expected] of [[null,null],['',null],[0,0],[12,12],[Number.MAX_SAFE_INTEGER,Number.MAX_SAFE_INTEGER]])assert.equal(validateRecord('products',productData({stockQuantity:input})).stockQuantity,expected);
+});
 test('JSON de pedido mal formado falla como validación',async()=>assert.rejects(()=>validateOrder(null,async()=>null),{status:400}));
 test('estados finales no se reabren accidentalmente',()=>{assert.throws(()=>validateTransition('cancelled','new'),{status:409});assert.throws(()=>validateTransition('returned','preparing'),{status:409});});
 test('PostgreSQL convierte parámetros de sentencias estáticas',()=>assert.equal(placeholders('SELECT * FROM records WHERE kind=? AND slug=?'),'SELECT * FROM records WHERE kind=$1 AND slug=$2'));
 test('comprobantes también rechazan protocolos peligrosos',()=>assert.throws(()=>publicUrl('javascript:alert(1)')));
 test('hash mal formado no autoriza',async()=>assert.equal(await passwordMatches('password','invalid'),false));
-test('no acepta fecha imposible en pago',async()=>{const p={...productData(),id:'product'};await assert.rejects(()=>validateOrder(orderData(p,{paymentDate:'2026-02-30'}),async()=>p));});
+test('no acepta fecha imposible del pedido',async()=>{const p={...productData(),id:'product'};await assert.rejects(()=>validateOrder(orderData(p,{placedOn:'2026-02-30'}),async()=>p),{status:400});});

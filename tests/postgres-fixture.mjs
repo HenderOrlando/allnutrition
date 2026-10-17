@@ -1,3 +1,5 @@
+import { BUSINESS_TABLES } from '../lib/db/migrations.mjs';
+import { initializeBusinessDefaults } from '../lib/business/settings.mjs';
 export function testDatabaseEnv(env = process.env) {
   let database;
   try { database = new URL(env.TEST_DATABASE_URL).pathname; } catch {}
@@ -12,9 +14,12 @@ export function testDatabaseEnv(env = process.env) {
 }
 
 export async function resetPostgresStore(store) {
+  if (process.env.TEST_ALLOW_DATABASE_RESET !== 'allnutrition_test') throw new Error('Reset requiere TEST_ALLOW_DATABASE_RESET=allnutrition_test.');
   const current = await store.db.get('SELECT current_database() AS name');
   if (current.name !== 'allnutrition_test') throw new Error('Reset rechazado: la conexión real no es allnutrition_test.');
-  await store.db.exec('TRUNCATE allnutrition.order_audit,allnutrition.order_events,allnutrition.idempotency,allnutrition.orders,allnutrition.records,allnutrition.sessions,allnutrition.users,allnutrition.attempts,allnutrition.settings;');
+  const tables = [...BUSINESS_TABLES, 'order_audit','order_events','idempotency','orders','records','sessions','users','attempts','settings'];
+  await store.db.exec(`TRUNCATE ${tables.map(name => store.t(name)).join(',')};`);
   await store.db.run(`UPDATE ${store.t('counters')} SET value=0`);
   await store.initialize();
+  await initializeBusinessDefaults(store);
 }

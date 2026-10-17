@@ -1,4 +1,4 @@
-# Fuentes y decisiones de v2
+# Fuentes y decisiones — v3 y antecedentes
 
 ## Información aportada
 
@@ -7,6 +7,8 @@
 - `Alcance_All_Nutrition_Mantenimiento_Inventario.pdf`: referencia histórica de página base, módulo opcional, responsabilidades y límites. No se traslada automáticamente todo ese alcance a fase 1.
 - Instrucciones posteriores del usuario: panel autoadministrado Next.js con productos/catálogos/combos/redes/FAQ/mensajes/envíos/pedidos; WhatsApp principal, redes complementarias, dominio aún en búsqueda; Supabase por .env, alternativa SQLite, carga local de imágenes de producto y enlaces para otros archivos; separación de fase 2 sin precio.
 - Decisión posterior de infraestructura: Node 24 y un único servidor Linux con Docker Compose, PostgreSQL y Caddy; staging HTTPS local y aceptación descartable sobre la imagen de producción. No se suministraron servidor ni dominio remoto.
+- Plan técnico posterior aprobado «Administración de negocio simple»: diez etapas de fundamentos, catálogo/costos, pedidos/seguimiento, finanzas, Excel, informes, Inicio, navegación, worker y respaldo v3. Sus fixtures son sintéticos; no representan clientes ni encabezados reales de una plataforma.
+- Instrucción posterior del usuario del 17 de octubre de 2026: definir cantidades de productos y elección explícita de «Inventario conectado a pedidos». Sustituye la restricción anterior de disponibilidad manual; el conteo inicial real no fue aportado y no se inventa.
 
 Los dos JPEG de `public/brand` provienen de las imágenes de la página 1 de la Planilla. Son recursos estáticos ya incluidos, no cargas del administrador. El administrador puede subir imágenes locales solo para productos; las imágenes de logo/catálogos/combos y los comprobantes conservan sus mecanismos estáticos o por URL.
 
@@ -31,5 +33,8 @@ Fuentes consultadas durante la preparación técnica del 28–29 de septiembre d
 - PostgreSQL, entrypoint de la imagen oficial: https://raw.githubusercontent.com/docker-library/postgres/master/docker-entrypoint.sh
 - Caddy, TLS: https://caddyserver.com/docs/caddyfile/directives/tls
 - Caddy, API y CA local: https://caddyserver.com/docs/api
+- Next.js instalado `16.3.8`: guías versionadas locales de App Router/History API/Client Components/Route Handlers en `node_modules/next/dist/docs/`; prevalecen frente a supuestos de otras versiones.
+- SheetJS CE `0.20.3`: distribución oficial fijada por integridad en el lockfile, https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz ; no ejecuta un Excel/VBA externo.
+- Node24 `node:sqlite`, backup nativo y modo solo lectura: https://nodejs.org/docs/latest-v24.x/api/sqlite.html
 
 Las dependencias están instaladas y el `package-lock.json` real se incluye para reproducirlas con Node 24 y `npm ci`. La aceptación local `npm run verify:docker` aprobó compilación, contratos SQLite/PostgreSQL, navegador HTTPS y operaciones de persistencia/restauración. Consultar [VERIFICACION.md](VERIFICACION.md) para resultados observados y límites, y [DESPLIEGUE.md](DESPLIEGUE.md) para el procedimiento: las fuentes técnicas y la evidencia local no acreditan una publicación ni una ejecución de CI remotas.

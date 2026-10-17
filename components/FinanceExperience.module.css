@@ -1,0 +1,236 @@
+.workspace {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workspace :global(.workspace-heading) h1,
+.workspace :global(.workspace-heading) p {
+  margin: 0 0 8px;
+}
+
+.operationBar,
+.queryPanel {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--admin-line);
+  border-radius: 20px;
+  background: var(--admin-surface);
+}
+
+.operationBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.operationBar h2 {
+  font-size: 16px;
+  margin: 0 0 4px;
+}
+
+.operationBar p,
+.queryHelp {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.operationBar > div {
+  min-width: 0;
+}
+
+.contextHeading {
+  min-width: 0;
+  padding-block: 8px;
+}
+
+.contextHeading h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.contextHeading p {
+  margin: 0;
+  max-width: 80ch;
+}
+
+.workspace.workspace :global(.summary-values) > div {
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--admin-surface);
+}
+
+.workspace.workspace :global(.summary-values) dd {
+  font-size: 18px;
+  color: var(--admin-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace :global(.admin-empty) {
+  padding: 24px;
+  border: 1px dashed var(--admin-control-border);
+  border-radius: 20px;
+  background: var(--admin-surface);
+}
+
+.workspace :global(.admin-empty) :global(.button) {
+  margin: 4px;
+}
+
+.workspace :global(.cash-filters) {
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 16px;
+  background: var(--admin-surface);
+  align-items: end;
+}
+
+.workspace :global(.cash-filters .field) {
+  margin: 0;
+}
+
+.workspace :global(.cash-row) {
+  background: var(--admin-surface);
+}
+
+.workspace :global(.cash-detail) > h2 {
+  margin-top: 0;
+}
+
+.queryPanel {
+  display: grid;
+  gap: 16px;
+}
+
+.workspace :global(.report-metric) {
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace :global(.report-metric) > :global(.text-button) {
+  margin-top: auto;
+  align-self: flex-start;
+  text-align: left;
+  padding-inline: 0;
+}
+
+.coverageLabel {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--admin-ink);
+  font-weight: 600;
+}
+
+.fieldGroup {
+  min-width: 0;
+  margin: 20px 0;
+  padding: 20px;
+  border: 1px solid var(--admin-line);
+  border-radius: 16px;
+}
+
+.fieldGroup legend {
+  padding-inline: 8px;
+  font-weight: 700;
+  color: var(--admin-ink);
+}
+
+.fieldGroup > :last-child,
+.fieldGroup :global(.product-form-grid) > :global(.field):last-child {
+  margin-bottom: 0;
+}
+
+.fieldGroup > .queryHelp {
+  margin-bottom: 20px;
+}
+
+.actionForm .formGuide {
+  padding: 16px;
+  margin: 0 0 24px;
+  border-radius: 12px;
+  background: var(--admin-lilac);
+  color: var(--admin-lilac-ink);
+  font-size: 14px;
+}
+
+.actionForm :global(details) {
+  padding: 8px 16px;
+  margin-block: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-paper);
+}
+
+.actionForm :global(.form-section) {
+  padding: 16px;
+  margin-block: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-surface);
+}
+
+.actionDialog.actionDialog > :global(.drawer-body) {
+  display: flex;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.actionDialog .actionForm {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.actionDialog .actionForm > :global(.editor-fieldset) {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.actionDialog .actionForm > :global(.error),
+.actionDialog .actionForm > :global([role=status]) {
+  flex-shrink: 0;
+  margin: 16px 24px 0;
+  max-height: 30dvh;
+  overflow-y: auto;
+}
+
+.actionDialog :global(.editor-footer) {
+  flex-shrink: 0;
+}
+
+.actionDialog :is(input, select, textarea) {
+  min-width: 0;
+  scroll-margin-block: 24px;
+}
+
+@media (max-width: 640px) {
+  .operationBar,
+  .queryPanel,
+  .fieldGroup {
+    padding: 16px;
+  }
+
+  .operationBar > div {
+    width: 100%;
+  }
+
+  .actionDialog .actionForm > :global(.editor-fieldset) {
+    padding: 16px;
+  }
+
+  .actionDialog .actionForm > :global(.error),
+  .actionDialog .actionForm > :global([role=status]) {
+    margin-inline: 16px;
+  }
+}

@@ -1,0 +1,307 @@
+.viewport {
+  scroll-padding-block: 24px 150px;
+}
+
+:global(html):has(.viewport) {
+  scroll-padding-block: 88px 150px;
+}
+
+.contentEditor :global(.drawer-body) {
+  scroll-padding-block: 24px 144px;
+}
+
+.contentEditor :global(.editor-summary):focus-visible {
+  outline: 3px solid var(--admin-accent);
+  outline-offset: 3px;
+}
+
+.directory,
+.navigation {
+  min-width: 0;
+  margin-bottom: 32px;
+}
+
+.directoryHeading h2 {
+  margin-bottom: 8px;
+}
+
+.directoryHeading p {
+  margin-bottom: 24px;
+}
+
+.directoryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 20px;
+}
+
+.group {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--admin-line);
+  border-radius: 20px;
+  background: var(--admin-surface);
+}
+
+.business {
+  grid-row: span 2;
+}
+
+.group > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.groupIcon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--admin-apricot);
+  color: var(--admin-apricot-ink);
+}
+
+.storefront .groupIcon {
+  background: var(--admin-mint);
+  color: var(--admin-mint-ink);
+}
+
+.access .groupIcon {
+  background: var(--admin-lilac);
+  color: var(--admin-lilac-ink);
+}
+
+.group.group h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.group header p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group li + li {
+  border-top: 1px solid var(--admin-line);
+}
+
+.group li > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 72px;
+  padding: 16px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  color: var(--admin-ink);
+}
+
+.group li > button:hover {
+  background: var(--admin-paper);
+}
+
+.group button > span,
+.group header > div,
+.getStarted > div {
+  min-width: 0;
+}
+
+.group button > svg {
+  flex-shrink: 0;
+}
+
+.group strong,
+.group small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.group strong {
+  margin-bottom: 4px;
+  font-size: 15px;
+}
+
+.group small {
+  color: var(--admin-muted);
+  font-weight: 400;
+}
+
+.getStarted {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px;
+  margin-top: 20px;
+  border: 1px dashed var(--admin-control-border);
+  border-radius: 16px;
+}
+
+.getStarted p {
+  margin: 4px 0 0;
+  max-width: 65ch;
+  font-size: 14px;
+}
+
+.getStarted button {
+  flex-shrink: 0;
+}
+
+.navigation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--admin-line);
+}
+
+.backIcon {
+  display: flex;
+  transform: rotate(180deg);
+}
+
+.taskSwitch {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.taskSwitch select {
+  width: 100%;
+  min-width: 0;
+  max-width: 360px;
+  font-weight: 400;
+}
+
+.vitrinaForm.vitrinaForm {
+  max-width: 100%;
+}
+
+.formIntro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--admin-lilac);
+}
+
+.formIntro p {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
+.formIntro strong {
+  color: var(--admin-lilac-ink);
+}
+
+.formIndex {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.formIndex button {
+  gap: 8px;
+}
+
+.formIndex span {
+  font-variant-numeric: tabular-nums;
+  color: var(--admin-muted);
+}
+
+.vitrinaForm :global(.settings-group) {
+  margin: 0;
+  padding-block: 28px 8px;
+  border-top: 1px solid var(--admin-line);
+  scroll-margin-block: 24px 160px;
+}
+
+.vitrinaForm :global(.settings-group) h2 {
+  margin-bottom: 8px;
+  scroll-margin-block: 24px 160px;
+}
+
+.groupDescription {
+  margin-bottom: 24px;
+  max-width: 70ch;
+  font-size: 14px;
+}
+
+.vitrinaForm :global(.settings-save-bar) {
+  bottom: 0;
+  gap: 16px;
+  margin-bottom: -24px;
+  padding-block: 16px 24px;
+}
+
+@media (max-width: 767px) {
+  .directoryGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .business {
+    grid-row: auto;
+  }
+
+  .group,
+  .getStarted {
+    padding: 16px;
+  }
+
+  .getStarted {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .getStarted button {
+    justify-content: center;
+  }
+
+  .navigation > button,
+  .taskSwitch,
+  .taskSwitch select {
+    width: 100%;
+    max-width: none;
+  }
+
+  .formIndex {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .formIndex button {
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .vitrinaForm :global(.settings-save-bar) {
+    margin-bottom: -16px;
+    padding-bottom: 16px;
+  }
+}

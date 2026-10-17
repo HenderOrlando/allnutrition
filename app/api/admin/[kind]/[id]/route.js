@@ -10,7 +10,7 @@ export async function GET(request, { params }) { try {
 export async function PUT(request, { params }) { try {
   const user = await authorize(request, { write: true }), { kind, id } = await params, data = await jsonBody(request), store = await db();
   const old = kind === 'products' ? await store.get(kind, id) : null;
-  const saved = kind === 'orders' ? await store.saveOrder(data, user.user.id, id, data?.version) : await store.save(kind, data, id, data?.version);
+  const saved = kind === 'orders' ? await store.saveOrder(data, user.user.id, id, data?.version) : await store.save(kind, data, id, data?.version, user.user.id);
   if (old?.image && old.image !== saved.image) await removeUnusedProductImage(store, old.image).catch(error => console.error('No se pudo liberar una imagen de producto:', error.code || error.name || 'unknown'));
   return json(saved);
 } catch (error) { return errorResponse(error); } }

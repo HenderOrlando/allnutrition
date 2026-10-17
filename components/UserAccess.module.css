@@ -1,0 +1,146 @@
+.users {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+  gap: 24px;
+  align-items: start;
+  min-width: 0;
+}
+
+.users > section {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sectionHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sectionHeading > div {
+  min-width: 0;
+}
+
+.sectionHeading p {
+  margin: 0 0 8px;
+}
+
+.sectionHeading h2 {
+  margin: 0;
+  scroll-margin-block: 120px;
+}
+
+.users button {
+  min-height: 44px;
+  max-width: 100%;
+}
+
+.roleNotice {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  margin: 20px 0;
+  border-radius: 12px;
+  background: var(--admin-lilac);
+  font-size: 14px;
+}
+
+.roleNotice strong {
+  color: var(--admin-lilac-ink);
+}
+
+.users .roleNotice p {
+  margin: 0;
+  color: var(--admin-lilac-ink);
+}
+
+.userGroup {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 12px 0 8px;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--admin-line);
+}
+
+.userGroup legend {
+  max-width: 100%;
+  padding: 0 8px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.sectionNumber {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--admin-apricot);
+  color: var(--admin-apricot-ink);
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.userGroup p {
+  margin: 0 0 8px;
+}
+
+.users .userGroup .passwordControl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.passwordControl button {
+  justify-self: start;
+}
+
+.userReview {
+  min-width: 0;
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--admin-paper);
+  overflow-wrap: anywhere;
+}
+
+.users .userReview h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.userReview p {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.userReview button {
+  margin-top: 12px;
+  width: 100%;
+}
+
+.users :global(.user-management-table) {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.users :global(.user-management-table) th:first-child {
+  width: 46%;
+}
+
+.users :global(.user-cards) strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1100px) {
+  .users {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

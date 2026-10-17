@@ -6,16 +6,20 @@ import { readFileSync, writeFileSync, appendFileSync, readdirSync, statSync } fr
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDeploymentEnv } from './deploy-env.mjs';
+import { createInterface } from 'node:readline';
 
 process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
 process.umask(0o077);
 const id = randomBytes(8).toString('hex');
 const project = `allnutrition-test-${id}`;
 const result = { node: process.version, project, startedAt: new Date().toISOString(), tests: [], exitCode: 1 };
+const args = process.argv.slice(2);
+const interactive = args.length === 1 && args[0] === '--interactive';
 const secrets = [];
 let values, artifacts, composeArgs, dockerEnv, httpsCA, createdProject = false;
 let interrupted = false;
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { interrupted = true; });
+let cancelPause;
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { interrupted = true; cancelPause?.(); });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function ensure(condition, message) { if (!condition) throw new Error(message); }
 function sanitize(text) {
@@ -89,8 +93,111 @@ function inspectImage(image, allowFailure = false) {
   }
   return JSON.parse(inspected.stdout)[0];
 }
+function shellQuote(value) { return "'" + String(value).replaceAll("'", "'\\''") + "'"; }
+function printedCompose(args) {
+  // Remove shell overrides just as compose() does; show paths/project, never credentials.
+  return ['env', ...Object.keys(values).map(key => `-u ${shellQuote(key)}`), 'docker', ...composeArgs.map(arg => shellQuote(arg.startsWith('compose.') ? resolve(arg) : arg)), ...args.map(shellQuote)].join(' ');
+}
+function waitForEnter() {
+  return new Promise((resolve, reject) => {
+    const input = createInterface({ input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY });
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true; cancelPause = null; input.close();
+      error ? reject(error) : resolve();
+    };
+    cancelPause = () => finish(new Error('Aceptación interactiva cancelada por señal.'));
+    input.once('SIGINT', cancelPause);
+    input.once('close', () => finish(new Error('Aceptación interactiva cancelada: EOF sin Enter.')));
+    input.once('line', () => finish());
+    console.log('\nCuando el escenario esté completo y el lote de reinicio esté queued con scheduler detenido, cierre todos los paneles y pulse Enter. EOF/SIGINT cancela y elimina solo este proyecto.');
+  });
+}
+function workerState() {
+  const script = `
+    // node --eval resolves these modules from the checks container's working directory.
+    const {openStore}=await import(process.cwd()+'/lib/db/index.mjs');
+    const {entity}=await import(process.cwd()+'/lib/business/commands.mjs');
+    const store=await openStore();
+    try {
+      const heartbeat=await store.db.get("SELECT updated_at,state FROM "+store.t('job_runs')+" WHERE key='scheduler:heartbeat'");
+      const batch=(await store.db.all("SELECT * FROM "+store.t('import_batches')+" WHERE filename=?",['seguimiento-SINTETICO-reinicio-60.xlsx'])).map(entity);
+      const counts={};
+      for(const table of ['orders','shipments','shipment_events','order_collections','cash_entries','expenses','expense_payments','settlement_receipts','commission_entries','report_snapshots','alerts']) counts[table]=Number((await store.db.get("SELECT COUNT(*) AS n FROM "+store.t(table))).n);
+      let restart=null;
+      if(batch.length===1) {
+        const b=batch[0], revision=await store.db.get("SELECT data FROM "+store.t('import_revisions')+" WHERE batch_id=? AND revision=?",[b.id,b.acceptedRevision || 0]);
+        restart={id:b.id,state:b.state,revision:b.acceptedRevision,selection:revision?JSON.parse(revision.data).selection.length:0,applied:Number((await store.db.get("SELECT COUNT(*) AS n FROM "+store.t('import_rows')+" WHERE batch_id=? AND state='applied'",[b.id])).n)};
+      }
+      console.log(JSON.stringify({heartbeat,restart,counts}));
+    } finally {await store.close();}
+  `;
+  const observed = compose(['run', '--rm', '--no-deps', 'checks', 'node', '--input-type=module', '-e', script], 'Lectura de heartbeat y progreso durable', { quiet: true, logOutput: false });
+  return JSON.parse(observed.stdout.trim());
+}
+async function startWorker() {
+  const startedAt = Date.now();
+  compose(['up', '-d', '--no-deps', 'scheduler'], 'Arranque seguro del scheduler en la misma imagen');
+  const schedulerId = compose(['ps', '-q', 'scheduler'], 'Identificación del scheduler', { quiet: true }).stdout.trim();
+  ensure(schedulerId, 'El scheduler no está ejecutándose.');
+  const inspected = JSON.parse(run('docker', ['inspect', schedulerId], 'Aislamiento del scheduler', { quiet: true, logOutput: false }).stdout)[0];
+  ensure(inspected.Image === result.imageId && inspected.Config.User === 'node' && Object.values(inspected.NetworkSettings.Ports || {}).every(bindings => !bindings?.length) && Object.keys(inspected.NetworkSettings.Networks).every(network => network === `${project}_backend`), 'Scheduler debe usar la imagen runtime, usuario node, red backend y ningún puerto publicado.');
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    const state = workerState();
+    if (Date.parse(state.heartbeat?.updated_at) >= startedAt) return state;
+    ensure(!interrupted, 'Verificación interrumpida.');
+    await delay(1000);
+  }
+  throw new Error('Scheduler sin heartbeat reciente después de arrancar.');
+}
+function stopWorker() { compose(['stop', 'scheduler'], 'Detención del scheduler antes de modificar/restaurar fixtures'); }
+function workerOnce(label) {
+  const output = compose(['run', '--rm', '--no-deps', 'scheduler', 'npm', 'run', 'business:jobs:once'], label).stdout;
+  const line = output.trim().split('\n').findLast(line => line.startsWith('{'));
+  ensure(line, 'El worker no devolvió el progreso de su turno real.');
+  return JSON.parse(line);
+}
+function settleWorker() {
+  for (let turn = 0; turn < 30; turn++) {
+    if (!workerOnce('Turno acotado hasta agotar derivados pendientes').hasMore) return;
+  }
+  throw new Error('El worker no agotó los trabajos pendientes en 30 turnos acotados.');
+}
+async function proveImportRestart() {
+  const active = compose(['ps', '--status', 'running', '-q', 'scheduler'], 'Comprobación de worker detenido para reinicio', { quiet: true }).stdout.trim();
+  ensure(!active, 'Detenga el scheduler después del preview y antes del commit del Excel de reinicio.');
+  const before = workerState();
+  ensure(before.restart?.state === 'queued' && before.restart.selection === 60 && before.restart.applied === 0, 'Se requiere lote real de 60 guías, revisión aceptada queued y cero filas aplicadas.');
+  compose(['run', '--rm', '--no-deps', 'scheduler', 'npm', 'run', 'business:jobs:once'], 'Primer turno acotado sobre lote aceptado con paneles cerrados');
+  const partial = workerState();
+  ensure(partial.restart.id === before.restart.id && partial.restart.revision === before.restart.revision && partial.restart.state === 'queued' && partial.restart.applied === 25, 'El primer turno debe conservar la revisión y aplicar solo 25 de 60 grupos.');
+  await startWorker();
+  const deadline = Date.now() + 120000;
+  let completed;
+  while (Date.now() < deadline) {
+    completed = workerState();
+    if (completed.restart?.state === 'completed') break;
+    ensure(!['failed','completed_with_errors'].includes(completed.restart?.state), 'El lote de reinicio terminó con errores.');
+    ensure(!interrupted, 'Verificación interrumpida.');
+    await delay(1000);
+  }
+  ensure(completed?.restart?.applied === 60 && completed.restart.state === 'completed' && completed.restart.revision === before.restart.revision, 'El servicio reiniciado no reanudó los 60 grupos de la misma revisión.');
+  stopWorker();
+  // Drain other domain stages before comparing an unchanged repeated turn.
+  settleWorker();
+  const stable = workerState();
+  compose(['run', '--rm', '--no-deps', 'scheduler', 'npm', 'run', 'business:jobs:once'], 'Repetición real del worker sin nuevos hechos');
+  const repeated = workerState();
+  ensure(JSON.stringify(stable.counts) === JSON.stringify(repeated.counts), 'Repetir el worker duplicó hechos, alertas o revisiones de informes.');
+  ensure(stable.counts.orders === before.counts.orders && stable.counts.cash_entries === before.counts.cash_entries && stable.counts.order_collections === before.counts.order_collections && stable.counts.shipments === before.counts.shipments + 60 && stable.counts.shipment_events === before.counts.shipment_events + 60, 'El seguimiento debe crear exactamente 60 guías/eventos, sin ventas ni dinero.');
+  writeFileSync(join(artifacts, 'business-restart.json'), JSON.stringify({ before, partial, completed, stable, repeated }, null, 2) + '\n', { mode: 0o600 });
+  passed('scheduler: revisión durable 0→25→60 tras reinicio, heartbeat y repetición sin duplicados');
+}
 
 try {
+  ensure(args.length === 0 || interactive, 'Uso: npm run verify:docker -- [--interactive]');
   ensure(process.versions.node.split('.')[0] === '24', 'verify:docker requiere Node major 24.');
   run('docker', ['info', '--format', '{{.ServerVersion}}'], 'Docker daemon disponible');
   result.compose = run('docker', ['compose', 'version', '--short'], 'Compose disponible').stdout.trim();
@@ -117,6 +224,7 @@ try {
 
   compose(['up', '-d', '--wait', '--wait-timeout', '120', 'db'], 'PostgreSQL TLS saludable');
   compose(['run', '--rm', 'migrate'], 'Migración y aprovisionamiento del rol runtime');
+  stopWorker();
   compose(['run', '--rm', 'checks', 'npm', 'run', 'check'], 'Sintaxis e imports de la imagen checks');
   passed('npm run check');
   const contracts = compose(['run', '--rm', 'checks', 'npm', 'test'], 'Contratos SQLite y PostgreSQL', { timeout: 180000 });
@@ -125,6 +233,7 @@ try {
   compose(['run', '--rm', 'checks', 'npm', 'audit', '--omit=dev', '--audit-level=high'], 'Auditoría de dependencias de producción');
   passed('npm audit --omit=dev --audit-level=high');
 
+  stopWorker();
   compose(['run', '--rm', 'checks', 'node', 'tests/e2e/setup.mjs'], 'Fixture PostgreSQL con doble guarda');
   compose(['up', '-d', '--wait', '--wait-timeout', '120', 'web', 'proxy'], 'Arranque del contenedor compilado y HTTPS');
   const root = JSON.parse(compose(['exec', '-T', 'proxy', 'wget', '-qO-', 'http://127.0.0.1:2019/pki/ca/local'], 'Exportación de CA HTTPS pública', { quiet: true, logOutput: false }).stdout).root_certificate;
@@ -142,7 +251,38 @@ try {
   });
   passed('Playwright desktop/mobile: upload local, render público, límites HTTP, autenticación y CSRF');
 
+  await startWorker();
+  passed('scheduler real: misma imagen limitada, sin puertos y heartbeat persistido');
   const operations = command => compose(['run', '--rm', 'checks', 'node', 'tests/docker/operations.mjs', command], `Operaciones PostgreSQL: ${command}`);
+  if (interactive) {
+    stopWorker();
+    operations('business-prepare');
+    await startWorker();
+    const manifestPath = join(artifacts, 'business.json');
+    console.log(`\nACEPTACIÓN INTERACTIVA: ${values.APP_URL}/admin`);
+    console.log(`Manifest sin secretos: ${manifestPath}\nExcel sintéticos en: ${artifacts}`);
+    console.log('Ejercite desde la UI: main y reordenado; liquidación105000; sueldo/comisión15500; septiembre37500; costo A30000desde1octubre y NUEVO pedido1octubre A×1/flete0, guardado sin envío/cobro para comprobar snapshot30000; devolución recuperable55000/23000 del principal; reembolso55000 y pago retorno7000 →127500.');
+    console.log('Configure mínimo128000 y solicite snapshot septiembre. Cierre TODOS los paneles antes de jobs:once. Repita sin duplicar; acuse alerta En atención sin resolver; ingreso propietario500 con referencia APORTE-SINTETICO-500 y nueva corrida →128000 y mismo episodio resuelto.');
+    console.log(`DETENER:\n${printedCompose(['stop', 'scheduler'])}`);
+    console.log(`UNA CORRIDA REAL SIN PANELES:\n${printedCompose(['run', '--rm', '--no-deps', 'scheduler', 'npm', 'run', 'business:jobs:once'])}`);
+    console.log(`REINICIAR:\n${printedCompose(['up', '-d', '--no-deps', 'scheduler'])}`);
+    console.log('Finalmente: con scheduler ACTIVO suba seguimiento-SINTETICO-reinicio-60.xlsx y espere parseo/preview válido de60 grupos (perfil en manifest, carrier explícito). SOLO ENTONCES detenga scheduler, confirme Importar, deje queued, cierre paneles y pulse Enter. El verificador hará turno25 y reinicio→60 sin sembrar datos.');
+    await waitForEnter();
+    operations('business-assert');
+    await proveImportRestart();
+    operations('business-assert');
+    passed('escenario comercial completo ejercido en UI, snapshot/alerta sin paneles e importación reanudable');
+  } else {
+    stopWorker();
+    settleWorker();
+    const before = workerState();
+    workerOnce('Repetición automatizada del worker sin nuevos hechos');
+    const after = workerState();
+    ensure(JSON.stringify(before.counts) === JSON.stringify(after.counts), 'El worker automatizado duplicó hechos, alertas o snapshots sin cambios.');
+    writeFileSync(join(artifacts, 'scheduler-repeat.json'), JSON.stringify({ before, after }, null, 2) + '\n', { mode: 0o600 });
+    passed('scheduler automatizado sin hechos, alertas ni revisiones duplicadas');
+  }
+  stopWorker();
   operations('prepare');
   const snapshot = JSON.parse(readFileSync(join(artifacts, 'operational.json'), 'utf8'));
   secrets.push(snapshot.session.token, snapshot.session.csrf, snapshot.account.password);
@@ -181,12 +321,22 @@ try {
   ensure(metadata.size > 0 && (metadata.mode & 0o777) === 0o600, 'El dump está vacío o no tiene permisos 0600.');
   result.backup = join(values.BACKUP_DIR, backup);
   compose(['stop', 'web'], 'Detención de web antes del restore');
+  stopWorker();
   compose(['exec', '-T', 'db', 'createdb', '-U', 'postgres', 'allnutrition_restore'], 'Creación exclusiva de una base restore vacía');
   compose(['run', '--rm', '-e', 'PGDATABASE=allnutrition_restore', 'backup', 'pg_restore', '--exit-on-error', '--dbname=allnutrition_restore', `/backups/${backup}`], 'Restore TLS en base distinta');
   compose(['run', '--rm', '-e', 'DATABASE_URL', 'checks', 'node', 'tests/docker/operations.mjs', 'assert'], 'Aceptación de la base restaurada con rol runtime', {
     env: { DATABASE_URL: `postgresql://allnutrition_app:${values.DB_APP_PASSWORD}@db:5432/allnutrition_restore` },
   });
   passed('pg_dump/restore: cuentas, sesiones, replay, numeración, historial y privilegios');
+  const webMounts = JSON.parse(run('docker', ['inspect', webId], 'Volumen de imágenes separado del dump', { quiet: true, logOutput: false }).stdout)[0].Mounts;
+  ensure(webMounts.some(mount => mount.Type === 'volume' && mount.Destination === '/app/data/product-images' && mount.Name === `${project}_product_images`), 'Las imágenes deben persistir en su volumen propio, no en pg_dump.');
+  compose(['up', '-d', '--wait', '--wait-timeout', '120', 'web'], 'Reapertura de web tras restore aislado');
+  await healthy();
+  const mediaAfterRestore = await request(mediaSmoke.url);
+  ensure(mediaAfterRestore.status === 200 && mediaAfterRestore.contentType.startsWith('image/webp'), 'El volumen separado de imágenes no conserva el archivo tras el procedimiento de restore.');
+  passed('pg_dump conserva negocio v3; archivo WebP permanece en volumen separado');
+  await startWorker();
+  passed('scheduler vuelve a funcionar tras caída/reinicio y restore aislado');
 
   const syntaxEnv = { APP_DOMAIN: 'production.example.invalid', APP_URL: 'https://production.example.invalid' };
   compose(['-f', 'compose.production.yaml', 'config', '--quiet'], 'Sintaxis del override de producción', { env: syntaxEnv });

@@ -2,6 +2,8 @@
 
 Documento de trabajo para el desarrollador. No es evidencia de que el cliente haya aceptado las ampliaciones descritas aquí. No incluye un precio para la fase 2.
 
+**Actualización v3:** el plan técnico posterior aprobado añade administración de negocio (costos privados, caja, liquidaciones, sueldos, importación Excel, informes y alertas). Es una ampliación del código descrita en README/REQUISITOS, no la fase2 de captación ni prueba de un nuevo acuerdo comercial. Las secciones1–9 conservan el razonamiento histórico, salvo el alcance técnico actualizado a continuación.
+
 ## 1. Base de la decisión
 
 Según lo relatado en la conversación: el 4 de julio se ofrecieron $350.000 de inicio y cinco mensualidades de $100.000, total $850.000, incluyendo página, direccionamiento a WhatsApp y cinco meses de mantenimiento. El anticipo se recibió el 2 de septiembre y las respuestas el 19 de septiembre. No se infiere el año ni los vencimientos que no se han confirmado.
@@ -16,11 +18,13 @@ Incluye la web y el panel privado de contenidos, alta/edición/archivo, imágene
 
 No se requiere escribir código para actualizar contenido. Cada presentación con precio o disponibilidad propia se registra como referencia independiente; no existe un configurador de variantes complejo. Las colecciones son catálogos dentro de esta web, no sincronizaciones externas.
 
+La ampliación posterior del 17 de octubre de 2026 incorpora inventario por referencia conectado a pedidos: conteo físico privado, reservas, salidas por envío y devoluciones. Sustituye la disponibilidad manual; no convierte la selección pública/WhatsApp en una reserva ni añade compras o integraciones. Su contrato vigente y la migración histórica están en `REQUISITOS_Y_DECISIONES.md`.
+
 El catálogo inicial a cargar por el desarrollador y la capacitación se deben precisar. El límite de hasta 12 referencias del V5 es una referencia de carga inicial, no se convierte automáticamente en un límite del software autoadministrado. Que el cliente pueda añadir contenido no obliga al desarrollador a hacer cargas o cambios ilimitados durante el mantenimiento.
 
 ## 3. Qué queda fuera del código entregado
 
-No se construyeron formularios públicos de captación, base de leads previa al pedido, embudo comercial, próximos contactos, asignación de leads a asesores, recordatorios, seguimiento a no compradores, medición de conversión, chatbot ni agentes de IA. No hay lectura/sincronización de WhatsApp, conexión con bancos o transportadoras, facturación, checkout, inventario por movimientos, reserva o descuento automático de stock, integraciones ni generación de guías.
+No se construyeron formularios públicos de captación, base de leads previa al pedido, embudo comercial, próximos contactos, asignación de leads a asesores, seguimiento a no compradores, medición de conversión, chatbot ni agentes de IA. Las alertas v3 son operativas de pedidos/caja/datos, no recordatorios comerciales a interesados. No hay lectura/sincronización WhatsApp, conexión con bancos/transportadoras, facturación, checkout ni generación de guías. El inventario conectado a pedidos sí está incluido por la instrucción posterior citada arriba.
 
 Estos conceptos no se ofrecen todos como un único paquete futuro ni se promete que entren en el alcance o tiempo mencionado en mensajes anteriores. Cada ampliación requiere selección y cotización propia. Algunas automatizaciones ya estaban excluidas incluso del módulo opcional del V5: no se debe presentarlas ahora como si siempre hubieran estado prometidas.
 
@@ -65,8 +69,12 @@ Next.js es una decisión técnica; la ampliación funcional del panel y pedidos 
 
 La interpretación manual/seguimiento de esta propuesta es una delimitación actual sugerida, no una transcripción de un nuevo acuerdo del cliente.
 
-## 9. Ajuste técnico v2
+## 9. Alcance técnico vigente v3
 
-Supabase/PostgreSQL por variables privadas es la base del despliegue Vercel. SQLite queda como motor alternativo local o Docker con disco persistente; no hay conmutación automática ni replicación entre motores. Los productos admiten imágenes por URL HTTPS o carga local optimizada con cuota de 1 GB; en Docker los binarios persisten en el volumen `product_images`, independiente de PostgreSQL. Las imágenes del logo, catálogos y combos siguen usando recursos estáticos o URLs. No hay conectores de almacenamiento externos; iCloud solo puede actuar como origen de un archivo elegido por el selector local del dispositivo.
+Producción previa: VM Linux con Compose/PostgreSQL detrás del Nginx del host; Caddy para staging/pruebas o despliegue autónomo. SQLite es alternativa local; Vercel/Supabase requiere worker persistente aparte. No hay failover ni replicación. Imágenes locales persisten en volumen separado de los respaldos de negocio.
 
-El registro de pedidos conserva precios/composición y añade los datos de despacho solicitados en la Planilla. Las reglas específicas de transición, abonos y permisos son propuestas pendientes; consultar REQUISITOS_Y_DECISIONES.md. Esta actualización no convierte el sitio en un CRM ni incorpora precios de una fase posterior.
+Pedidos conservan precios, costos, componentes, vendedor y políticas históricos. Recaudos, liquidaciones, gastos/pagos, devoluciones, compensaciones y cierres son documentos auditables, no integración automática. Las fechas desconocidas y costos faltantes no se inventan para completar beneficios.
+
+Excel se revisa por fuente/cuenta y se aplica en grupos atómicos con revisión congelada. Informes explican cobertura y hechos en seis periodicidades Bogotá; snapshots no se sobrescriben. Worker, leases y heartbeat permiten importaciones/alertas/reportes sin panel abierto. Todas las cuentas de acceso siguen siendo administradoras; personas responsables no necesitan login.
+
+Esta actualización no incorpora CRM, reglas fiscales, conectores, pagos automáticos ni política de backups off-host; tampoco publica v3 por el solo hecho de aprobar localmente. La promoción y recuperación deben aceptarse en el destino real.

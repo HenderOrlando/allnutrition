@@ -11,6 +11,8 @@ export default async function setup(){
   await resetPostgresStore(store);
   await createAdmin(store,'e2e@example.test','clave-e2e-solo-pruebas');
   await seed(store);
+  const product=(await store.list('products'))[0];
+  await store.save('products',{...product,stockQuantity:1000},product.id,product.version);
  } finally { await store.close(); }
 }
 

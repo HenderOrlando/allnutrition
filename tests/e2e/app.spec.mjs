@@ -3,15 +3,18 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import sharp from 'sharp';
 import { test,expect } from '@playwright/test';
-import { login } from './helpers.mjs';
+import { login,navigate,signOut,visibleRecord } from './helpers.mjs';
+import { adminSections } from '../../lib/admin-view.mjs';
 
 test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',async({page,request},info)=>{
- await page.goto('/');await expect(page.getByRole('heading',{name:/Estamos preparando/})).toBeVisible();
+ expect((await page.goto('/')).status()).toBe(200);await expect(page.locator('article.product-card')).toHaveCount(0);
  await page.screenshot({path:info.outputPath('preparation.png'),fullPage:true});
  expect((await request.get('/api/admin/orders')).status()).toBe(401);
  expect((await request.get('/api/admin/settings')).status()).toBe(401);
  expect((await request.get('/api/admin/upload')).status()).toBe(401);
  expect((await request.post('/api/admin/upload',{data:'not-an-image'})).status()).toBe(401);
+ for(const path of ['/api/admin/business/settings','/api/admin/business/people','/api/admin/finance/overview','/api/admin/imports','/api/admin/imports/unknown/file','/api/admin/imports/unknown/errors'])expect((await request.get(path)).status()).toBe(401);
+ expect((await request.put('/api/admin/imports/unknown/file',{data:'not-an-excel'})).status()).toBe(401);
  expect((await request.get('/productos/creatina-vital-force-70-servicios')).status()).toBe(404);
  await page.goto('/admin/login');
  await expect(page.getByLabel('Correo de administrador')).toBeVisible();
@@ -20,10 +23,9 @@ test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',a
 
 test('panel permite vista previa y conserva WhatsApp principal',async({page},info)=>{
  await login(page);
- await expect(page.getByRole('navigation',{name:'Administración'})).toBeVisible();
+ await expect(page.getByRole('navigation',{name:'Administración',exact:true}).and(page.locator(':visible'))).toBeVisible();
  await page.screenshot({path:info.outputPath('panel.png'),fullPage:true});
  await page.goto('/?preview=1');
- await expect(page.getByRole('heading',{name:/Explora el catálogo/})).toBeVisible();
  const product=page.locator('article.product-card').first();
  await expect(product).toBeVisible();
  const title=await product.getByRole('heading',{level:3}).innerText();
@@ -37,34 +39,43 @@ test('panel permite vista previa y conserva WhatsApp principal',async({page},inf
  await page.screenshot({path:info.outputPath('catalog-preview.png'),fullPage:true});
 });
 
-test('crea y edita un producto conservando un enlace HTTPS externo',async({page},info)=>{
- await login(page);await page.getByRole('navigation',{name:'Administración'}).getByRole('button',{name:'Productos',exact:false}).click();
+test('crea y edita un producto: búsqueda, precio, existencias y publicación',async({page},info)=>{
+ await login(page);await navigate(page,'Productos');
  await page.getByRole('button',{name:'Crear producto',exact:true}).click();
  const drawer=page.getByRole('dialog');
  const name=`Producto E2E ${info.project.name}`;
  await drawer.getByLabel('Nombre',{exact:false}).fill(name);
  await drawer.getByRole('button',{name:'Ingresar URL HTTPS'}).click();
  await drawer.getByLabel('URL pública de la fotografía',{exact:true}).fill('https://images.example.com/test.jpg');
- await drawer.getByLabel('Presentación / contenido').fill('Presentación de prueba');
+ await drawer.getByLabel('Presentación / contenido').fill(`Presentación de prueba ${info.project.name}`);
  await drawer.getByLabel('Precio en pesos colombianos').fill('25000');
+ await drawer.getByLabel('Existencias físicas (unidades)').fill('10');
  await drawer.getByRole('button',{name:'Crear producto'}).click();await expect(drawer).toHaveCount(0);
- const row=page.getByRole('row').filter({hasText:name});
- await expect(row).toHaveCount(1);
- await row.getByRole('button',{name:'Editar'}).click();
+ await page.getByRole('textbox',{name:/Buscar por nombre, presentación o referencia/}).fill(info.project.name);
+ const edit=page.getByRole('button',{name:`Editar ${name}`,exact:true});
+ await expect(edit).toHaveCount(1);
+ await edit.click();
  await drawer.getByLabel('Precio en pesos colombianos').fill('26000');
+ await drawer.getByLabel('Existencias físicas (unidades)').fill('12');
+ await drawer.getByLabel('Publicación',{exact:true}).selectOption('published');
  await drawer.getByRole('button',{name:'Guardar cambios'}).click();await expect(drawer).toHaveCount(0);
- await row.getByRole('button',{name:'Editar'}).click();
+ await expect(page.getByText('12 físicas · 0 reservadas · 12 disponibles',{exact:true})).toBeVisible();
+ await page.getByLabel('Filtrar por publicación').selectOption('published');
+ await expect(edit).toHaveCount(1);
+ await page.getByLabel('Filtrar por publicación').selectOption('draft');
+ await expect(edit).toHaveCount(0);
+ await page.getByLabel('Filtrar por publicación').selectOption('');
+ await edit.click();
  await expect(drawer.getByLabel('Precio en pesos colombianos')).toHaveValue('26000');
+ await expect(drawer.getByLabel('Existencias físicas (unidades)')).toHaveValue('12');
  await drawer.getByRole('button',{name:'Cerrar editor'}).click();
  await expect(drawer).toHaveCount(0);
 });
 test('sube una imagen local optimizada y la muestra en la vitrina pública',async({page,request},info)=>{
- await login(page);await page.getByRole('navigation',{name:'Administración'}).getByRole('button',{name:'Productos',exact:false}).click();
+ await login(page);await navigate(page,'Productos');
  await page.getByRole('button',{name:'Crear producto',exact:true}).click();
  const drawer=page.getByRole('dialog'),name=`Producto imagen local ${info.project.name}`;
  await drawer.getByLabel('Nombre',{exact:false}).fill(name);
- await expect(drawer.getByRole('heading',{name:'Información básica'})).toBeVisible();
- await expect(drawer.getByRole('heading',{name:'Imagen del producto'})).toBeVisible();
  await expect(drawer.getByLabel('URL pública de la fotografía',{exact:true})).toHaveCount(0);
  await drawer.getByLabel('Presentación / contenido').fill('Presentación de prueba');
  await drawer.getByLabel('Precio en pesos colombianos').fill('25000');
@@ -77,7 +88,6 @@ test('sube una imagen local optimizada y la muestra en la vitrina pública',asyn
  const imageUrl=await preview.getAttribute('src');
  expect(imageUrl).toMatch(/^\/api\/media\/[0-9a-f-]{36}$/);await expect(preview).toBeVisible();
  await expect.poll(()=>preview.evaluate(image=>image.naturalWidth)).toBe(2400);
- await expect(drawer.getByRole('status').filter({hasText:'Almacenamiento local de imágenes'})).toContainText('1 GB');
  await drawer.getByRole('button',{name:'Crear producto'}).click();await expect(drawer).toHaveCount(0);
  await page.goto(`/productos/${slug}`);
  const productImage=page.locator('.detail-photo img');
@@ -94,18 +104,85 @@ test('sube una imagen local optimizada y la muestra en la vitrina pública',asyn
  if(process.env.PLAYWRIGHT_MEDIA_SMOKE_FILE){const manifest=process.env.PLAYWRIGHT_MEDIA_SMOKE_FILE;mkdirSync(dirname(manifest),{recursive:true});writeFileSync(manifest,JSON.stringify({url:imageUrl})+'\n',{mode:0o600});}
 });
 
-test('pedido manual: alta, estado, validación de guía e historial',async({page},info)=>{
- await login(page);await page.getByRole('navigation',{name:'Administración'}).getByRole('button',{name:'Pedidos',exact:true}).click();
- await page.getByRole('button',{name:'Nuevo pedido',exact:true}).click();const drawer=page.getByRole('dialog');
- const name=`Comprador E2E ${info.project.name}`;
- await drawer.getByRole('textbox',{name:/Nombre completo/}).fill(name);await drawer.getByRole('textbox',{name:/Celular/}).fill('3001234567');await drawer.getByRole('textbox',{name:/Ciudad/}).fill('Bogotá');await drawer.getByRole('textbox',{name:'Departamento',exact:true}).fill('Cundinamarca');await drawer.getByRole('textbox',{name:'Dirección exacta',exact:true}).fill('Dirección de prueba');
+test('pedido manual: acuerdo, guía, despacho y conservación del historial',async({page},info)=>{
+ await login(page);await navigate(page,'Pedidos');
+ const shortcuts=page.getByRole('group',{name:'Atajos de pedidos'});
+ for(const label of ['Con novedad','Pendiente de liquidar','Faltan datos','Faltan costos','Pago histórico por conciliar']){
+  await expect(shortcuts.getByRole('button',{name:label,exact:true})).toBeVisible();
+ }
+ await shortcuts.getByRole('button',{name:'Faltan datos',exact:true}).click();
+ await expect(shortcuts.getByRole('button',{name:'Faltan datos',exact:true})).toHaveAttribute('aria-pressed','true');
+ await page.getByRole('button',{name:'Limpiar filtros'}).click();
+ await page.locator('.list-toolbar').getByRole('button',{name:'Nuevo pedido',exact:true}).click();
+ const drawer=page.getByRole('dialog'),name=`Comprador E2E ${info.project.name}`;
+ await drawer.getByLabel('Nombre del destinatario').fill(name);
+ await drawer.getByLabel('Celular').fill('3001234567');await drawer.locator('[name="city"]').fill('Bogotá');
+ await drawer.getByLabel('Departamento',{exact:true}).fill('Cundinamarca');await drawer.getByLabel('Dirección exacta',{exact:true}).fill('Dirección de prueba');
  await drawer.getByRole('button',{name:'Agregar referencia'}).click();
- await drawer.getByRole('combobox',{name:'Producto o combo',exact:true}).selectOption({label:'Creatina Monohidrato Vital Force · 70 servicios'});
- await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);
- await page.getByRole('textbox',{name:'Buscar pedidos'}).fill(name);const row=page.getByRole('row').filter({hasText:name});await expect(row).toHaveCount(1);await row.getByRole('button',{name:'Abrir'}).click();
- await drawer.getByRole('combobox',{name:'Estado del pedido',exact:true}).selectOption('preparing');await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);
- await row.getByRole('button',{name:'Abrir'}).click();await drawer.getByRole('combobox',{name:'Estado del pedido',exact:true}).selectOption('sent');await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer.getByRole('alert')).toContainText('transportadora y guía');
- await drawer.getByRole('textbox',{name:'Transportadora',exact:true}).fill('Transportadora prueba');await drawer.getByRole('textbox',{name:'Número de guía',exact:true}).fill(`E2E-${info.project.name}`);await drawer.getByRole('button',{name:'Guardar pedido'}).click();await expect(drawer).toHaveCount(0);await row.getByRole('button',{name:'Abrir'}).click();await expect(drawer.getByRole('heading',{name:'Historial de cambios'})).toBeVisible();
+ const references=await (await page.request.get('/api/admin/products')).json();
+ const product=references.records.find(record=>record.slug==='creatina-vital-force-70-servicios');
+ await drawer.getByRole('combobox',{name:'Referencia 1',exact:true}).selectOption(`products:${product.id}`);
+ const creating=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/orders'&&r.request().method()==='POST');
+ await drawer.getByRole('button',{name:'Crear pedido',exact:true}).click();
+ const response=await creating;expect(response.status()).toBe(201);const created=await response.json();
+ expect(created.totalMinor).toBe(5500000);expect(created.paymentSummary.netCollectedMinor).toBe(0);
+ await expect(drawer).toHaveCount(0);
+ await page.getByRole('textbox',{name:'Buscar pedidos'}).fill(name);
+ const open=page.getByRole('button',{name:`Abrir pedido AN-${String(created.number).padStart(6,'0')}`,exact:true});
+ await expect(visibleRecord(page,name)).toHaveCount(1);await open.click();
+ await drawer.getByRole('combobox',{name:'Estado comercial',exact:true}).selectOption('preparing');
+ await drawer.getByRole('button',{name:'Guardar cambios',exact:true}).click();await expect(drawer).toHaveCount(0);await open.click();
+ await drawer.getByRole('button',{name:'Envíos',exact:true}).click();
+ await drawer.locator('summary').filter({hasText:'Registrar guía o entrega local'}).click();
+ await drawer.getByLabel('Transportadora',{exact:true}).fill('Transportadora prueba');
+ await drawer.getByLabel('Número de guía',{exact:true}).fill(`E2E-${info.project.name}`);
+ const shipping=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/business/shipments'&&r.request().method()==='POST');
+ await drawer.getByRole('button',{name:'Registrar envío',exact:true}).click();expect((await shipping).status()).toBe(201);
+ await drawer.getByLabel('Estado observado').selectOption('collected');
+ const dispatching=page.waitForResponse(r=>/\/shipments\/[^/]+\/events$/.test(new URL(r.url()).pathname)&&r.request().method()==='POST');
+ await drawer.getByLabel('Fecha real del evento').fill(created.placedOn);
+ await drawer.getByRole('button',{name:'Guardar evento',exact:true}).click();expect((await dispatching).status()).toBe(201);
+ await expect.poll(async()=>(await (await page.request.get('/api/admin/orders/'+created.id)).json()).status).toBe('sent');
+ const saved=await (await page.request.get('/api/admin/orders/'+created.id)).json();
+ expect(saved.shipments[0].tracking).toBe(`E2E-${info.project.name}`);
+ expect(saved.paymentSummary.netCollectedMinor).toBe(0);
+ expect(saved.history.some(event=>event.actorId&&event.createdAt)).toBe(true);
+ expect(saved.shipments[0].events.some(event=>event.status==='collected'&&event.occurredOn)).toBe(true);
+ await drawer.getByRole('button',{name:'Acuerdo',exact:true}).click();
+ await expect(drawer.getByRole('combobox',{name:'Referencia 1',exact:true})).toBeDisabled();
+ await expect(drawer.getByLabel('Cantidad 1',{exact:true})).toBeDisabled();
+ await expect(drawer.getByLabel('Flete cobrado al cliente (COP)')).toBeDisabled();
+ const csrf=await response.request().headerValue('x-csrf-token');
+ const locked=await page.request.put('/api/admin/orders/'+created.id,{headers:{Origin:new URL(page.url()).origin,'x-csrf-token':csrf},data:{...saved,items:saved.items.map(line=>({...line,quantity:line.quantity+1}))}});
+ expect(locked.status()).toBe(409);
+ const afterRejected=await (await page.request.get('/api/admin/orders/'+created.id)).json();
+ expect(afterRejected.items).toEqual(saved.items);
+ await drawer.locator('summary').filter({hasText:'Más detalles'}).click();
+ await drawer.getByLabel('Notas internas').fill('Nota posterior al despacho');
+ const savingNote=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/orders/'+created.id&&r.request().method()==='PUT');
+ await drawer.getByRole('button',{name:'Guardar cambios',exact:true}).click();expect((await savingNote).status()).toBe(200);
+ await expect(drawer).toHaveCount(0);await open.click();
+ expect((await (await page.request.get('/api/admin/orders/'+created.id)).json()).notes).toBe('Nota posterior al despacho');
+ const headers={Origin:new URL(page.url()).origin,'x-csrf-token':csrf};
+ const personResponse=await page.request.post('/api/admin/business/people',{headers,data:{requestId:crypto.randomUUID(),name:`Responsable cobro ${info.project.name}`,active:true}});
+ expect(personResponse.status()).toBe(201);
+ const person=await personResponse.json();
+ const accountResponse=await page.request.post('/api/admin/business/accounts',{headers,data:{requestId:crypto.randomUUID(),name:`Cuenta cobro ${info.project.name}`,type:'bank',responsibleId:person.id,openingOn:created.placedOn,openingBalanceMinor:0}});
+ expect(accountResponse.status()).toBe(201);const account=await accountResponse.json();
+ await drawer.getByRole('button',{name:'Registrar cobro',exact:true}).click();
+ await expect(page.getByRole('dialog')).toHaveCount(1);
+ await drawer.getByLabel('Importe (COP)').fill('100');
+ await drawer.getByLabel('Cuenta').selectOption(account.id);
+ await drawer.getByLabel('Referencia').fill(`abono-e2e-${info.project.name}`);
+ const collecting=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/business/actions/collection'&&r.request().method()==='POST');
+ await drawer.getByRole('button',{name:'Registrar cobro',exact:true}).click();expect((await collecting).status()).toBe(200);
+ await expect(drawer.getByRole('button',{name:'Acuerdo',exact:true})).toBeVisible();
+ const collected=await (await page.request.get('/api/admin/orders/'+created.id)).json();
+ expect(collected.totalMinor).toBe(created.totalMinor);
+ expect(collected.paymentSummary.netCollectedMinor).toBe(10000);
+ expect(collected.paymentSummary.outstandingMinor).toBe(created.totalMinor-10000);
+ expect(collected.paymentSummary.status).toBe('partial');
+ await page.screenshot({path:info.outputPath('order-shipment.png'),fullPage:true});
 });
 
 test('crea cuentas nuevas únicamente con rol administrador',async({page,context},info)=>{
@@ -113,9 +190,8 @@ test('crea cuentas nuevas únicamente con rol administrador',async({page,context
  expect(anonymous.status()).toBe(401);
  await login(page);
  const origin=new URL(page.url()).origin;
- const nav=page.getByRole('navigation',{name:'Administración'});
  const listResponsePromise=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/admin/users'&&response.request().method()==='GET');
- await nav.getByRole('button',{name:'Usuarios',exact:true}).click();
+ await navigate(page,'Usuarios');
  const listResponse=await listResponsePromise;
  expect(listResponse.status()).toBe(200);
  const accounts=await listResponse.json();
@@ -124,8 +200,6 @@ test('crea cuentas nuevas únicamente con rol administrador',async({page,context
  expect(JSON.stringify(accounts)).not.toContain('scrypt:');
  const csrf=await listResponse.request().headerValue('x-csrf-token');
  expect(Boolean(csrf)).toBe(true);
- await expect(page.getByRole('heading',{name:'Agregar usuario'})).toBeVisible();
- await expect(page.getByText('Rol único disponible')).toBeVisible();
 
  const noCsrf=await context.request.post('/api/admin/users',{headers:{Origin:origin},data:{email:'sin-csrf@example.test',password:'clave-nueva-e2e-administrador',role:'administrator'}});
  expect(noCsrf.status()).toBe(403);
@@ -137,17 +211,17 @@ test('crea cuentas nuevas únicamente con rol administrador',async({page,context
  const email=`nuevo-admin-${info.project.name}-${info.retry}@example.test`;
  const password='clave-nueva-e2e-administrador';
  await page.getByLabel('Correo electrónico').fill(email);
- await page.getByLabel('Contraseña inicial').fill(password);
- await page.getByLabel('Confirmar contraseña').fill(`${password}-incorrecta`);
+ await page.getByLabel('Contraseña inicial',{exact:true}).fill(password);
+ await page.getByLabel('Confirmar contraseña',{exact:true}).fill(`${password}-incorrecta`);
  await page.getByRole('button',{name:'Crear usuario'}).click();
- await expect(page.getByRole('region',{name:'Agregar usuario'}).getByRole('alert')).toContainText('Las contraseñas no coinciden.');
- await page.getByLabel('Confirmar contraseña').fill(password);
+ await expect(page.locator('.user-management-form').getByRole('alert')).toBeVisible();
+ await page.getByLabel('Confirmar contraseña',{exact:true}).fill(password);
  const createResponsePromise=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/admin/users'&&response.request().method()==='POST');
  await page.getByRole('button',{name:'Crear usuario'}).click();
  const createResponse=await createResponsePromise;
  expect(createResponse.status()).toBe(201);
  expect(await createResponse.json()).toEqual({user:{email,role:'administrator'}});
- const row=page.getByRole('row').filter({hasText:email});
+ const row=visibleRecord(page,email);
  await expect(row).toHaveCount(1);
  await expect(row).toContainText('Administrador');
 
@@ -156,13 +230,26 @@ test('crea cuentas nuevas únicamente con rol administrador',async({page,context
  const afterDuplicate=await context.request.get('/api/admin/users');
  expect((await afterDuplicate.json()).users.filter(user=>user.email===email)).toHaveLength(1);
 
- await page.locator('header').getByRole('button',{name:'Cerrar sesión',exact:true}).click();
+ await signOut(page);
  await expect(page).toHaveURL(url=>url.pathname==='/admin/login');
  await page.getByLabel('Correo de administrador').fill(email);
  await page.getByLabel('Contraseña',{exact:true}).fill(password);
  await page.getByRole('button',{name:'Entrar al panel'}).click();
  await expect(page).toHaveURL(url=>url.pathname==='/admin');
  expect((await page.request.get('/api/admin/orders')).status()).toBe(200);
+});
+
+test('todas las áreas y destinos existentes siguen accesibles con navegación real',async({page})=>{
+ await login(page);
+ for(const section of adminSections)await navigate(page,section.label);
+ await page.getByRole('button',{name:/^Ir a…/}).click();
+ const launcher=page.getByRole('dialog',{name:'Ir a…',exact:true});
+ await launcher.getByLabel('Buscar sección o acción').fill('Contacto y redes');
+ await launcher.getByRole('button',{name:'Contacto y redes',exact:true}).click();
+ await expect(launcher).toHaveCount(0);
+ await expect(page).toHaveURL(url=>url.searchParams.get('section')==='settings');
+ await page.reload();
+ await expect(page.getByLabel('Publicar la vitrina (contenido revisado y aprobado)',{exact:true})).toBeVisible();
 });
 
 test('Caja identifica claramente sus vistas y permite llegar a cada tarea principal',async({page})=>{
@@ -176,3 +263,73 @@ test('Caja identifica claramente sus vistas y permite llegar a cada tarea princi
  }
 });
 
+test('rechazar Atrás conserva el borrador y su destino; aceptar permite Atrás y Adelante sin reutilizarlo',async({page})=>{
+ await login(page);await navigate(page,'Caja');
+ const income=page.getByRole('button',{name:'Registrar ingreso',exact:true});
+ await income.click();
+ const drawer=page.getByRole('dialog');
+ await expect(drawer.getByRole('heading',{level:2})).toBeFocused();
+ await page.keyboard.press('Control+k');
+ await expect(page.getByRole('dialog')).toHaveCount(1);
+ const description=drawer.locator('[name="description"]');
+ await description.fill('Borrador que no debe perderse');
+ let confirmations=0,accept=false;
+ page.on('dialog',async dialog=>{expect(dialog.type()).toBe('confirm');confirmations++;if(accept)await dialog.accept();else await dialog.dismiss();});
+ await page.evaluate(()=>history.back());
+ await expect.poll(()=>confirmations).toBe(1);
+ await expect(page).toHaveURL(url=>url.searchParams.get('section')==='cash');
+ await expect(description).toHaveValue('Borrador que no debe perderse');
+ await page.keyboard.press('Escape');
+ await expect.poll(()=>confirmations).toBe(2);
+ await expect(description).toHaveValue('Borrador que no debe perderse');
+ accept=true;await page.keyboard.press('Escape');
+ await expect(drawer).toHaveCount(0);await expect(income).toBeFocused();
+ expect(confirmations).toBe(3);
+ await income.click();await drawer.locator('[name="description"]').fill('Otro borrador descartable');
+ await page.evaluate(()=>history.back());
+ await expect.poll(()=>confirmations).toBe(4);
+ await expect(page).toHaveURL(url=>(url.searchParams.get('section')||'home')==='home');
+ await expect(drawer).toHaveCount(0);
+ await page.evaluate(()=>history.forward());
+ await expect(page).toHaveURL(url=>url.searchParams.get('section')==='cash');
+ await income.click();
+ await expect(drawer.locator('[name="description"]')).toHaveValue('');
+ await page.keyboard.press('Escape');await expect(drawer).toHaveCount(0);
+ expect(confirmations).toBe(4);
+});
+
+test('apertura cero con responsable sin credenciales e ingreso no comercial separado de ventas',async({page},info)=>{
+ await login(page);await navigate(page,'Caja');
+ await page.getByRole('button',{name:'Crear cuenta',exact:true}).first().click();
+ const drawer=page.getByRole('dialog'),name=`Banco E2E ${info.project.name}`,personName=`Responsable E2E ${info.project.name}`;
+ await drawer.locator('[name="name"]').fill(name);
+ await drawer.getByLabel('Tipo de cuenta').selectOption('bank');
+ await drawer.getByLabel('Saldo inicial confirmado (COP)').fill('0');
+ await drawer.locator('summary').filter({hasText:'Crear responsable sin acceso al panel'}).click();
+ await drawer.getByLabel('Nombre del responsable nuevo').fill(personName);
+ await expect(drawer.locator('input[type="password"],input[type="email"]')).toHaveCount(0);
+ const creatingPerson=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/business/people'&&r.request().method()==='POST');
+ await drawer.getByRole('button',{name:'Crear responsable',exact:true}).click();
+ const personResponse=await creatingPerson;expect(personResponse.status()).toBe(201);const person=await personResponse.json();
+ await expect(drawer.getByLabel('Persona responsable')).toHaveValue(person.id);
+ const creatingAccount=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/business/accounts'&&r.request().method()==='POST');
+ await drawer.getByRole('button',{name:'Configurar cuenta',exact:true}).click();
+ const accountResponse=await creatingAccount;expect(accountResponse.status()).toBe(201);const account=await accountResponse.json();
+ expect(account.balanceMinor).toBe(0);expect(account.responsibleId).toBe(person.id);
+ await expect(drawer).toHaveCount(0);
+ const reportPath='/api/admin/reports?mode=live&period=month';
+ const before=await (await page.request.get(reportPath)).json();
+ await page.getByRole('button',{name:'Registrar ingreso',exact:true}).click();
+ await drawer.getByLabel('Concepto').selectOption('owner_funding');
+ await drawer.getByLabel('Descripción').fill('Aporte no comercial de prueba');
+ await drawer.getByLabel('Importe (COP)').fill('500');
+ await drawer.getByLabel('Cuenta').selectOption(account.id);
+ await drawer.getByLabel('Referencia').fill(`aporte-e2e-${info.project.name}`);
+ const addingIncome=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/business/actions/income'&&r.request().method()==='POST');
+ await drawer.getByRole('button',{name:'Registrar ingreso',exact:true}).click();expect((await addingIncome).status()).toBe(200);
+ await expect(drawer).toHaveCount(0);
+ const overview=await (await page.request.get('/api/admin/finance/overview')).json();
+ expect(overview.accounts.find(row=>row.id===account.id).balanceMinor).toBe(50000);
+ const after=await (await page.request.get(reportPath)).json();
+ expect(after.metrics.netProductSales).toEqual(before.metrics.netProductSales);
+});

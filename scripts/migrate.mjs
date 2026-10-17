@@ -2,6 +2,7 @@ import './env.mjs';
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/db/index.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
+import { migrateBusinessV3, migrateInventoryV4 } from '../lib/db/migrations.mjs';
 
 async function provisionAppRole(db, password) {
   const role = 'allnutrition_app';
@@ -39,6 +40,8 @@ try {
   store = await openStore(env, { migrate: true });
   if (store.provider === 'supabase') await store.db.exec(readFileSync(new URL('../db/supabase.sql', import.meta.url), 'utf8'));
   await store.initialize();
+  await migrateBusinessV3(store);
+  await migrateInventoryV4(store);
   const provider = store.provider;
   if (provision) {
     const migrated = await store.db.get('SELECT current_database() AS name');
@@ -49,7 +52,7 @@ try {
     const runtime = await store.db.get('SELECT current_user AS role, current_database() AS name');
     if (runtime.role !== 'allnutrition_app' || runtime.name !== migrated.name) throw new Error('DATABASE_URL debe abrir la base migrada con el rol limitado allnutrition_app.');
   }
-  console.log(`Migración v2 completada en ${provider}${provision ? ' y conexión runtime limitada verificada' : ''}. No se borraron registros.`);
+  console.log(`Migración v4 completada en ${provider}${provision ? ' y conexión runtime limitada verificada' : ''}. No se borraron registros.`);
 } catch (error) {
   const message = process.env.DB_APP_PASSWORD ? error.message.replaceAll(process.env.DB_APP_PASSWORD, '[redactado]') : error.message;
   console.error(`No se completó la migración: ${message}`);

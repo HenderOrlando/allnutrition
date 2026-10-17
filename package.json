@@ -1,6 +1,6 @@
 {
   "name": "all-nutrition-fase-1",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,6 +16,8 @@
     "admin:password": "node scripts/admin-password.mjs",
     "admin:add": "node scripts/admin-password.mjs --add",
     "backup": "node scripts/backup.mjs",
+    "business:jobs": "node scripts/business-jobs.mjs",
+    "business:jobs:once": "node scripts/business-jobs.mjs --once",
     "test": "node --test tests/*.test.mjs",
     "test:postgres": "node --test tests/postgres.integration.test.mjs",
     "check": "node scripts/check.mjs",
@@ -25,12 +27,14 @@
     "verify:docker": "node scripts/verify-docker.mjs"
   },
   "dependencies": {
-    "next": "16.3.6",
+    "fflate": "0.8.3",
+    "next": "16.3.8",
     "pg": "^8.16.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "0.0.1",
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.1",

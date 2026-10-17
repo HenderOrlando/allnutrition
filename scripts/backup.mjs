@@ -7,7 +7,7 @@ try {
  store=await openStore();mkdirSync('backups',{recursive:true,mode:0o700});
  const destination=resolve('backups',`allnutrition-${new Date().toISOString().replaceAll(':','-')}.json`);
  writeFileSync(destination,JSON.stringify(await store.exportData(),null,2),{mode:0o600});
- console.log(`Respaldo comercial creado: ${destination}. Contiene datos privados. No incluye cuentas ni sesiones.`);
+ console.log(`Respaldo comercial v3 creado: ${destination}. Incluye finanzas y archivos Excel retenidos; contiene datos privados. No incluye usuarios, sesiones ni leases. Las imágenes se respaldan por separado.`);
  if(store.provider==='sqlite'&&process.argv.includes('--full-sqlite')) {
   const {backup}=await import('node:sqlite');const full=destination.replace('.json','.sqlite');await backup(store.db.native,full);if(process.platform!=='win32')chmodSync(full,0o600);console.log(`Copia completa SQLite creada: ${full}. Incluye cuentas y sesiones; protégela.`);
  }
