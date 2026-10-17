@@ -1,5 +1,11 @@
 # Cambios v2 respecto de la base anterior
 
+## Caja · orientación de tareas · 17 de octubre de 2026
+
+- Las pestañas explicitan su contenido: «Resumen y cuentas», «Gastos y pagos» y «Sueldos y anticipos», junto a Movimientos y Liquidaciones. Cada vista mantiene su guía contextual.
+- E2E recorre las cinco vistas y comprueba que la pestaña elegida y el destino contextual coincidan.
+
+
 Base de datos: repositorio asíncrono común, adaptadores SQLite y PostgreSQL/Supabase, migraciones privadas, configuración .env y selección segura sin conmutación automática por caída. SQLite no se permite en Vercel.
 
 Imágenes: el editor de Productos admite carga local JPEG/JPG, PNG y WebP (entrada máxima 10 MiB), optimiza a WebP de hasta 2400 px por lado y muestra una cuota de 1.000.000.000 bytes. El formulario agrupa los campos por tarea; después de una carga local muestra la vista previa y oculta el campo URL, que queda disponible bajo demanda. Los archivos se sirven por `/api/media/<id>` y persisten fuera de PostgreSQL. En desarrollo local el directorio predeterminado es `data/product-images` (ignorado por Git); en Docker el volumen `product_images` se monta en `/app/data/product-images`. Catálogos, combos, logo y comprobantes siguen usando enlaces/recursos estáticos; no hay conectores externos. Antes de migrar referencias locales antiguas `/api/media/...`, copiar también sus binarios o reemplazarlas por enlaces.

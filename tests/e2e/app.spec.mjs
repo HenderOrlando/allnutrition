@@ -164,3 +164,15 @@ test('crea cuentas nuevas únicamente con rol administrador',async({page,context
  await expect(page).toHaveURL(url=>url.pathname==='/admin');
  expect((await page.request.get('/api/admin/orders')).status()).toBe(200);
 });
+
+test('Caja identifica claramente sus vistas y permite llegar a cada tarea principal',async({page})=>{
+ await login(page);await navigate(page,'Caja');
+ const nav=page.getByRole('navigation',{name:'Vistas de caja'});
+ const views=[['Resumen y cuentas','Disponible ahora'],['Movimientos','Movimientos de dinero'],['Liquidaciones','Liquidaciones de plataforma'],['Gastos y pagos','Gastos y pagos'],['Sueldos y anticipos','Sueldos, comisiones y anticipos']];
+ for(const [label,heading] of views){
+  const button=nav.getByRole('button',{name:label,exact:true});
+  await expect(button).toBeVisible();await button.click();await expect(button).toHaveAttribute('aria-current','page');
+  await expect(page.getByRole('heading',{name:new RegExp(heading)})).toBeVisible();
+ }
+});
+
