@@ -42,11 +42,28 @@ El verificador inicia el scheduler real antes del E2E de Excel; las esperas cont
 
 No se ejecutaron suites, semillas, migraciones ni guardados contra los servicios o bases originales. El navegador de aceptación usó perfiles privados, sin trasladar cookies del origen original. No hubo despliegue, publicación real, prueba en Safari/Firefox, lector de pantalla ni certificación WCAG; las mediciones y recorridos descritos no sustituyen una auditoría integral de accesibilidad.
 
-## Preparación de promoción amd64 · 18 de octubre de 2026
+## Promoción nativa amd64 y producción · 18 de octubre de 2026
 
 El commit `74fc04c727469f1f2235f47ac3b62ac5207a1a25` conserva exactamente el árbol de la entrega UI aceptada y se publicó en `origin/trunk` después de separar código, regresiones y documentación. El primer intento nativo, `c3de518d436ec4aa`, compiló Next.js 16.3.8 en la VM `amd64` y aprobó sintaxis/imports; los contratos SQLite/PostgreSQL agotaron el límite global de 180 segundos antes de completar la suite. No llegó a E2E ni autorizó una promoción.
 
 El verificador permite ahora hasta 30 minutos para la suite completa de contratos, necesaria también en la VM de 2 vCPU con PostgreSQL persistente. No se quitaron casos ni se relajaron aserciones; siguen siendo obligatorios PostgreSQL real, cero pruebas omitidas y el resto de la aceptación interactiva. El intento fallido y el respaldo previo se conservan privadamente; la aplicación y la base reales permanecieron en su versión anterior durante ese intento.
+
+La segunda ejecución, `388c05ef848ab4ba`, usó el commit `7d88580610d3c7505ca21c81d08b62ab923744d1` y terminó con **código 0** a las `2026-10-18T03:15:32.699Z`. Imagen aprobada: `allnutrition:release-f66d59566966`, ID `sha256:f66d59566966cc4052daaa12731ba52c5ba0835641d33d3280ede48023d39bfb`, Linux/amd64, Node 24.22.0 y UID 1000. No se promovió la imagen arm64 de la aceptación local ni se reconstruyó el tag aprobado.
+
+| Comprobación nativa | Resultado observado |
+|---|---|
+| Contratos SQLite/PostgreSQL | 478 aprobados, cero fallidos y cero omitidos; 694,38 segundos. El nuevo plazo permitió completar la misma suite, no reducirla. |
+| E2E serial escritorio/móvil | 36 aprobados; 3,9 minutos. |
+| Escenario comercial interactivo | Repetido desde formularios reales con los mismos importes y criterios del apartado UI/UX: reimportación sin duplicación, costos históricos/prospectivos, recepción, sueldo, devolución, reembolso y retorno. |
+| Trabajo sin paneles | Snapshot solicitado con scheduler detenido; corridas y repeticiones con paneles cerrados. Acuse conservó el saldo bajo; aporte real de 500 COP resolvió el mismo episodio. El snapshot de septiembre mantuvo Caja y 189.500 al corte frente a 128.000 disponibles. |
+| Reinicio durable | Sesenta guías revisadas con scheduler activo, confirmadas en cola después de detenerlo; el verificador comprobó 0→25→60 y ausencia de ventas/dinero duplicados. |
+| Seguridad, persistencia y recuperación | Auditoría de dependencias, TLS/CA/hostname, rol limitado sin DDL, caída/recuperación, sesiones, WebP, pg_dump/restore y reanudación del scheduler aprobados. |
+
+El respaldo real v2 se restauró y migró primero en `allnutrition-rehearsal-4e6ff379ffa73f9b`, sin publicar web ni utilizar credenciales de producción para esa instancia. Se comprobaron usuarios, configuración, identidades y campos comerciales; el proyecto de ensayo fue retirado después. Durante el corte real se detuvieron escritores, se respaldó de nuevo y se aplicaron los marcadores `[2,3,4]`. Se conservaron dos usuarios, once registros, cero pedidos y cuatro imágenes. Los cambios de registro se limitaron a las conversiones declaradas de las migraciones. No se inventaron existencias físicas. Los respaldos y límites de rollback se registran en [DESPLIEGUE.md](DESPLIEGUE.md#administración-de-negocio-inventario-y-menús-2026-10-18-utc).
+
+La aplicación real quedó saludable a las `2026-10-18T03:22:10.994Z`; web y scheduler usan exactamente el ID aprobado y el heartbeat se observó en Configuración. El smoke del dominio, sin excepciones de certificado, comprobó login, API autenticada `200`, seis áreas/títulos, lanzador `gastos`→flecha abajo→Enter con diálogo cerrado y foco en Caja, guía de atajos, menú móvil y desplazamiento real al catálogo bajo la cabecera. También se abrió `/?preview=1` con sesión y publicación ya habilitada, se recibieron las cuatro imágenes WebP con `200`, y logout dejó la API en `401`. La cookie conserva Secure/HttpOnly/SameSite=Strict; un login de origen ajeno recibió `403`. No hubo escrituras comerciales de prueba en producción ni cambios de contraseñas.
+
+Evidencia privada: `../.omp-worktrees/ui-ux-menus-c74bf29b/production-20261018020706627-34bf8435/` respecto del repositorio original; incluye `native-result.json`, comandos completos, ensayo/restauración, respaldo final, conservación, `cutover.json`, navegación, preview/logout y capturas. La evidencia nativa permanece también en la ruta del candidato indicada en el procedimiento de despliegue. No publicar env, dumps, sesiones ni claves. La aprobación nativa no equivale a una ejecución de CI remoto.
 
 ## Inventario conectado a Pedidos · 17 de octubre de 2026
 
