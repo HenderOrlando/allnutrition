@@ -33,43 +33,6 @@
   margin-top: 20px;
 }
 
-.setupSteps.setupSteps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-block: 24px;
-}
-
-.setupSteps li {
-  min-width: 0;
-}
-
-.setupSteps button {
-  width: 100%;
-  height: 100%;
-  text-align: left;
-}
-
-.setupSteps span,
-.setupSteps small {
-  display: block;
-}
-
-.setupSteps small {
-  margin-top: 4px;
-  font-weight: 400;
-}
-
-.stepNavigation {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--admin-line);
-}
-
 .secondaryAction {
   margin-top: 20px;
   padding-top: 8px;
@@ -180,7 +143,6 @@
 }
 
 @media (max-width: 640px) {
-  .setupSteps.setupSteps,
   .preferenceSummary {
     grid-template-columns: minmax(0, 1fr);
   }

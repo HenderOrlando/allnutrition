@@ -65,7 +65,7 @@ test('sesión HTTPS, CSRF, origen, concurrencia y cierre de sesión', async ({ p
 
 test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privadas',async({page,context})=>{
   const reads=[
-    '/api/admin/dashboard','/api/admin/reports','/api/admin/reports/export','/api/admin/reports/unknown',
+    '/api/admin/dashboard','/api/admin/reports','/api/admin/reports/export','/api/admin/reports/unknown','/api/admin/business/onboarding',
     '/api/admin/alerts','/api/admin/alerts/unknown','/api/admin/alert-rules','/api/admin/alert-rules/unknown',
     ...['settings','people','platforms','sources','profiles','accounts'].map(resource=>'/api/admin/business/'+resource),
     '/api/admin/business/people/unknown','/api/admin/business/shipments','/api/admin/business/shipments/unknown',
@@ -74,7 +74,7 @@ test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privada
   ];
   const writes=[
     ...['people','platforms','sources','profiles','accounts'].flatMap(resource=>[['POST','/api/admin/business/'+resource],['PUT','/api/admin/business/'+resource+'/unknown']]),
-    ['PUT','/api/admin/business/settings'],['POST','/api/admin/business/shipments'],['PUT','/api/admin/business/shipments/unknown'],
+    ['PUT','/api/admin/business/settings'],['POST','/api/admin/business/onboarding'],['POST','/api/admin/business/shipments'],['PUT','/api/admin/business/shipments/unknown'],
     ['POST','/api/admin/business/shipments/unknown/events'],['POST','/api/admin/reports'],
     ['PUT','/api/admin/alerts/unknown'],['PUT','/api/admin/alert-rules/unknown'],
     ['POST','/api/admin/imports'],['PUT','/api/admin/imports/unknown'],['PUT','/api/admin/imports/unknown/file'],

@@ -21,10 +21,6 @@
   margin-bottom: 24px;
 }
 
-.directoryHeading h2 {
-  margin-bottom: 16px;
-}
-
 .directoryGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -112,8 +108,7 @@
 }
 
 .group button > span,
-.group header > div,
-.getStarted > div {
+.group header > div {
   min-width: 0;
 }
 
@@ -138,25 +133,58 @@
   font-size: 14px;
 }
 
-.getStarted {
+.advancedDirectory {
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 14px;
+  background: var(--admin-surface);
+}
+
+.advancedDirectory > summary {
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.advancedDirectory > summary span {
+  display: block;
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--admin-muted);
+}
+
+.advancedDirectory[open] > summary {
+  margin-bottom: 24px;
+}
+
+.homeGuide {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 20px;
   padding: 24px;
-  margin-top: 24px;
-  border: 1px dashed var(--admin-control-border);
+  border: 1px solid var(--admin-accent);
   border-radius: 16px;
+  background: var(--admin-lilac);
+  margin-bottom: 24px;
 }
 
-.getStarted p {
-  margin: 4px 0 0;
-  max-width: 65ch;
-  font-size: 14px;
+.homeGuide > div {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 
-.getStarted button {
-  flex-shrink: 0;
+.homeGuide h2 {
+  margin: 0 0 8px;
+}
+
+.homeGuide p {
+  margin: 0;
+}
+
+.homeGuide button {
+  max-width: 100%;
+  white-space: normal;
 }
 
 .navigation {
@@ -274,17 +302,8 @@
   }
 
   .group,
-  .getStarted {
+  .homeGuide {
     padding: 16px;
-  }
-
-  .getStarted {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .getStarted button {
-    justify-content: center;
   }
 
   .navigation > button,

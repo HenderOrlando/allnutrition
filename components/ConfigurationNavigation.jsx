@@ -21,18 +21,19 @@ export default function ConfigurationNavigation({ view, onNavigate, interactionL
   const home = current?.id === 'setup';
   if (!home) return <nav className={styles.navigation} aria-label="Vistas de configuración">
     <button type="button" className="button subtle" disabled={interactionLocked} onClick={() => onNavigate(setupTask.view)}>
-      <span className={styles.backIcon} aria-hidden="true"><Icon name="chevron" size={16}/></span>Volver a Configuración
+      <span className={styles.backIcon} aria-hidden="true"><Icon name="chevron" size={16}/></span>Volver a la guía de inicio
     </button>
     <label className={styles.taskSwitch} htmlFor={`${id}-task`}>Cambiar de tarea
       <select id={`${id}-task`} value={current?.id || 'setup'} disabled={interactionLocked} onChange={event => onNavigate(tasks.find(task => task.id === event.target.value).view)}>
-        <option value="setup">Todas las tareas de Configuración</option>
+        <option value="setup">Guía de inicio y más opciones</option>
         {groups.map(group => <optgroup key={group.id} label={group.title}>{group.tasks.map(task => <option key={task.id} value={task.id}>{task.label}</option>)}</optgroup>)}
       </select>
     </label>
   </nav>;
 
   return <nav className={styles.directory} aria-label="Vistas de configuración">
-    <div className={styles.directoryHeading}><h2>¿Qué necesitas configurar?</h2></div>
+    <details className={styles.advancedDirectory} data-configuration-advanced>
+    <summary><strong>Más opciones de configuración</strong><span>Personas, bancos, reglas, vitrina y accesos · opcional</span></summary>
     <div className={styles.directoryGrid}>
       {groups.map(group => <section className={`${styles.group} ${styles[group.id]}`} key={group.id} aria-labelledby={`${id}-${group.id}`}>
         <header><span className={styles.groupIcon} aria-hidden="true"><Icon name={group.icon}/></span><div><h3 id={`${id}-${group.id}`}>{group.title}</h3><p>{group.description}</p></div></header>
@@ -41,6 +42,6 @@ export default function ConfigurationNavigation({ view, onNavigate, interactionL
         </button></li>)}</ul>
       </section>)}
     </div>
-    <div className={styles.getStarted}><div><strong>¿Estás empezando?</strong><p>Revisa responsables, cuentas y reglas iniciales con el asistente. Es opcional.</p></div><button type="button" className="button subtle" disabled={interactionLocked} data-configuration-task="setup" onClick={() => { const heading = document.getElementById('configuration-setup'); heading?.focus({ preventScroll: true }); heading?.scrollIntoView({ block: 'start' }); }}>Revisar primeros pasos<Icon name="chevron" size={16}/></button></div>
+    </details>
   </nav>;
 }

@@ -33,9 +33,15 @@ export async function navigate(page,destination){
   const subnav=page.getByRole('navigation',{name:'Vistas de configuración',exact:true});
   const selector=subnav.getByRole('combobox',{name:'Cambiar de tarea',exact:true});
   if(await selector.isVisible())await selector.selectOption(section.id);
-  else await subnav.locator(`[data-configuration-task="${section.id}"]`).click();
+  else await openConfigurationTask(page,section.id);
  }
  await expect(page).toHaveURL(url=>(url.searchParams.get('section')||'home')===section.id);
+}
+
+export async function openConfigurationTask(page,id){
+ const task=page.locator(`[data-configuration-task="${id}"]`);
+ if(!await task.isVisible())await page.locator('[data-configuration-advanced] > summary').click();
+ await task.click();
 }
 
 export async function signOut(page){

@@ -30,7 +30,7 @@ export const adminTaskGroups = [
     { id: 'cash-report', label: 'Informe de caja', description: 'Saldos y movimientos al corte del informe.', view: { section: 'reports', tab: 'cash' } },
   ] },
   { id: 'business', label: 'Negocio y acceso', icon: 'settings', description: 'Personas, plataformas y reglas de operación.', tasks: [
-    { id: 'setup', label: 'Primeros pasos', action: 'Revisar primeros pasos', description: 'Revisar responsables, apertura de cuentas y reglas iniciales.', view: { section: 'business', tab: 'setup' } },
+    { id: 'setup', label: 'Guía de inicio', action: 'Abrir guía de inicio', description: 'Preparar caja, primer producto y pedidos; práctica opcional sin cobro real.', view: { section: 'business', tab: 'setup' } },
     { id: 'people', label: 'Personas responsables', action: 'Gestionar personas y sueldos', description: 'Responsables, vendedores, sueldos y comisiones. No crea accesos al panel.', view: { section: 'business', tab: 'people' } },
     { id: 'accounts', label: 'Cuentas del negocio', action: 'Configurar cuentas del negocio', description: 'Caja, bancos, saldos de apertura y cuentas predeterminadas.', view: { section: 'business', tab: 'accounts' } },
     { id: 'platforms', label: 'Plataformas y cuentas', action: 'Configurar plataformas de venta', description: 'Orígenes del Excel, cuentas de plataforma y perfiles de columnas. No son cuentas de caja.', view: { section: 'business', tab: 'platforms' } },

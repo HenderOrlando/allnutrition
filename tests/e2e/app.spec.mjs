@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import sharp from 'sharp';
 import { test,expect } from '@playwright/test';
-import { login,navigate,signOut,visibleRecord,selectWorkspace,openDisclosure,openCashOperation } from './helpers.mjs';
+import { login,navigate,signOut,visibleRecord,selectWorkspace,openDisclosure,openCashOperation,openConfigurationTask } from './helpers.mjs';
 import { emptyRecord, money } from '../../lib/schema.mjs';
 import { writeExcelSheets } from '../../lib/business/excel.mjs';
 import { bogotaDate } from '../../lib/business/dates.mjs';
@@ -292,7 +292,7 @@ test('los 31 destinos conservan encabezado, selección local y título en escrit
   reports:/Resumen · lectura del período/,'sales-report':/Ventas · lectura del período/,
   'shipping-report':/Envíos · lectura del período/,'returns-report':/Devoluciones · lectura del período/,
   'costs-report':/Costos · lectura del período/,'payroll-report':/Sueldos · lectura del período/,'cash-report':/Caja · lectura del período/,
-  setup:/Revisar primeros pasos|Configuración inicial completada/,people:/Personas responsables y vendedores/,
+  people:/Personas responsables y vendedores/,
   accounts:/Cuentas de caja y bancos/,platforms:/Plataformas y cuentas de origen/,rules:/Reglas financieras con vigencia/,
   alerts:/Revisar alertas del negocio/,users:/Usuarios/,settings:/Datos y publicación de la vitrina/,
   faqs:/Preguntas frecuentes/,messages:/Mensajes comerciales/,shipping:/Condiciones de envío/
@@ -308,15 +308,16 @@ test('los 31 destinos conservan encabezado, selección local y título en escrit
    }else if(section==='reports'){
     await navigate(page,'Informes');await selectWorkspace(page,'Áreas del informe',{overview:'Resumen',sales:'Ventas',shipping:'Envíos',returns:'Devoluciones',costs:'Costos',payroll:'Sueldos',cash:'Caja'}[task.view.tab]);
    }else if(section==='business'){
-    await navigate(page,'Configuración');if(task.id!=='setup')await page.locator(`[data-configuration-task="${task.id}"]`).click();
+    await navigate(page,'Configuración');if(task.id!=='setup')await openConfigurationTask(page,task.id);
    }else if(task.id==='gifts'){
     await navigate(page,'Productos');await selectWorkspace(page,'Vistas de productos','Obsequios');
    }else{
     await navigate(page,{home:'Inicio',products:'Productos',combos:'Combos',catalogs:'Catálogos',users:'Usuarios',settings:'Datos y publicación',faqs:'Preguntas frecuentes',messages:'Mensajes comerciales',shipping:'Condiciones de envío'}[task.id]);
    }
    await expect(page).toHaveURL(url=>Object.entries(task.view).every(([key,value])=>(url.searchParams.get(key)||(key==='section'?'home':key==='tab'?{orders:'list',cash:'overview',reports:'overview',business:'setup'}[section]:''))===value));
-   await expect(page.getByRole('heading',{name:headings[task.id]}).first()).toBeVisible();
-   await expect(page).toHaveTitle(new RegExp(task.label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+   if(task.id==='setup')await expect(page.locator('#configuration-setup')).toBeVisible();
+   else await expect(page.getByRole('heading',{name:headings[task.id]}).first()).toBeVisible();
+   if(task.id!=='setup')await expect(page).toHaveTitle(new RegExp(task.label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
    const navName=task.view.section==='orders'?'Vistas de pedidos':task.view.section==='cash'?'Vistas de caja':task.view.section==='reports'?'Áreas del informe':['products','combos','catalogs'].includes(task.view.section)?'Vistas de productos':null;
    if(navName){
     const nav=page.getByRole('navigation',{name:navName,exact:true});
@@ -518,7 +519,7 @@ test('quitar un chip conserva el otro filtro, reinicia página y mantiene histor
 test('comisiones porcentuales conservan centésimas, invalidez, guardas y versiones históricas',async({page},info)=>{
  test.setTimeout(90000);
  await login(page);await navigate(page,'Configuración');
- await page.locator('[data-configuration-task="rules"]').click();
+ await openConfigurationTask(page,'rules');
  const before=await (await page.request.get('/api/admin/business/settings')).json();
  const storedBefore={...before};delete storedBefore.automation;
  const nextDate=new Date(`${before.rulesVersions.at(-1).effectiveOn}T12:00:00Z`);nextDate.setUTCDate(nextDate.getUTCDate()+1);

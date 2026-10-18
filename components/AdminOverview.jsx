@@ -6,6 +6,7 @@ import PeriodPicker, { reportDateLabel } from './PeriodPicker';
 import Icon from './Icons';
 import { TaskDirectory } from './AdminNavigation';
 import { adminTaskGroups } from './admin-tasks.mjs';
+import configurationStyles from './ConfigurationExperience.module.css';
 
 const ENDPOINT = '/api/admin/dashboard';
 const SEVERITIES = { critical: 'Crítica', warning: 'Advertencia', info: 'Información' };
@@ -119,6 +120,7 @@ export default function AdminOverview({ api, view, onViewChange, onCreateOrder, 
   const comparison = data?.insights?.comparison || data?.comparison;
   return <div className="home-workspace">
     <header className="admin-heading home-heading"><div><h1 tabIndex="-1" data-admin-section-heading>Tu negocio</h1>{data && <p className="small muted">Actualizado: {timestamp(data.generatedAt)} · Bogotá</p>}</div><div className="admin-actions"><button type="button" className="button primary" onClick={onCreateOrder}><Icon name="plus"/>Nuevo pedido</button><button type="button" className="button subtle" onClick={onImport}>Importar Excel</button></div></header>
+    <section className={configurationStyles.homeGuide} aria-labelledby="home-start-heading"><div><h2 id="home-start-heading">Tu guía de inicio</h2><p>Prepara caja, crea tu primer producto y deja listos los pedidos sin salir del recorrido. Cada paso se guarda; la prueba es opcional y sin cobro real.</p></div><button type="button" className="button primary" data-onboarding-entry onClick={() => onNavigate({ section: 'business', tab: 'setup' })}>Abrir guía de inicio</button></section>
     <details className="home-task-directory">
       <summary><span><strong>Todas las tareas</strong><small>Encuentra lo que necesitas por área, sin recorrer menús.</small></span><span className="task-directory-count">{adminTaskGroups.length} áreas</span></summary>
       <TaskDirectory view={view} onNavigate={onNavigate} />
