@@ -1,5 +1,13 @@
 # Cambios — administración v3 y antecedentes
 
+## Publicación de importación recuperable y diagnóstico · 18 de octubre de 2026
+
+- Publicado en `origin/trunk` y en producción con `allnutrition:release-1bc0af86a251`, aceptada nativamente antes del corte. Web y scheduler comparten el ID aprobado, sin rebuild.
+- 510 contratos SQLite/PostgreSQL y 36 E2E aprobados, cero omisiones; recorrido comercial real por UI, reinicio 0→25→60, caída/recuperación y restore descartable. El E2E del resolver entra ahora explícitamente por «Nuevo lote», sin cambiar ni debilitar sus comprobaciones.
+- El primer intento rechazó ese recorrido desactualizado; el segundo detectó una casilla «En atención» no marcada por el operador. Se conservó la evidencia y no se promovieron imágenes fallidas; la aceptación final comprobó el estado intermedio antes del aporte.
+- Restauración real en clon y conservación exacta de 42 tablas durante el corte. Configuración, contraseñas y medios intactos; navegación/recarga del lote real, guía, sesión y móvil comprobados sin escrituras comerciales.
+- El error histórico del lote sigue guardado y es legible dentro del panel; no se reimportó ni aplicó el archivo real durante el smoke. Evidencia, respaldos, rollback y límites en [VERIFICACION.md](VERIFICACION.md).
+
 ## Inventario: atribución estable de devoluciones · 18 de octubre de 2026
 
 - Ampliación de alcance autorizada para resolver el fallo de la suite completa, separada de los commits de onboarding e importación.
@@ -13,14 +21,14 @@
 - Errores estructurados de archivo, extracción y procesamiento se muestran dentro del importador, con ubicación y acciones cuando están respaldadas. Se evita el error de página completa y no se ocultan fallos internos tras reintentos indefinidos de disponibilidad.
 - Revisión disponible solo después de terminar su generación; extracción modificada invalida revisiones y filas cacheadas. Las muestras desactualizadas pueden releerse sin cambiar artificialmente la configuración ni volver a subir el archivo.
 - Entrada con lotes guardados y «Retomar lote» visible, archivo/configuración conservados al navegar o recargar y «Nuevo lote» explícito. El procesamiento de fondo no bloquea salir del panel.
-- Verificación local con `Historial Guías.xlsx`, 339 filas de seguimiento, saldo cero y positivo, y errores controlados. 59 contratos específicos aprobados; `check` y `build` correctos. El fallo de devoluciones detectado en la suite completa se resolvió después con autorización, en la corrección de inventario independiente descrita arriba. Sin push, despliegue ni cambios de esquema.
+- Verificación inicial local con `Historial Guías.xlsx`, 339 filas de seguimiento, saldo cero y positivo, y errores controlados. 59 contratos específicos aprobados; `check` y `build` correctos. El fallo de devoluciones detectado en la suite completa se resolvió con autorización, en la corrección de inventario independiente descrita arriba. La publicación posterior figura al inicio de este registro; sin cambios de esquema.
 
 ## Onboarding con datos previos y diagnóstico repetible · 18 de octubre de 2026
 
 - Caja, productos y pedidos existentes se reconocen como realizados con motivos basados en los datos guardados; el resumen permanece visible al abrir la etapa final. Los pedidos previos permiten continuar sin repetir la confirmación inicial, sin debilitar las condiciones de caja, existencias o reglas vigentes ni afirmar que se revisaron estas últimas.
 - Importar pedidos se identifica expresamente como opcional: ningún archivo o perfil es requisito para continuar o finalizar.
 - El diagnóstico permanece disponible después de cada ejecución y de finalizar la guía. Usa el guardado real de pedidos manuales dentro de un `SAVEPOINT`, revierte todos sus efectos operativos y guarda únicamente el recibo ficticio por administrador, identificado con fecha e ID propios. Errores y último éxito se distinguen; no verifica pagos, checkout ni logística.
-- Regresiones de reconocimiento, reejecución con fechas empatadas, fallo después de escrituras parciales y conservación de operación, informes, snapshots y Excel. Sin dependencias ni cambios de esquema; ver evidencia y límites locales en [VERIFICACION.md](VERIFICACION.md). No se ha desplegado este ajuste.
+- Regresiones de reconocimiento, reejecución con fechas empatadas, fallo después de escrituras parciales y conservación de operación, informes, snapshots y Excel. Sin dependencias ni cambios de esquema; evidencia local, PostgreSQL y publicación posterior en [VERIFICACION.md](VERIFICACION.md).
 
 ## Puesta en marcha autónoma y progresiva · 18 de octubre de 2026
 

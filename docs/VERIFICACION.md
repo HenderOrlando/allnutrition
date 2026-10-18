@@ -1,5 +1,67 @@
 # Verificación v3 — administración de negocio
 
+## Importación recuperable y diagnóstico publicados · 18 de octubre de 2026
+
+Producción **https://allnutrition.wintimeapp.co** actualizada entre **19:58:15 y 19:59:14 UTC**. Fuente de aplicación `1f51ad4269614f2e6135e8ead2263da485dbc3db`, publicada en `origin/trunk`; Git archive SHA-256 `085b2fbb1dbcaf1558b68e46f8b8eb04652e8e3bb8ab957c3a1e356074da3528`. Los commits posteriores de documentación no reconstruyen la imagen aprobada.
+
+Imagen ejecutada por **web y scheduler**, sin rebuild: `allnutrition:release-1bc0af86a251`, ID `sha256:1bc0af86a251cc433bfd9dcf55cc7318e79b3789beb0aa584402b94968ae5acb`, Linux/amd64, runtime Node **24.22.0**, UID **1000**. El contenedor PostgreSQL permaneció siendo el mismo.
+
+### Aceptación nativa y correcciones del recorrido
+
+`npm run verify:docker -- --interactive`, ejecución **`196c12cbe881b794`**, terminó con **código 0**. Controlador Node 24.21.0, Docker 29.8.1 y Compose 5.5.1.
+
+| Comprobación final | Resultado observado |
+|---|---|
+| Build y check del contenedor | Next.js 16.3.8 compilado; 169 archivos JS/JSX revisados, cero errores. |
+| Contratos SQLite/PostgreSQL reales | **510 aprobados**, cero fallidos y cero omitidos. |
+| E2E serial escritorio/móvil | **36 aprobados**, incluidos archivo/resolver, recarga y fronteras HTTP. |
+| Auditoría productiva | Cero vulnerabilidades conocidas en la ejecución consultada. |
+| Recorrido comercial por UI | Principal y reordenado sin duplicados; liquidación 105.000, nómina 15.500, septiembre 37.500, costo prospectivo 30.000, devolución/reembolso/retorno y banco 127.500→128.000. |
+| Atención de alerta | Casilla «En atención» marcada y estado comprobado manteniendo 127.500 por debajo del mínimo 128.000; después, aporte real sintético de 500 y resolución del mismo episodio. |
+| Reinicio sin paneles | Lote real de 60 grupos aceptado con scheduler detenido: **0→25→60**, misma revisión, sin nuevas ventas ni dinero y sin duplicación al repetir. |
+| Operación y recuperación | CA/hostname, runtime sin DDL, migración idempotente, caída con 503 y recuperación sin pedidos adicionales, sesiones/WebP tras restart y dump/restore en base separada. |
+
+Dos ejecuciones previas se rechazaron, no se promovieron: `605ce67539939dcc` detectó que el E2E intentaba abrir «Crear plataforma» sin entrar en **Nuevo lote**; se corrigió únicamente ese recorrido en `1f51ad4`. `f4ecbe57614f8917` aprobó los 36 E2E, pero el operador guardó el aviso sin marcar la casilla «En atención»: el verificador rechazó correctamente la ausencia de ese estado intermedio. No requirió cambiar el producto ni debilitar la comprobación.
+
+Humo PostgreSQL adicional con esas mismas fuentes: dos diagnósticos desde UI conservaron exactamente **38 tablas operativas** y los hashes de los informes septiembre/octubre; solo aumentaron los recibos aislados **0→1→2**. Corresponde al segundo recorrido, no a su aprobación integral fallida. Las capas de filesystem coinciden con la imagen final; la diferencia de configuración identificada es la etiqueta de proyecto Compose. Evidencia privada: `.test-data/native-retry-ui/diagnostic-isolation.json`.
+
+El controlador de navegador sufrió fallos de conexión/espera; el recorrido final se completó con Chromium Linux nativo mediante CDP privado, retomando los lotes ya guardados. No se atribuyen esos timeouts al producto ni se presenta este pase como cronometraje de usabilidad.
+
+### Recuperación real y corte conservador
+
+Se restauró un respaldo real en clones exclusivos y se comparó el runtime anterior con el candidato final mediante el rol limitado, TLS y transacción `READ ONLY`: **42 tablas**, exportación comercial, contraseñas, configuración y medios idénticos. Los cuatro archivos de imágenes también se extrajeron y cotejaron independientemente. Los clones se eliminaron; no se restauró sobre producción.
+
+Durante el corte se detuvieron solo web y scheduler. Se tomaron respaldos nuevos, se repitió v4 idempotentemente con la imagen aprobada y se compararon exactamente las 42 tablas/exportación/contraseñas/settings/medios antes de reabrir los escritores. `.env.server.local` mantuvo SHA-256 `c5fc55f11e4d0d7032c6fc009e39a322c91991ab42f9771ea4db98045be29b0b`; solo cambió `APP_IMAGE` en el selector. Sin setup, seed, reset, cambio de claves, Nginx, DNS ni firewall.
+
+Directorio privado **`/home/allnutrition/import-release-0c834d19a4/cutover/`**, archivos `0600`:
+
+| Respaldo final | Bytes | SHA-256 | Verificación |
+|---|---:|---|---|
+| `allnutrition-20261018T195834Z.dump` | 173532 | `184679947f65aba09213d419416e70bfbb4b4b7b6d1e222fa29aae44e58557d7` | Catálogo `pg_restore --list`; el restore real se ensayó con el dump previo, no sobre la base activa. |
+| `product-images.tar.gz` | 494862 | `9898f86d8173008adcda6d3acc6359df599c32bd39bf7201ae1770eb9bf3cc70` | Catálogo tar; extracción independiente previa y cuatro archivos/hashes conservados. |
+| `source-before.tar.gz` | 181217 | `005dc4835664f894fe9a0084d53deadeb0c9bf490c01ddf5c55dc5cc386f2e4b` | Las 21 fuentes sobrescritas; sin env ni datos comerciales. |
+
+El dump previo restaurado fue `recovery/allnutrition-20261018T171204Z.dump`, SHA-256 `15fd7790d327056e91296211d96579373e2e58a2a439fa35c05bc6fcabc19188`. Rollback compatible v4 conservado: `allnutrition:release-fd6be0fc71de`, selector `cutover/rollback.env.release.local` y fuentes anteriores. Recrear juntos web/scheduler; nunca degradar ni restaurar automáticamente la base. No se añadió programación, retención ni copia cifrada off-host.
+
+### Dominio real después de publicar
+
+| Superficie ejercitada | Resultado observado |
+|---|---|
+| Salud pública | HTTPS 200, `{"ok":true}`, con confianza normal del certificado. |
+| Sesión anterior | Siguió autorizando onboarding 200 con el mismo token; cookie Secure/HttpOnly/SameSite=Strict. |
+| Guía | Caja «Realizado» con cuentas/responsables activos y motivos; importación expresamente opcional. No se inventaron datos para completar las demás etapas. |
+| Lote real | El mismo `Historial Guías.xlsx`, mismo hash del original local y configuración `Sheet1`/encabezado 2; diagnóstico legible dentro del importador. |
+| Navegación y recarga | Inicio→Pedidos→Importar Excel→Retomar lote y reload conservaron el lote, sin fallback de página completa. |
+| Móvil administrativo | 390×844; documento de 390 px y cero errores JS observados en el recorrido. |
+| Logout propio y vitrina | API de onboarding 401 tras cerrar únicamente la sesión del smoke; vitrina anónima con cuatro productos y cuatro WebP 200. |
+| Móvil público | Menú→Catálogo, diálogo cerrado y ancla visible bajo la cabecera; sin overflow horizontal. |
+| Conservación final | Solo variaron `job_runs` y la sesión propia revocada: 2 sesiones durante el corte, 1 ajena al smoke al terminar. Usuarios/contraseñas, configuración, medios y las demás tablas exactos; cero pedidos reales. |
+| Scheduler | Heartbeat de 22 segundos en la comprobación final; lectura limitada sobre PostgreSQL con TLS. |
+
+El error histórico `EXCEL_HEADER` carece de categoría moderna: se muestra como causa no determinada, sin afirmar que el archivo esté dañado. No se reintentó, reconfiguró ni aplicó ese lote real durante el despliegue. La revisión completa de sus 339 filas sigue acreditada por el humo aislado descrito más abajo, no por una importación comercial en producción.
+
+Evidencia nativa: `/home/allnutrition/import-release-0c834d19a4-candidate-1f51ad4/.test-data/docker/196c12cbe881b794/artifacts/`. Recuperación/corte: `/home/allnutrition/import-release-0c834d19a4/{recovery,cutover}/`. Evidencia local sanitizada y capturas en `.test-data/import-release-0c834d19a4/`. No se acredita CI remoto, estudio humano cronometrado, checkout, pagos ni logística externos.
+
 ## Inventario autorizado: devoluciones con instantes empatados · 18 de octubre de 2026
 
 Tras autorizar el usuario ampliar el alcance, se aisló el 409 de inventario: una devolución nueva podía ordenarse antes por UUID si compartía el instante de registro con otra anterior, consumir su unidad despachada y dejar sin respaldo la atribución ya persistida. Se reprodujo de forma determinista para una devolución previa recuperable y otra irrecuperable. La corrección reserva todas las atribuciones previas antes de asignar nuevas, sin cambiar la fecha, IDs, documentos de dinero ni reglas comerciales. Eliminar la evidencia de despacho continúa rechazándose con 409.

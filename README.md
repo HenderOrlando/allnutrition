@@ -6,7 +6,9 @@ Vitrina autoadministrada y panel privado para pedidos, inventario por referencia
 
 La vitrina está publicada en **https://allnutrition.wintimeapp.co**. El destino real es una **VM Linux aislada con Docker Compose y PostgreSQL 16, detrás del Nginx del host**; Caddy se conserva para pruebas/staging y despliegues autónomos. Las aceptaciones, versiones, parches y límites se registran en [VERIFICACION.md](docs/VERIFICACION.md). El [procedimiento de despliegue](docs/DESPLIEGUE.md) exige validar la imagen en la arquitectura destino antes de promoverla; una aceptación local no acredita CI remoto ni una conexión a Supabase alojado.
 
-La administración v3, el inventario v4, los menús y la guía de inicio están desplegados en esa VM con `allnutrition:release-fd6be0fc71de` (`amd64`), aprobada nativamente antes del corte del 18 de octubre de 2026 (UTC). Web y scheduler usan la misma imagen; la actualización v4 idempotente conservó usuarios, catálogo, configuración e imágenes. La guía pide confirmar caja y existencias reales: las cantidades no aportadas siguen desconocidas y deben contarse antes de reservar esas referencias en pedidos administrativos.
+La administración v3, el inventario v4, los menús, la guía y la recuperación de importaciones están desplegados con `allnutrition:release-1bc0af86a251` (`amd64`), aprobada nativamente antes del corte del **18 de octubre de 2026, 19:58–19:59 UTC**. Web y scheduler usan la misma imagen; las 42 tablas, contraseñas, configuración y medios coincidieron exactamente durante el corte.
+
+La guía reconoce recursos previos y explica por qué están realizados; importar pedidos es opcional y el diagnóstico repetible no altera la operación ni los informes. Los lotes fallidos conservan archivo y extracción para retomarlos, con errores dentro del panel. Las cantidades no aportadas siguen desconocidas y deben contarse antes de reservar esas referencias. Evidencia y límites en [VERIFICACION.md](docs/VERIFICACION.md).
 
 ## Inicio local
 
