@@ -19,6 +19,14 @@ Imagen local aprobada: `allnutrition:release-f00250e7b6a9`, ID `sha256:f00250e7b
 
 Evidencia completa en el candidato temporal `allnutrition-onboarding-release-vkujw9o_/.test-data/docker/381f0a52ac0df55d/artifacts/`; observaciones y capturas comerciales locales en `.test-data/onboarding-release-7271b8cb4c/local-ui/`. El primer pase local se canceló después de detectar las regresiones y se repitió con las correcciones. Durante el recorrido hubo que reanudar un lote ya procesado tras el límite del ejecutor de navegador; se continuó desde sus datos persistidos, sin repetir la importación ni modificar las comprobaciones del verificador.
 
+## Sincronización del E2E móvil durante la aceptación nativa · 18 de octubre de 2026
+
+El primer candidato amd64, ejecución `b86a3ab235779adc`, aprobó los 491 contratos sin omisiones y 35 de 36 E2E, pero se rechazó antes del recorrido comercial y **no se promovió**. El caso de continuidad móvil consultaba `window.scrollY` inmediatamente después de Atrás; la traza muestra que `goBack` todavía devolvía la URL del producto y la lectura perdía su contexto al llegar al catálogo. La captura final conservaba búsqueda «Creatina», filtro, tema oscuro y una unidad en el pedido.
+
+Se sincroniza el recorrido con la URL del producto y el pedido ya hidratado antes de Atrás, y con la búsqueda restaurada antes de medir. Se conservan la comparación original del scroll, su tolerancia y todas las aserciones de continuidad; no se añaden esperas fijas, omisiones ni reintentos.
+
+Con esa sincronización, el escenario móvil dirigido aprobó en la VM (**1 aprobado; 19,3 s de Playwright**) sobre datos sintéticos nuevos, proyecto `allnutrition-test-onboarding-navigation-7271b8cb4c`, eliminado al terminar. Evidencia en `/home/allnutrition/onboarding-release-7271b8cb4c/navigation-smoke/`. Este pase dirigido no sustituye la aceptación nativa completa requerida para promover.
+
 ## Regresiones de revisión previa a publicación · 18 de octubre de 2026
 
 Tres incidencias reproducidas en Chromium con SQLite exclusiva y corregidas antes de crear commits:

@@ -697,7 +697,10 @@ test('vitrina móvil: destinos nativos, búsqueda de combos y continuidad de ped
   await expect(page.getByRole('button',{name:catalog.title,exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(productCard).toBeVisible();await expect(page.locator('.storefront')).toHaveAttribute('data-theme','dark');
   const scrollBefore=await page.evaluate(()=>window.scrollY);
-  await productCard.getByRole('heading').getByRole('link').click();await page.goBack();
+  await productCard.getByRole('heading').getByRole('link').click();
+  await expect(page).toHaveURL(url=>url.pathname===`/productos/${product.slug}`);
+  await expect(page.getByRole('button',{name:'Ver pedido, 1 unidad',exact:true})).toBeVisible();
+  await page.goBack();await expect(search).toHaveValue('Creatina');
   await expect.poll(()=>page.evaluate(()=>window.scrollY)).toBeCloseTo(scrollBefore,-1);
   await productCard.getByRole('heading').getByRole('link').click();
   const back=page.getByRole('link',{name:'← Volver al catálogo',exact:true});await expect(back).toHaveAttribute('href','/#catalogo');await back.click();
