@@ -98,7 +98,7 @@ Las imágenes remotas se solicitan directamente desde el navegador y su disponib
 
 Seis áreas: **Inicio, Pedidos, Productos, Caja, Informes y Configuración**. En móvil: Inicio/Pedidos/Caja/Más. Combos, catálogos, contenidos de la vitrina y Usuarios siguen disponibles como subdestinos y en «Ir a…». Los filtros y detalles usan URL normalizada; nunca se serializan formularios, contactos ni tokens. Atrás/adelante, Escape y cambios pendientes conservan el borrador hasta aceptar descartarlo.
 
-**Configuración** abre un directorio de tareas separado en operación del negocio, vitrina pública y acceso al panel. Cada destino está a una pulsación; crear o abrir una ficha requiere una segunda. **Configurar cuentas del negocio** permite revisar cuentas y preferencias sin pasar por el asistente. Los primeros pasos siguen disponibles sin bloquear pedidos. Las pantallas secundarias ofrecen **Volver a Configuración** y **Cambiar de tarea**; los formularios conservan sus confirmaciones de cambios pendientes.
+**Configuración** abre la guía de inicio; el directorio completo se despliega con **Más opciones de configuración**, separado en operación del negocio, vitrina pública y acceso al panel. **Configurar cuentas del negocio** permite revisar cuentas y preferencias sin recorrer la guía. Las pantallas secundarias ofrecen **Volver a la guía de inicio** y **Cambiar de tarea**; los formularios conservan sus confirmaciones de cambios pendientes.
 
 La sección **Usuarios** permite crear y consultar cuentas; todas reciben rol **Administrador**. Quien las crea define la contraseña inicial y debe compartirla por un canal seguro; no hay invitación automática ni roles de menor privilegio.
 
@@ -109,6 +109,17 @@ La migración de inventario **4** conserva los despachos históricos sin volver 
 Pedidos: destinatario, productos, vendedor opcional y acuerdo económico; envíos, cobros y rentabilidad dentro del detalle. Guías/eventos, devoluciones, recaudos y reembolsos son documentos separados y auditables, no un campo «Pagado» editable. El recaudo de plataforma queda pendiente hasta confirmar la recepción de una liquidación. Después del despacho se preserva el acuerdo histórico; las correcciones explícitas conservan el registro anterior.
 
 Caja registra cuentas con apertura explícita —también cero—, ingresos no comerciales, transferencias, gastos/pagos, anticipos y cierres. Un aporte del propietario no es una venta; una transferencia no altera el consolidado. Personas responsables y vendedores no necesitan credenciales de acceso. Sueldos/comisiones distinguen devengo, compensación y salida efectiva de dinero. Responsables, cuentas y vigencias se encuentran en **Configuración**, mediante **Gestionar personas y sueldos**, **Configurar cuentas del negocio** y **Revisar reglas y preferencias**.
+
+### Puesta en marcha guiada
+
+Desde **Inicio → Abrir guía de inicio**, el recorrido guarda cuatro etapas: **Caja → Producto → Pedidos → Prueba y listo**. El objetivo es completar lo mínimo en diez minutos con los datos reales a mano; se puede recargar o volver después sin repetir etapas guardadas.
+
+- **Caja:** propone «Caja principal», la fecha de hoy en Bogotá y al administrador como responsable editable. Solo pide confirmar el dinero real de apertura, incluso si es cero. Reutiliza cuentas y responsables existentes, completa las asignaciones predeterminadas que falten y no crea sueldos ni comisiones. La cuenta creada se puede editar con el editor habitual; su apertura se conserva como hecho histórico.
+- **Producto:** pide nombre, precio de venta en pesos enteros y unidades físicas contadas. La dirección corta se genera automáticamente; presentación, SKU y costo son opcionales. Queda habilitado para pedidos del panel, en borrador y sin publicarse en la vitrina. No se inventan imagen, costo ni inventario.
+- **Pedidos:** explica y confirma las reglas vigentes sin cambiarlas. Los pedidos se registran manualmente en el panel, también los acordados por WhatsApp; no se habilita un checkout, pasarela ni integración logística.
+- **Prueba y listo:** permite recibir y consultar un pedido de práctica persistido, con datos ficticios y una referencia del catálogo. **No cobra, reserva stock, mueve caja, consume numeración ni aparece en informes o ventas reales.** La práctica es opcional y nunca se convierte en una venta; finalizar no depende de ejecutarla.
+
+La guía solo declara todo listo si los datos guardados incluyen cuenta/responsable activos y asignaciones válidas, un producto con precio y unidades disponibles, y reglas vigentes confirmadas. Bancos, sueldos, comisiones, importación, catálogo completo y publicación de la vitrina siguen disponibles como opciones avanzadas. Terminar la guía no publica la web ni inicia el scheduler.
 
 ## Excel e informes
 

@@ -12,6 +12,17 @@ Realizar estas comprobaciones en Next.js compilado y en un entorno de revisión 
 - Verificar que secretos, respaldos y datos no están en el repositorio ni en recursos públicos.
 - Verificar separación entre una vitrina aún no aprobada y la previsualización del administrador.
 
+## Puesta en marcha sin soporte
+
+- Con una cuenta nueva y negocio vacío, abrir **Inicio → Abrir guía de inicio** y cronometrar hasta completar Caja, Producto, Pedidos y recibir la práctica: máximo diez minutos.
+- Confirmar el saldo real de apertura, incluido cero; comprobar caja editable, responsable reutilizado y cuentas/avisos predeterminados. Volver o reintentar no duplica personas, cuentas ni aperturas.
+- Crear el primer producto sin salir de la guía con nombre, precio y conteo físico; confirmar disponibilidad administrativa, sin foto/costo/inventario inventados ni publicación automática.
+- Confirmar reglas vigentes sin modificar su historia; comprobar que los detalles avanzados son opcionales y accesibles.
+- Antes y después de la práctica, comparar informes del período, métricas, caja, stock, numeración y revisión de datos. Recargar y consultar después el mismo período: todo debe permanecer igual y el recibo de práctica seguir disponible.
+- Comprobar que el ID de práctica no permite registrar cobros ni envíos; crear después un pedido comercial sintético únicamente en el entorno descartable y comprobar numeración e inventario normales.
+- Finalizar también sin ejecutar la práctica. No aceptar finalización inicial si falta cuenta/responsable activo, producto con precio/existencias o reglas vigentes confirmadas.
+- Revisar en móvil, teclado y navegación con cambios pendientes; agotar existencias después no debe impedir editar preferencias normales.
+
 ## Productos, catálogos e imágenes
 
 - Crear producto con URL HTTPS o carga local JPEG/PNG/WebP de hasta 10 MiB. Verificar vista previa, guardado, publicación y ficha/vitrina pública.

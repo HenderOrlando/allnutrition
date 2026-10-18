@@ -1,5 +1,64 @@
 # Verificación v3 — administración de negocio
 
+## Aceptación Docker completa antes de commits · 18 de octubre de 2026
+
+`npm run verify:docker -- --interactive` terminó con **código 0** en el candidato aislado, ejecución `381f0a52ac0df55d`. Incluye las tres correcciones de revisión descritas a continuación. Se empaquetaron únicamente los cambios de esta entrega; `.DS_Store`, `.env copy.example` y `CLAUDE.md` quedaron fuera.
+
+| Comprobación completa | Resultado observado |
+|---|---|
+| Imagen productiva | Next.js 16.3.8, Linux/arm64, Node 24.22.0, UID 1000 y sin herramientas de desarrollo. |
+| Sintaxis/imports del candidato limpio | 169 archivos JS/JSX; cero errores. |
+| Contratos SQLite/PostgreSQL reales | 491 aprobados, cero fallidos y cero omitidos. |
+| E2E serial escritorio/móvil | 36 aprobados; suite completa, no solo el subconjunto anterior. |
+| Auditoría de dependencias productivas | Cero vulnerabilidades. |
+| Operación | TLS/CA/hostname, runtime limitado sin DDL, caída con 503 y recuperación sin pedidos adicionales, persistencia de sesión/WebP y pg_dump/restore aprobados. |
+| Escenario comercial en navegador | Importación principal/reordenada sin duplicación, recepción de 105.000 COP, sueldo/comisión de 15.500, resultado septiembre de 37.500, costo nuevo de 30.000 con snapshot histórico, devolución/reembolso y retorno hasta 127.500; aporte real sintético de 500 hasta 128.000 y mismo episodio de alerta resuelto. |
+| Automatización sin paneles | Snapshot de septiembre inmutable con 189.500 al corte; lote de seguimiento válido, aceptado con scheduler detenido y secuencia durable 0→25→60, sin ventas ni dinero duplicados. |
+
+Imagen local aprobada: `allnutrition:release-f00250e7b6a9`, ID `sha256:f00250e7b6a9ca60756a46b2d8c35becf5f8e4cada768f53eef8c445a047d856`. Es arm64 y **no se promueve a la VM amd64**: el despliegue exige aceptación nativa independiente.
+
+Evidencia completa en el candidato temporal `allnutrition-onboarding-release-vkujw9o_/.test-data/docker/381f0a52ac0df55d/artifacts/`; observaciones y capturas comerciales locales en `.test-data/onboarding-release-7271b8cb4c/local-ui/`. El primer pase local se canceló después de detectar las regresiones y se repitió con las correcciones. Durante el recorrido hubo que reanudar un lote ya procesado tras el límite del ejecutor de navegador; se continuó desde sus datos persistidos, sin repetir la importación ni modificar las comprobaciones del verificador.
+
+## Regresiones de revisión previa a publicación · 18 de octubre de 2026
+
+Tres incidencias reproducidas en Chromium con SQLite exclusiva y corregidas antes de crear commits:
+
+- Al archivar la cuenta propuesta después de marcar su confirmación, se conservaba la casilla para una caja distinta y se podía crear una nueva apertura sin confirmarla. Después de la corrección, la casilla se desmarca y pulsar Guardar no crea ninguna cuenta hasta una nueva confirmación explícita.
+- Crear un producto de una unidad, reservarla mediante un pedido abierto desde el lanzador y repetir el alta con idénticos valores reutilizaba el identificador ya confirmado: formulario vacío, un solo producto y disponibilidad todavía falsa. Después, la segunda alta utiliza otra operación y deja dos referencias, con una realmente disponible. Los identificadores se conservan únicamente para reintentos cuyo resultado siga siendo incierto.
+- El nombre de producto admitía 161 caracteres en navegador y fallaba con 400 por el límite 160 del servidor. Se alinearon los campos nuevos: producto 160 y caja/responsable 150, comprobando el límite al escribir y el guardado posterior.
+
+Evidencia comparativa privada: `.test-data/onboarding-release-7271b8cb4c/edge-regressions.json`. Se empleó humo aislado porque estos escenarios requieren una configuración inicial incompleta y reservar la única referencia sin desmontar la guía; no se manipularon los datos compartidos de la suite E2E ni producción.
+
+## Puesta en marcha autónoma y progresiva · 18 de octubre de 2026
+
+Aceptación local de la guía Caja → Producto → Pedidos → Prueba y listo. Node **24.14.1**, Next.js **16.3.8**, SQLite descartable y PostgreSQL **16** en un contenedor nuevo ligado solo a loopback. No se usaron bases, credenciales ni servicios de producción y no hubo despliegue.
+
+| Comprobación | Resultado observado |
+|---|---|
+| `npm run check` | 176 archivos JS/JSX; cero errores de sintaxis/imports locales. |
+| `npm test` con `TEST_DATABASE_URL` de la base descartable `allnutrition_test`, `TEST_ALLOW_DATABASE_RESET=allnutrition_test` y `TEST_DB_SSL=disable` exclusivamente en loopback | **491 aprobadas**, cero fallidas y cero omitidas; contratos SQLite y PostgreSQL reales, incluidos los helpers transaccionales reutilizados. |
+| `node --test tests/business-onboarding.test.mjs tests/onboarding-report-isolation.test.mjs` | **13 aprobadas**: apertura explícita/atómica, reintentos y concurrencia, reutilización, producto vendible sin publicar, reglas vigentes, finalización sin prueba, recursos agotados/archivados y aislamiento de la práctica. |
+| `npm run build` | Compilación productiva/Turbopack y generación de páginas aprobadas, código 0; incluye `/api/admin/business/onboarding`. |
+| `npm run test:e2e -- --grep 'los 31 destinos\|comisiones porcentuales\|APIs operativas exactas\|sesión HTTPS'` | **8 aprobadas** en 22,5 s, sobre la compilación con HTTPS local; escritorio y móvil. Incluye los 31 destinos, directorio avanzado plegable, comisiones históricas, cookie segura, origen/CSRF y la nueva API. Es un subconjunto dirigido, no toda la suite E2E. |
+| Recorrido móvil Chromium, 390×844, cuenta nueva y PostgreSQL vacío | **41,726 s** desde abrir la guía hasta finalizar y recibir la práctica, por debajo de diez minutos. Incluyó recarga después de guardar caja y rechazo de descarte de un borrador de producto, conservado sin pérdida. |
+| Recarga y reinicio de `next start` | Caja, producto, reglas y recibo de práctica persistidos; estado completo derivado de datos guardados e informe sin cambios. |
+
+La aceptación compilada sirvió SQLite en `https://localhost:9448` y PostgreSQL en `https://localhost:9449`, detrás de proxies TLS exclusivamente locales con certificado de prueba. Se utilizó `E2E_ALLOW_SELF_SIGNED=1` para ese navegador; PostgreSQL sin TLS estuvo limitado al contenedor descartable publicado en `127.0.0.1:35436`, sin modificar la política de conexiones remotas de la aplicación.
+
+### Comportamiento observado
+
+- Caja predeterminada «Caja principal», responsable propuesto desde la cuenta y apertura de cero confirmada; no se repitieron datos del administrador. La caja se editó con el formulario habitual y reapareció como «Caja de mostrador», conservando su apertura.
+- Primer producto creado dentro de la guía con nombre, precio de 55.000 COP y conteo físico real del fixture; presentación, SKU y costo permanecieron opcionales. Guardado en borrador, habilitado para pedidos administrativos y sin publicar la vitrina.
+- Reglas vigentes confirmadas sin agregar comisiones ni sueldos. La interfaz explicó panel manual/WhatsApp y ausencia de checkout, pasarela o integración logística. El directorio avanzado siguió accesible, sin exigir sus diez tareas para terminar.
+- En PostgreSQL, la práctica dejó **cero pedidos comerciales**, ventas y caja en cero, cuatro unidades físicas y cero reservadas. La revisión del informe permaneció **2→2** y su `factHash` y métricas se conservaron antes/después, tras recarga y después de reiniciar la aplicación.
+- La regresión de aislamiento coexistió con una venta histórica real del fixture, cerró/reabrió SQLite y comparó informes histórico, actual y futuro, snapshot inmutable, Excel Resumen/Detalle, inventario, caja y numeración sin variaciones por la práctica. Un intento de cobro con el ID de práctica fue rechazado con 404.
+- Después de la práctica se creó desde la UI un pedido comercial sintético en SQLite: **AN-000001**, una unidad reservada de tres físicas y caja en cero. La práctica no consumió numeración ni bloqueó ventas. Otra regresión finalizó sin ejecutar la práctica.
+- La guía móvil no desbordó horizontalmente: documento y área principal de 390 px. Se observaron estados y acciones reales en escritorio y móvil, opciones avanzadas plegadas y guardas de cambios pendientes.
+
+El primer pase dirigido detectó dos defectos de los fixtures nuevos —comparación de un row SQLite con prototipo nulo y una referencia obligatoria omitida en el intento de cobro—, corregidos sin relajar el comportamiento exigido. El runtime de desarrollo, abierto antes de introducir los helpers transaccionales, devolvió un 500 en el alta; el proceso reiniciado y la compilación limpia completaron el mismo recorrido. Un E2E móvil anterior quedó bloqueado por el indicador flotante de Next dev sobre Inicio; la aceptación final se ejecutó en `next start`, sin ocultar overlays ni forzar clics.
+
+Evidencia local privada en `.test-data/onboarding-bda78b4b9d/`: `acceptance.json`, capturas de aceptación y `compiled-e2e-report/`. Los proxies/configuraciones temporales se retiran al terminar; no son funcionalidad del producto. La medición es un recorrido automatizado con datos sintéticos, **no un estudio de usabilidad con personas ni una garantía de tiempo universal**. No acredita CI remoto, despliegue, Safari/Firefox, lector de pantalla ni auditoría integral de accesibilidad.
+
 ## Unificación UI/UX de menús, acciones y atajos · 17 de octubre de 2026
 
 Resultado vigente de esta unificación; los apartados posteriores conservan sus comprobaciones históricas. Código probado: `0e3049be4af5a4b87698906c35b804c6777beef2`, integrado desde `b414bb9b89ba7e896cf9966ebcd9b73aa1322d00` en worktrees privados. Sin cambios de dependencias, esquema, endpoints ni reglas comerciales. Después de esta aceptación solo se actualizó documentación.

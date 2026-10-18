@@ -1,5 +1,16 @@
 # Cambios — administración v3 y antecedentes
 
+## Puesta en marcha autónoma y progresiva · 18 de octubre de 2026
+
+- Guía de inicio accesible desde Inicio: Caja → Producto → Pedidos → Prueba y listo. Sustituye el asistente de responsables/preferencias y guarda cada etapa para reanudar sin duplicar datos.
+- Caja predeterminada editable, responsable vinculado al administrador y asignaciones automáticas cuando falten. Apertura real confirmada explícitamente; conserva cuentas existentes y no inventa sueldos, comisiones ni cobros.
+- Primer producto dentro de la guía con nombre, precio y conteo físico; dirección corta automática y detalles opcionales. Vendible desde el panel sin publicar la vitrina ni exigir una fotografía.
+- Reglas vigentes explicadas y confirmadas sin reescribir historia; finalización derivada de recursos reales. Agotar existencias después no bloquea la edición normal de preferencias.
+- Pedido de práctica persistido y aislado de las tablas comerciales mediante un recibo de comando por administrador. Reutiliza validación y snapshots de catálogo, pero no puede cobrarse ni afectar informes, snapshots, Excel, caja, stock o numeración. No es requisito para finalizar.
+- Directorio completo y capacidades avanzadas conservados bajo despliegues opcionales. Se mantienen guardas de cambios pendientes, foco y uso móvil; la guía no publica la vitrina ni conecta servicios externos.
+- Revisión previa a publicación: un guardado confirmado renueva su identificador, pero conserva el de una respuesta incierta para reintentar. Cambiar o archivar la cuenta propuesta invalida la confirmación anterior de apertura. Los campos nuevos respetan los límites reales de 160 caracteres para producto y 150 para caja/responsable.
+- Alta y preparación idempotentes y transaccionales, con helpers reutilizados por las operaciones habituales. Sin dependencias ni migración de esquema nuevas. Evidencia y límites de la aceptación local en [VERIFICACION.md](VERIFICACION.md); sin despliegue a producción.
+
 ## Unificación UI/UX de menús, acciones y atajos · 17 de octubre de 2026
 
 - Navegación local compartida con `WorkspaceTabs`: botones nativos en escritorio y selector nativo en móvil, sin estado paralelo al propietario. Se migran Catálogo, Pedidos, Caja, Informes y Configuración; se retira la repetición de subtareas en la barra lateral.
