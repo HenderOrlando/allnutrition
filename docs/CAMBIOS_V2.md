@@ -1,5 +1,20 @@
 # Cambios — administración v3 y antecedentes
 
+## Unificación UI/UX de menús, acciones y atajos · 17 de octubre de 2026
+
+- Navegación local compartida con `WorkspaceTabs`: botones nativos en escritorio y selector nativo en móvil, sin estado paralelo al propietario. Se migran Catálogo, Pedidos, Caja, Informes y Configuración; se retira la repetición de subtareas en la barra lateral.
+- «Más» conserva las seis áreas y un directorio completo inicialmente plegado. «Atajos» explica únicamente combinaciones existentes. El lanzador usa foco real con flechas, Inicio/Fin y Enter/Espacio; Ctrl/⌘ K respeta campos, diálogos, composición de texto y operaciones en curso. Menú, lanzador y guía no se superponen.
+- Títulos y encabezados identifican los 31 destinos, también mediante URL directa. Cambiar área/subvista enfoca su encabezado sin robar foco a búsquedas o filtros ordinarios. Iconos y estados de envío comparten significado y etiquetas.
+- Listados con búsqueda y creación visibles, filtros compactos y chips que quitan solo su propio criterio y reinician página. Vacíos sin creación duplicada y recuperación hacia la acción real. Pedidos y Envíos ocultan sus paginadores cuando no hay filas. La búsqueda conserva filtros y evita sobrescribirlos con una captura antigua.
+- Editores con campos antes de ayuda general, advertencias junto a su tarea, un solo anuncio pendiente y acciones contextuales. Las guardas conservan borradores al rechazar navegación y bloquean salida/segunda operación durante escrituras.
+- Datos y publicación distingue el estado guardado de la selección pendiente: marcar la aprobación no anuncia una publicación antes de guardar.
+- Caja e Informes muestran contenido útil en la primera pantalla móvil. Las listas de Caja reúnen filtros en un disclosure; Informes sitúa el selector de área antes de la consulta y conserva período/identidad al abrir un informe guardado. No cambia qué devenga, qué mueve caja ni cómo se revierten los hechos.
+- Comisiones porcentuales con coma o punto y hasta dos decimales, convertidas exactamente a puntos básicos. Vacío o formato inválido participa en la guarda y bloquea guardar; cambiar a importe fijo o deshabilitar no deja una invalidez oculta. Sin redondeo ni cambios de regla histórica.
+- Vitrina con menú móvil nativo, pedido vacío enlazado al catálogo, conteos separados de productos/combos y una sola recuperación del vacío global. Atrás restaura búsqueda, categoría y scroll aun sin BFCache, conservando estado de Next, tema y pedido. Se mantienen el límite 99, subtotal y mensaje de WhatsApp, sin enviar mensajes ni crear checkout.
+- Tipografía operativa de al menos 14 px, campos de 16 px —incluido el selector de Excel sin override heredado— y áreas pulsables de 44 px. Se corrigen cortes de importes/acciones en tablas de 768 px y el contraste del rótulo sobre la cuadrícula pública, reutilizando la paleta existente, sin recortar envases ni cambiar recursos de marca.
+- Contratos E2E de interacción ampliados. El verificador ejecuta el scheduler durante las pruebas de importación y conserva comprobaciones estrictas tras reservas; los contratos de observaciones no dependen del orden accidental de UUID con igual milisegundo. Sin cambios de API, esquema, autenticación, dependencias ni reglas financieras.
+- Aceptación final Docker interactiva con código 0, 478 pruebas SQLite/PostgreSQL y 36 E2E aprobadas, escenario comercial desde UI, reinicio 0→25→60, caída/recuperación y respaldo/restauración. Matriz visual completa, teclado, temas y límites documentados en [VERIFICACION.md](VERIFICACION.md). Sin despliegue ni publicación real.
+
 ## Inventario conectado a Pedidos · 17 de octubre de 2026
 
 - Productos sustituye disponibilidad manual por existencias físicas, reservas del servidor y unidades libres. El editor y los listados de escritorio/móvil distinguen conteo desconocido de cero. Combos y obsequios consumen sus componentes históricos.

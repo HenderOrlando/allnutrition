@@ -1,5 +1,47 @@
 # Verificación v3 — administración de negocio
 
+## Unificación UI/UX de menús, acciones y atajos · 17 de octubre de 2026
+
+Resultado vigente de esta unificación; los apartados posteriores conservan sus comprobaciones históricas. Código probado: `0e3049be4af5a4b87698906c35b804c6777beef2`, integrado desde `b414bb9b89ba7e896cf9966ebcd9b73aa1322d00` en worktrees privados. Sin cambios de dependencias, esquema, endpoints ni reglas comerciales. Después de esta aceptación solo se actualizó documentación.
+
+### Aceptación ejecutada
+
+Desde integración: `npm run verify:docker -- --interactive`, sin heredar rutas SQLite, datos, imágenes ni conexiones del árbol original. Proyecto privado `allnutrition-test-26e46225258295f7`, HTTPS `localhost:9443`, PostgreSQL 16 real y datos sintéticos. Finalizó con **código 0**.
+
+| Comprobación | Resultado observado |
+|---|---|
+| Compilación productiva | Next.js 16.3.8/Turbopack; runtime Linux/arm64, Node 24.22.0, UID 1000 y sin herramientas de desarrollo. |
+| `npm run check` | 164 archivos JavaScript/JSX, cero errores de sintaxis/imports locales. |
+| `npm test` | 478 aprobadas, cero fallidas y cero omitidas; SQLite y PostgreSQL reales. |
+| `npm run test:e2e` | 36 aprobadas, ejecución serial en escritorio y móvil. Incluye los 31 destinos, títulos, selección local, lanzador, guardas, filtros, comisión, importador y navegación/pedido públicos. |
+| Auditoría de producción | Cero vulnerabilidades en `npm audit --omit=dev --audit-level=high`. |
+| Operación Docker | CA/hostname explícitos, rechazo de TLS incorrecto, rol runtime limitado, caída con HTTP 503 y recuperación sin pedidos adicionales, persistencia de sesión e imagen WebP, respaldo/restauración y recuperación del scheduler. |
+
+Imagen probada: `sha256:7cfb1872f796a05fd70e2f61cc29977643ba2e708ae5b65de3355dc2b749473f`; etiqueta local `allnutrition:release-7cfb1872f796`. Resultado, comandos, informe Playwright, golden comercial y reinicio en `.test-data/docker/26e46225258295f7/artifacts/` **del worktree de integración**, no del árbol original.
+
+El recorrido comercial se realizó mediante formularios reales: Excel principal y reordenado sin duplicación; recepción de 105.000 COP; sueldo/comisión de 15.500; resultado de septiembre de 37.500; costo A de 30.000 vigente desde octubre y pedido nuevo sin envío/cobro con ese snapshot; devolución recuperable de 55.000/23.000, reembolso de 55.000 y retorno de 7.000, hasta disponible de 127.500. Con mínimo de 128.000, «En atención» conservó la condición; un aporte real de 500 con referencia `APORTE-SINTETICO-500` elevó disponible a 128.000 y resolvió el mismo episodio.
+
+El snapshot se solicitó con scheduler detenido. Todos los paneles privados quedaron en `about:blank` antes de cada `business:jobs:once`; las repeticiones no crearon trabajo duplicado. El informe guardado conservó la subvista Caja y mostró 189.500 al corte de septiembre, distinto del disponible actual. El lote de seguimiento de 60 grupos se revisó con scheduler activo y se confirmó en cola después de detenerlo: el verificador comprobó **0→25→60**, reinicio y estabilidad al repetir.
+
+### Presentación e interacción observadas
+
+- Matriz completa de 31 vistas: Inicio; Pedidos/Envíos/Importar; Productos/Obsequios/Combos/Catálogos; cinco de Caja; siete de Informes; Primeros pasos/Personas/Cuentas/Plataformas/Reglas/Alertas; Usuarios; Datos y publicación/Preguntas/Mensajes/Condiciones de envío.
+- **155 capturas administrativas** a 320×700, 390×844, 768×1024, 1440×900 y zoom nativo 200 %. Este último usó ventana 1440×900, viewport CSS 720×450 y DPR 2, no `zoom` de CSS. Dos revisiones independientes abrieron las 155 imágenes y no encontraron defectos reportables. La matriz corresponde a `20f6fc1`; el campo de archivo, único control administrativo ajustado después, se volvió a comprobar y capturar en los cinco perfiles sobre `ef63805`: fuente 16 px, alto 54 px y sin desbordamiento.
+- En 390×844, Pedidos mostró búsqueda, creación y filtros compactos; las cinco vistas de Caja y las siete de Informes mostraron el comienzo de resultados, resumen o estado vacío antes de la barra inferior. En 768 px, importes y acciones de las tablas permanecieron completos.
+- Vitrina definitiva en **ocho estados**, los cuatro tamaños y ambos temas: sin desbordamiento horizontal; etiquetas/ayudas operativas observadas de al menos 14 px y blancos táctiles de al menos 44×44 px. La búsqueda usa el área clicable de su `<label>`, no solo la caja de texto interior. Se conservaron identidad, fuentes e imágenes.
+- Medición de colores efectivos sobre texto real, sin atribuir a un enlace padre colores que sus hijos sobrescriben: mínimo normal 4,95:1 en el área principal administrativa, 4,70:1 en vitrina clara y 5,73:1 en oscura. Los patrones públicos se evaluaron además con combinaciones conservadoras de sus colores; mínimo 5,99:1, sin exenciones de marca. Bordes de campos administrativos medidos: mínimo 3,81:1. Foco del menú público de 2 px: 13,88:1 claro y 16,75:1 oscuro.
+- Tab/Mayús Tab recorrieron ambas direcciones en cuatro familias de formulario administrativo, 84 controles en total, sin enfocar controles de fondo. Menú público en ambos temas, pedido vacío y pedido de dos referencias conservaron recorrido nativo y retorno del foco con Esc. A 390×500 se alcanzaron últimos campos/acciones en editores y el pie del pedido público; es una comprobación de viewport reducido, no de un teclado virtual físico.
+- Un guardado real de catálogo se mantuvo pendiente antes de enviar su petición: Cancelar quedó deshabilitado, Esc no cerró el editor y Ctrl K no abrió otro diálogo; se liberó una única escritura real. Un fallo de lectura del listado mostró Reintentar y se recuperó mediante GET 200, sin repetir escrituras.
+- Los E2E definitivos comprobaron `5,25`/`5.25` como 525 puntos básicos, límites e invalidez, conservación del borrador al rechazar navegación y separación de publicación guardada/pendiente. La vitrina aprobada del fixture comprobó anclas nativas, vacío → catálogo, búsqueda de combos, Atrás con búsqueda/filtro/scroll, tema, pedido, límite 99 y referencias no disponibles. No se envió WhatsApp; en la vista previa manual se mantuvo bloqueada la publicación global.
+
+Evidencia visual/manual fuera del código: `../evidence/` respecto de integración, dentro de `.omp-worktrees/ui-ux-menus-c74bf29b/`: `accepted-visual-index.json`, `final-imports-index.json`, `final-public-index.json`, `final-financial-ui.json`, `final-worker-observations.json`, `release-interactions.json` y capturas asociadas. Cada índice identifica el código observado; las interacciones anteriores a los últimos ajustes CSS conservan su revisión, sin presentarlas como nuevas ejecuciones. Los scripts de humo no forman parte de la entrega.
+
+### Correcciones de la verificación
+
+El verificador inicia el scheduler real antes del E2E de Excel; las esperas contemplan su cadencia de reposo de 60 segundos. El snapshot operativo del producto se toma después de reservar el pedido, manteniendo las igualdades estrictas posteriores. Se eliminaron aserciones de «último evento» dependientes de UUID cuando dos observaciones comparten milisegundo: ahora se comprueban el código externo conservado, el estado efectivo y el reconocimiento, sin cambiar el orden SQL ni la lógica comercial. Los dos contratos afectados aprobaron también de forma dirigida antes de la suite completa.
+
+No se ejecutaron suites, semillas, migraciones ni guardados contra los servicios o bases originales. El navegador de aceptación usó perfiles privados, sin trasladar cookies del origen original. No hubo despliegue, publicación real, prueba en Safari/Firefox, lector de pantalla ni certificación WCAG; las mediciones y recorridos descritos no sustituyen una auditoría integral de accesibilidad.
+
 ## Inventario conectado a Pedidos · 17 de octubre de 2026
 
 Verificación local con Node **24.14.1** y Next.js **16.3.8**. Datos sintéticos y recursos aislados: SQLite nueva para UI/API y un contenedor PostgreSQL 16 descartable, publicado solo en `127.0.0.1:35432`. No se modificaron bases del negocio ni se desplegó una versión. La compilación y el navegador usaron una raíz/salida temporal independiente para no interferir con los servidores locales ya abiertos.
