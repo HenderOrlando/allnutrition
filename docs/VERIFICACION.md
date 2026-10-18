@@ -1,5 +1,68 @@
 # Verificación v3 — administración de negocio
 
+## Guía publicada y verificada en producción · 18 de octubre de 2026
+
+Producción **https://allnutrition.wintimeapp.co** actualizada entre **14:52:05 y 14:52:50 UTC**, después de aprobar el candidato nativo completo. Código de aplicación `76a088160692d7c3236ec425bd97cff74c286c21`, ya publicado en `origin/trunk`; paquete Git archive SHA-256 `513df6bed3d1bb11df300f7fbaacae3087de7340d842218c6b4c9c16917ebc02`. Los commits posteriores de documentación no reconstruyen ni sustituyen la imagen aprobada.
+
+### Aceptación nativa completa y promoción
+
+`npm run verify:docker -- --interactive`, ejecución **`b1735ce827ffd49b`**, terminó con **código 0** en la VM amd64. Controlador Node 24.21.0; runtime comprobado Node 24.22.0, UID 1000 y sin herramientas de desarrollo.
+
+| Comprobación del candidato final | Resultado observado |
+|---|---|
+| Build productivo y check | Next.js 16.3.8; 169 archivos JS/JSX sin errores de sintaxis/imports. |
+| Contratos SQLite/PostgreSQL reales | 491 aprobados; cero fallidos y cero omitidos. |
+| E2E serial escritorio/móvil | 36 aprobados, 5,8 min; incluye la sincronización corregida de Atrás descrita más abajo. |
+| Auditoría productiva | Cero vulnerabilidades conocidas en el registro consultado. |
+| Recorrido comercial por UI | Excel principal/reordenado sin duplicación, liquidación, sueldo, costo prospectivo, devolución/reembolso/flete, snapshot inmutable y mismo episodio de alerta resuelto por el ingreso real sintético, no por acusar recibo. |
+| Automatización sin paneles | Lote válido de 60 grupos, aceptación con worker detenido, reinicio durable 0→25→60 y repetición sin nuevas ventas ni dinero. |
+| Operación y recuperación | TLS/CA/hostname, conexión limitada sin DDL, caída con 503 y recuperación sin pedidos adicionales, persistencia de sesión/WebP, migración idempotente, dump/restore y reanudación del scheduler aprobados. |
+
+Imagen aprobada y ejecutada sin rebuild: **`allnutrition:release-fd6be0fc71de`**, ID `sha256:fd6be0fc71dea4021f77dbb00e6e39bfb2ebcbe481a7d64ce2698ec6b3686b9f`. Web y scheduler ejecutan ese mismo ID. Artefactos nativos en `/home/allnutrition/onboarding-release-7271b8cb4c-candidate/.test-data/docker/b1735ce827ffd49b/artifacts/`; observaciones y capturas del recorrido en `.test-data/onboarding-release-7271b8cb4c/native-ui/`.
+
+### Primer arranque PostgreSQL y práctica sin efecto financiero
+
+Humo adicional sobre **PostgreSQL vacío**, proyecto local exclusivo `allnutrition-test-onboarding-pg-first-run-7271b8cb4c`, HTTPS loopback 19443 e imagen arm64 previamente aprobada `allnutrition:release-f00250e7b6a9`. Sin seed de productos: caja cero confirmada, responsable propuesto, un producto en borrador de 55.000 COP con dos unidades físicas y reglas vigentes se guardaron desde la guía móvil.
+
+La práctica se recibió por UI. Antes y después se compararon **las filas completas de once tablas operativas**, settings/contadores y los hechos, cobertura, métricas y hashes de dos informes: mes de la práctica y año siguiente, calculados con un corte futuro fijo. Coincidieron exactamente; cero pedidos comerciales y existencias intactas. Después se finalizó y recargó: cuatro etapas guardadas y el mismo recibo persistido. Superficie final a 390×844, sin scroll lateral.
+
+Se reanudó el recorrido desde lo ya guardado tras interrupciones del controlador y esperas sobre campos transitoriamente deshabilitados o fuera de vista; no se repitieron las mutaciones. La captura del navegador compartido falló y se obtuvo en Chromium dedicado con la sesión sintética existente. Este pase no se usa como cronometraje de usabilidad ni acredita otra aceptación nativa: complementa el humo SQLite y la aceptación Docker de cada arquitectura. Proyecto descartable retirado. Evidencia: `.test-data/onboarding-release-7271b8cb4c/pg-first-run/`.
+
+### Recuperación real ensayada y corte conservador
+
+Antes de cambiar producción se restauró `rehearsal-onboarding-7271b8cb4c.dump` en la base separada `allnutrition_restore_onboarding_7271b8cb4c`, sin web ni scheduler conectados a esa copia. La exportación comercial, usuarios, sesiones, contadores, publicación y medios coincidieron; las cuatro imágenes también se extrajeron del tar a un directorio privado y sus bytes/hashes coincidieron. Se eliminaron únicamente el clon y la extracción temporal, sin detener producción durante ese ensayo.
+
+En el corte se detuvieron web y scheduler, se respaldó y se repitió v4 con la nueva imagen. La comparación congelada anterior/posterior fue exacta, incluidas las dos sesiones iniciales y las contraseñas hash. `.env.server.local` conservó su SHA-256; solo cambió el selector `APP_IMAGE`. No hubo setup, seed, reset ni restauración sobre la base activa; tampoco cambios de Nginx, DNS, firewall o publicación.
+
+Respaldos en `/home/allnutrition/app/backups/production/`, todos `0600`:
+
+| Respaldo | Bytes | SHA-256 | Verificación realizada |
+|---|---:|---|---|
+| `rehearsal-onboarding-7271b8cb4c.dump` | 123668 | `81030059f36a920217faefc1c3db990c6c2523ccf0b72fd16aee4f3d37277311` | Restore real en base distinta y comparación exacta; clon retirado. |
+| `cutover-onboarding-b1735ce827ffd49b.dump` | 123671 | `07680888c257af54d4b7c3d9d48f7a1792af812d730f5720ce691fa433ad7f1c` | PostgreSQL custom, `pg_restore --list`; no se restauró este dump final sobre producción. |
+| `allnutrition-images-onboarding-b1735ce827ffd49b.tar.gz` | 494838 | `d22b79b8ac747536a3d56bc5f88fa6dcc6fdf77cfdf7b21dc913ed000f80687a` | `tar -tzf`, cuatro archivos; el tar del ensayo previo sí se extrajo y cotejó. |
+
+Rollback compatible con v4 conservado: `allnutrition:release-f66d59566966`. Selector previo y evidencia del corte: `/home/allnutrition/onboarding-release-7271b8cb4c/cutover/`. El archivo `source-before.tar.gz` contiene 222 fuentes sobrescritas, SHA-256 `f3c3d602c3ef9ba4be57f3b47bf7c7f3ce5c01ea0900fcbbbc3c2c4cbdf13816`. La recuperación de aplicación recrea juntos web/scheduler con el selector anterior, sin degradar automáticamente la base. No se añadió una política de retención, programación o copia cifrada off-host.
+
+### Comprobación del dominio real después del corte
+
+| Comprobación ejercitada | Resultado observado |
+|---|---|
+| Salud HTTPS pública y vitrina anónima | 200; `{\"ok\":true}` en salud y validación normal de certificado, sin excepción de CA para producción. |
+| Sesión previa y API de guía | Sesión anterior al despliegue siguió autorizando; GET de onboarding 200. |
+| Guía y capacidades avanzadas | Cuatro etapas, directorio avanzado inicialmente plegado, acceso real a Personas y vuelta a la guía. No se guardó configuración comercial real. |
+| Seis áreas administrativas | Pedidos, Productos, Caja, Informes, Configuración e Inicio abrieron su URL y encabezado correspondientes. |
+| Seguridad | Cookie Secure/HttpOnly/SameSite=Strict; origen ajeno con CSRF válido 403, CSRF ausente 403 y API anónima 401. |
+| Vitrina y medios | Preview autenticado 200, cuatro WebP 200 y contacto WhatsApp observado sin enviar mensajes. |
+| Móvil anónimo | 390×844, menú y ancla de Catálogo alcanzados tras terminar el desplazamiento, sin overflow horizontal. |
+| Autenticación de la imagen nueva | Login nuevo 200; logout de sesión conservada y de sesión nueva 200, seguido en ambos casos de onboarding 401. |
+| Automatización | Estado `running`, heartbeat reciente, límite 180 s y sin código de error. |
+| Conservación tras el smoke | Negocio completo, usuarios/contraseñas, once registros de contenido, contadores, publicación y cuatro imágenes exactos; cero pedidos. Solo cambió la revocación de sesión intencional: dos sesiones durante el corte, una ajena a este smoke al finalizar. |
+
+La guía productiva muestra honestamente Caja, Producto y Pedidos pendientes: no se inventaron saldo, conteo ni confirmaciones para marcar el negocio listo. El responsable debe proporcionar los datos reales; la prueba sintética de la aceptación no se ejecutó sobre producción.
+
+Evidencia privada sanitizada local en `.test-data/onboarding-release-7271b8cb4c/`: `native-result.json`, `recovery-result.json`, `production-cutover-result.json`, snapshots hash antes/después y `production-ui/` (datos de cuenta enmascarados). Evidencia operativa adicional en `/home/allnutrition/onboarding-release-7271b8cb4c/{cutover,recovery}/`. No se copiaron credenciales ni dumps productivos al repositorio. No se acredita CI remoto, auditoría integral de seguridad ni ausencia de todo posible defecto.
+
 ## Aceptación Docker completa antes de commits · 18 de octubre de 2026
 
 `npm run verify:docker -- --interactive` terminó con **código 0** en el candidato aislado, ejecución `381f0a52ac0df55d`. Incluye las tres correcciones de revisión descritas a continuación. Se empaquetaron únicamente los cambios de esta entrega; `.DS_Store`, `.env copy.example` y `CLAUDE.md` quedaron fuera.

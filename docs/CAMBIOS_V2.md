@@ -9,7 +9,7 @@
 - Pedido de práctica persistido y aislado de las tablas comerciales mediante un recibo de comando por administrador. Reutiliza validación y snapshots de catálogo, pero no puede cobrarse ni afectar informes, snapshots, Excel, caja, stock o numeración. No es requisito para finalizar.
 - Directorio completo y capacidades avanzadas conservados bajo despliegues opcionales. Se mantienen guardas de cambios pendientes, foco y uso móvil; la guía no publica la vitrina ni conecta servicios externos.
 - Revisión previa a publicación: un guardado confirmado renueva su identificador, pero conserva el de una respuesta incierta para reintentar. Cambiar o archivar la cuenta propuesta invalida la confirmación anterior de apertura. Los campos nuevos respetan los límites reales de 160 caracteres para producto y 150 para caja/responsable.
-- Alta y preparación idempotentes y transaccionales, con helpers reutilizados por las operaciones habituales. Sin dependencias ni migración de esquema nuevas. Evidencia y límites de la aceptación local en [VERIFICACION.md](VERIFICACION.md); sin despliegue a producción.
+- Alta y preparación idempotentes y transaccionales, con helpers reutilizados por las operaciones habituales. Sin dependencias ni migración de esquema nuevas. Aceptación completa local y nativa, primer arranque PostgreSQL con práctica aislada y publicación real con `allnutrition:release-fd6be0fc71de`; evidencia, corrección de sincronización del E2E móvil y límites en [VERIFICACION.md](VERIFICACION.md).
 
 ## Unificación UI/UX de menús, acciones y atajos · 17 de octubre de 2026
 
