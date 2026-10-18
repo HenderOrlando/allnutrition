@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { zipSync, strToU8 } from 'fflate';
+import { zipSync, unzipSync, strFromU8, strToU8 } from 'fflate';
 import { readExcel, normalizeExcelIdentifier, normalizeExcelMoney, normalizeExcelDate, writeExcelSheets } from '../lib/business/excel.mjs';
 
 const require = createRequire(import.meta.url);
@@ -38,6 +38,32 @@ for (const type of ['xlsx', 'xls', 'xlsb', 'xlsm']) {
     await assert.rejects(readExcel(bytes, { filename: `pedidos.${type}`, sheetName: 'No existe' }), { code: 'EXCEL_SHEET' });
   });
 }
+
+test('dimensionless worksheets retain real dimensions and noninitial headers during inspection and preview', async () => {
+  const data = [['Exportación sintética'], ['Guía','Estado','Estado','Costo'], ...Array.from({length:40},(_,index)=>[`000${index}`,'Tránsito','Observación','15.000'])];
+  const entries = unzipSync(book(data));
+  entries['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(entries['xl/worksheets/sheet1.xml']).replace(/<dimension\b[^>]*\/>/g,''));
+  const bytes = Buffer.from(zipSync(entries));
+  const metadata = XLSX.read(bytes,{type:'buffer',sheetRows:1}).Sheets.Pedidos;
+  assert.equal(metadata['!ref'],'A1');
+  assert.equal(metadata['!fullref'],undefined);
+  for (const mode of ['inspect','rows']) {
+    const parsed = await readExcel(bytes,{filename:'sin-dimensiones.xlsx',sheetName:'Pedidos',headerRow:2,mode});
+    assert.deepEqual(parsed.sheets,[{name:'Pedidos',rowCount:42,columnCount:4}]);
+    assert.deepEqual(parsed.rows.find(row=>row.rowNumber===2).cells.map(cell=>cell.value),['Guía','Estado','Estado','Costo']);
+    if(mode==='inspect')assert.equal(parsed.rows[0].rowNumber,2);
+    assert.equal(parsed.rows.length,mode==='inspect'?21:42);
+    if(mode==='rows')assert.equal(parsed.rows.at(-1).rowNumber,42);
+  }
+});
+
+test('blank and absent header rows are configuration errors rather than empty inspections', async () => {
+  const bytes = book([['Portada'],[],['Guía'],['0001']]);
+  for (const mode of ['inspect','rows']) {
+    await assert.rejects(readExcel(bytes,{filename:'encabezados.xlsx',headerRow:2,mode}),{code:'EXCEL_HEADER'});
+    await assert.rejects(readExcel(bytes,{filename:'encabezados.xlsx',headerRow:5,mode}),{code:'EXCEL_HEADER'});
+  }
+});
 
 test('column order stays positional and ignored empty cells stay null', async () => {
   const result = await readExcel(book([['Guía', 'Pedido', 'Vacío', 'Cliente'], ['0001', 'AN-7', null, 'Persona']]), { filename: 'orden.xlsx' });
