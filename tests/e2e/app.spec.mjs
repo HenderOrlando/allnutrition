@@ -581,6 +581,7 @@ test('comisiones porcentuales conservan centésimas, invalidez, guardas y versio
 test('importación conserva archivo y resolver: Cancelar y Esc confirman el mismo descarte',async({page},info)=>{
  test.setTimeout(180000);
  await login(page);await navigate(page,'Pedidos');await selectWorkspace(page,'Vistas de pedidos','Importar Excel');
+ await page.getByRole('button',{name:'Nuevo lote',exact:true}).click();
  await openDisclosure(page,'Crear plataforma por nombre');
  await page.getByLabel('Nombre de la plataforma',{exact:true}).fill(`Origen resolver ${info.project.name} ${info.retry}`);
  await page.getByRole('button',{name:'Crear plataforma y cuenta Principal'}).click();
