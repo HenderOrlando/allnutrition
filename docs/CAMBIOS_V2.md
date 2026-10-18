@@ -1,12 +1,19 @@
 # Cambios — administración v3 y antecedentes
 
+## Inventario: atribución estable de devoluciones · 18 de octubre de 2026
+
+- Ampliación de alcance autorizada para resolver el fallo de la suite completa, separada de los commits de onboarding e importación.
+- Las unidades despachadas ya atribuidas a devoluciones anteriores se reservan antes de asignar una devolución nueva. Un empate de instante o retroceso de reloj no permite que el orden de UUID robe esa atribución, provoque un 409 falso o descuente dos veces la misma salida.
+- Se conserva el rechazo de rectificaciones que eliminan evidencia física de unidades ya devueltas. Sin cambios de caja, reglas comerciales, esquema, dependencias ni migraciones.
+- Regresiones deterministas fallando antes y pasando después para devoluciones previas recuperables/irrecuperables y protección del despacho. Humo con APIs reales y reloj controlado; 15 contratos de inventario y 430 comprobaciones de la suite aprobadas, cero fallos, una omisión PostgreSQL. `check` y `build` correctos; evidencia en [VERIFICACION.md](VERIFICACION.md).
+
 ## Importación Excel: dimensiones reales, diagnóstico y reanudación · 18 de octubre de 2026
 
 - Corregido el rechazo falso de encabezados en archivos cuya lectura parcial solo informa la portada: se obtienen las dimensiones reales de la hoja seleccionada sin confundirlas con la muestra.
 - Errores estructurados de archivo, extracción y procesamiento se muestran dentro del importador, con ubicación y acciones cuando están respaldadas. Se evita el error de página completa y no se ocultan fallos internos tras reintentos indefinidos de disponibilidad.
 - Revisión disponible solo después de terminar su generación; extracción modificada invalida revisiones y filas cacheadas. Las muestras desactualizadas pueden releerse sin cambiar artificialmente la configuración ni volver a subir el archivo.
 - Entrada con lotes guardados y «Retomar lote» visible, archivo/configuración conservados al navegar o recargar y «Nuevo lote» explícito. El procesamiento de fondo no bloquea salir del panel.
-- Verificación local con `Historial Guías.xlsx`, 339 filas de seguimiento, saldo cero y positivo, y errores controlados. 59 contratos específicos aprobados; `check` y `build` correctos. La última suite completa encontró un fallo de devoluciones en inventario no modificado, documentado en [VERIFICACION.md](VERIFICACION.md) y pendiente de autorización para ampliar el alcance. Sin push, despliegue ni cambios de esquema.
+- Verificación local con `Historial Guías.xlsx`, 339 filas de seguimiento, saldo cero y positivo, y errores controlados. 59 contratos específicos aprobados; `check` y `build` correctos. El fallo de devoluciones detectado en la suite completa se resolvió después con autorización, en la corrección de inventario independiente descrita arriba. Sin push, despliegue ni cambios de esquema.
 
 ## Onboarding con datos previos y diagnóstico repetible · 18 de octubre de 2026
 

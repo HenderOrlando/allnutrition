@@ -70,6 +70,7 @@ Realizar estas comprobaciones en Next.js compilado y en un entorno de revisión 
 - Con saldo127500, detener worker, configurar mínimo128000 y solicitar snapshot septiembre. Cerrar paneles y ejecutar la orden Compose exacta impresa; reabrir snapshot/alerta. Repetir no duplica; «En atención» no resuelve. Ingreso no comercial500 con referencia del manifest y otra corrida resuelven el mismo episodio y dejan128000.
 - Preparar preview válido de60 guías sintéticas con worker activo; detenerlo antes de confirmar. Lote queued y paneles cerrados: el verificador demuestra0→25→60, misma revisión, sin nuevos pedidos ni dinero. Esas guías sin costo vuelven parcial el informe vivo, no cambian snapshots anteriores.
 - Probar costo desconocido/cero, obsequios y devoluciones; saldos parciales/créditos/anticipos/reversos; seis calendarios Bogotá; archivo viejo/estado desconocido; aislamiento de cuentas y pérdida de lease.
+- Comprobar devoluciones con el mismo instante y orden de UUID contrario al registro: conservar la asignación despachada previa, descontar solo la pérdida pendiente nueva y mantener caja intacta. Repetir con devolución previa recuperable y comprobar que eliminar el despacho que la respalda sigue devolviendo 409.
 - Revisar desktop1440×900 y móvil390×844: seis áreas, navegación compacta, teclado/foco/Escape, Back/Forward/recarga, borrador retenido ante rechazo y ausencia de modales anidados. Caducidad también al descargar original/errores/XLSX.
 
 

@@ -1,5 +1,28 @@
 # Verificación v3 — administración de negocio
 
+## Inventario autorizado: devoluciones con instantes empatados · 18 de octubre de 2026
+
+Tras autorizar el usuario ampliar el alcance, se aisló el 409 de inventario: una devolución nueva podía ordenarse antes por UUID si compartía el instante de registro con otra anterior, consumir su unidad despachada y dejar sin respaldo la atribución ya persistida. Se reprodujo de forma determinista para una devolución previa recuperable y otra irrecuperable. La corrección reserva todas las atribuciones previas antes de asignar nuevas, sin cambiar la fecha, IDs, documentos de dinero ni reglas comerciales. Eliminar la evidencia de despacho continúa rechazándose con 409.
+
+Humo adicional mediante las APIs de dominio reales sobre SQLite en memoria: producto con tres unidades, pedido de dos, despacho parcial de una y dos devoluciones irrecuperables. Un reloj controlado hizo que la segunda se registrara antes que la primera; no se alteraron manualmente los documentos persistidos.
+
+| Resultado del humo | Antes de corregir | Después de corregir |
+|---|---:|---:|
+| Segunda devolución | 409 | Guardada |
+| Existencias finales | 2 | 1 |
+| Unidades reservadas | 1 | 0 |
+| Documentos de devolución | 1 | 2 |
+| Movimientos de caja | 0 | 0 |
+
+| Comprobación final | Resultado observado |
+|---|---|
+| `node --test tests/business-inventory.test.mjs` | **15 aprobadas**, cero fallidas; incluye las regresiones deterministas y la protección de evidencia de despacho. |
+| `env TEST_DATABASE_URL= TEST_ALLOW_DATABASE_RESET= npm test` | **430 aprobadas**, cero fallidas, **una omitida** por no configurar PostgreSQL descartable. Código **0**. |
+| `npm run check` | **176 archivos**, cero errores de sintaxis/imports locales. |
+| `npm run build` | Compilación y generación aprobadas, código **0**. |
+
+El bloqueo anterior queda resuelto, no ignorado ni ocultado mediante reintentos. Tres intentos de corrección en total —dos del importador y uno de inventario—, dentro del máximo de veinte. Evidencia privada en `.test-data/import-preview-zf44ag/{verification,inventory-verification}.json`. No se acredita PostgreSQL, CI remoto, push, despliegue ni cambios de producción.
+
 ## Importación recuperable de Historial Guías · 18 de octubre de 2026
 
 Verificación local sobre Next.js **16.3.8** compilado, Node **24.14.1**, Chromium y dos bases SQLite aisladas. No se accedió a producción ni se ejecutaron comandos de migración. El Excel original permaneció intacto y no se añadió al repositorio: SHA-256 anterior, posterior y del original descargado por la API `45ae9ead4fd8003e7547e3ec1cf153c83cb739e474af1099698fbc9495d3284f`.
@@ -19,7 +42,7 @@ Ambas variantes llegaron al paso **3. Revisión** en navegador. Diez tablas de h
 
 Una extracción con encabezado **999** produjo diagnóstico de configuración con hoja/fila, acción y código `EXCEL_HEADER`, sin romper el panel. Se navegó a Inicio, volvió a la entrada de importaciones, retomó el lote y recargó: conservaba archivo y encabezado 999. Corregir a 2 generó otra revisión de 339 filas en el mismo lote. Una copia truncada produjo diagnóstico de archivo `EXCEL_INVALID`, conservó el original de su lote y permitió navegar. Durante la generación de fondo también se salió del panel; la revisión solo se mostró al existir un resultado real. Vista móvil **390×844**, sin desbordamiento horizontal.
 
-### Comandos y límite pendiente
+### Comandos y fallo posteriormente resuelto
 
 | Comprobación | Resultado observado |
 |---|---|
@@ -27,9 +50,9 @@ Una extracción con encabezado **999** produjo diagnóstico de configuración co
 | `npm run check` | **176 archivos**, cero errores de sintaxis/imports locales. |
 | `npm run build` | Compilación y generación aprobadas, código **0**. |
 | Primer `npm test`, con conexión PostgreSQL de pruebas vacía | **426 aprobadas**, cero fallidas, una omitida PostgreSQL. |
-| Último `npm test`, después de añadir la regresión de relectura pendiente | **425 aprobadas**, dos fallos contabilizados —la subprueba de devolución irrecuperable y su contrato SQLite padre—, una omitida PostgreSQL. |
+| `npm test` anterior a la ampliación de inventario, después de añadir la regresión de relectura pendiente | **425 aprobadas**, dos fallos contabilizados —la subprueba de devolución irrecuperable y su contrato SQLite padre—, una omitida PostgreSQL. |
 
-El fallo pendiente está en `tests/business-inventory-contract.mjs`, caso «una devolución irrecuperable despachada no descuenta dos veces y una pendiente sí consume»: `lib/business/inventory.mjs:53` devuelve 409 al asignar unidades ya devueltas. Esa ruta no fue modificada y no se reintentó la suite hasta obtener verde. Revisar o corregir inventario requiere autorización para ampliar el alcance; no se acredita una suite completa final aprobada.
+El fallo detectado estaba en `tests/business-inventory-contract.mjs`, caso «una devolución irrecuperable despachada no descuenta dos veces y una pendiente sí consume»: el cálculo de atribuciones devolvía 409. Se detuvo la ampliación de alcance para consultar al usuario; tras su autorización se corrigió inventario con regresión y commit independiente, como se detalla arriba. La suite final quedó aprobada; no se reintentó sin cambios para ocultar el fallo.
 
 Dos intentos de corrección del importador: el primero pasó los contratos pero el navegador detectó que un lote ya fallido con configuración guardada no reencolaba sus muestras; se añadió una regresión fallando antes y pasando después. Evidencia privada sanitizada en `.test-data/import-preview-zf44ag/{baseline,verification}.json` y capturas del recorrido. No se acredita ejecución PostgreSQL, E2E completo, CI remoto, push ni despliegue.
 

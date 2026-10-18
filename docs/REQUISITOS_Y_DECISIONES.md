@@ -85,6 +85,8 @@ Una etiqueta o un estado desconocido no descuenta existencias. La evidencia efec
 
 La devolución conserva qué unidades estaban despachadas al registrarla: una devolución recuperable reingresa esas unidades y solo libera las todavía pendientes. Una unidad irrecuperable ya despachada no se descuenta otra vez; si se perdió antes de salir, sí reduce el conteo físico. Las unidades cerradas antes de salir no pueden incluirse en un despacho posterior. Las rectificaciones regeneran los efectos físicos sin duplicarlos, pero no pueden eliminar una salida que ya sustenta unidades devueltas.
 
+Antes de asignar unidades despachadas a una devolución nueva se reservan todas las atribuciones físicas ya persistidas. El orden por instante o UUID no puede reasignar esas unidades ni convertir una devolución pendiente en despachada. La suma histórica debe seguir respaldada por salidas efectivas; eliminar esa evidencia continúa rechazándose con 409. Esta garantía también se aplica cuando dos registros comparten el mismo milisegundo o el reloj retrocede.
+
 La migración JSON **4**, posterior al esquema comercial v3, fija una línea base de los pedidos históricos y sus reservas sin descontar otra vez sus salidas ni inventar existencias. Los productos sin conteo permanecen desconocidos; antes de nuevos despachos se debe contar físicamente el producto, incluidas sus reservas. Las instantáneas comerciales y los movimientos de caja anteriores no cambian. El respaldo sigue siendo v3 e incorpora `inventoryVersion:1`; los respaldos anteriores se normalizan a la misma línea base y los nuevos validan reservas, referencias y estados antes de escribir en destino.
 
 
