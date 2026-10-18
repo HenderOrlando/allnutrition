@@ -1,5 +1,12 @@
 # Cambios — administración v3 y antecedentes
 
+## Onboarding con datos previos y diagnóstico repetible · 18 de octubre de 2026
+
+- Caja, productos y pedidos existentes se reconocen como realizados con motivos basados en los datos guardados; el resumen permanece visible al abrir la etapa final. Los pedidos previos permiten continuar sin repetir la confirmación inicial, sin debilitar las condiciones de caja, existencias o reglas vigentes ni afirmar que se revisaron estas últimas.
+- Importar pedidos se identifica expresamente como opcional: ningún archivo o perfil es requisito para continuar o finalizar.
+- El diagnóstico permanece disponible después de cada ejecución y de finalizar la guía. Usa el guardado real de pedidos manuales dentro de un `SAVEPOINT`, revierte todos sus efectos operativos y guarda únicamente el recibo ficticio por administrador, identificado con fecha e ID propios. Errores y último éxito se distinguen; no verifica pagos, checkout ni logística.
+- Regresiones de reconocimiento, reejecución con fechas empatadas, fallo después de escrituras parciales y conservación de operación, informes, snapshots y Excel. Sin dependencias ni cambios de esquema; ver evidencia y límites locales en [VERIFICACION.md](VERIFICACION.md). No se ha desplegado este ajuste.
+
 ## Puesta en marcha autónoma y progresiva · 18 de octubre de 2026
 
 - Guía de inicio accesible desde Inicio: Caja → Producto → Pedidos → Prueba y listo. Sustituye el asistente de responsables/preferencias y guarda cada etapa para reanudar sin duplicar datos.

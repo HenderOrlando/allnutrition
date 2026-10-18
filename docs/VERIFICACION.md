@@ -1,5 +1,25 @@
 # Verificación v3 — administración de negocio
 
+## Onboarding con datos previos y diagnóstico repetible · 18 de octubre de 2026
+
+Ajuste verificado **solo en local**, con Node **24.14.1**, Next.js **16.3.8**, Chromium y una copia privada de SQLite sintética. Sin acceso a datos reales, configuración productiva ni despliegue. No hay cambios de esquema de aplicación ni se ejecutaron comandos de migración.
+
+| Comprobación | Resultado observado |
+|---|---|
+| `node --test tests/business-onboarding.test.mjs tests/onboarding-report-isolation.test.mjs tests/business-settings-alerts.test.mjs` | **23 aprobadas**, cero fallidas u omitidas. Incluye ambos caminos de finalización, recursos inválidos, reejecución con fechas empatadas, reversión tras escrituras parciales y conservación de informes/snapshots/Excel. |
+| `npm run check` | **176 archivos JS/JSX**, cero errores de sintaxis/imports locales. |
+| `npm run build` | Compilación productiva y generación de páginas aprobadas, código **0**. |
+| Navegador con datos previos | Caja, producto y pedidos como «Realizado», con cuentas/responsables, precio/unidades y **3 pedidos reales, último #3** como motivos. `setupPolicyConfirmed` permaneció falso; no se fingió una revisión explícita de reglas. |
+| Avance sin importación | Finalización desde UI con **0 lotes de importación**, sin archivo ni perfil. |
+| Diagnóstico en UI | Dos ejecuciones en desarrollo y otras dos en la compilación productiva móvil. IDs y fechas propios, botón repetible después de cada éxito y de finalizar; recibo conservado tras recarga y cambio a `next start`. |
+| Aislamiento de las ejecuciones | Comparación exacta de **40 tablas** y de los informes del mes y año futuro, con cortes fijos. Sin diferencias en productos/reservas, pedidos, caja, auditorías, idempotencia operativa, contadores ni snapshots. Solo se excluyeron sesiones/intentos y los recibos `onboarding:trial` de la comparación. El informe actual no estaba vacío: ventas netas **55.000 COP**. |
+| Error visible y último resultado | Tras deshabilitar el único producto vendible desde otra conexión del fixture, una prueba con datos de pantalla desactualizados devolvió un error real, sin escrituras ni nuevo recibo y conservando el último éxito identificado. Se restauró el producto sintético y «Actualizar datos guardados» recuperó la guía sin ejecutar una prueba automáticamente. |
+| Superficie móvil | **390×844**, documento de **390 px**, sin desbordamiento horizontal; resumen, diagnóstico y recibo legibles, acción disponible. |
+
+Hash de las tablas comparadas antes/después de los diagnósticos: `a7bce6605f425978280fcb88fb65ea28e01f4391087a8304d5be3108abd74803`. Evidencia privada sanitizada y capturas: `.test-data/onboarding-existing-OSZtPd/verification.json`, `mobile-onboarding.png`, `mobile-compiled.png` y `expected-error.png`.
+
+El primer pase encontró una aserción nueva dependiente de la redacción del error; se sustituyó por comprobaciones del estado HTTP y de la configuración persistida. El segundo pase de los 23 contratos aprobó. No se acredita ejecución PostgreSQL para este ajuste, CI remoto, nueva aceptación Docker, despliegue, estudio de usabilidad humano ni comprobación de checkout, pagos o logística.
+
 ## Guía publicada y verificada en producción · 18 de octubre de 2026
 
 Producción **https://allnutrition.wintimeapp.co** actualizada entre **14:52:05 y 14:52:50 UTC**, después de aprobar el candidato nativo completo. Código de aplicación `76a088160692d7c3236ec425bd97cff74c286c21`, ya publicado en `origin/trunk`; paquete Git archive SHA-256 `513df6bed3d1bb11df300f7fbaacae3087de7340d842218c6b4c9c16917ebc02`. Los commits posteriores de documentación no reconstruyen ni sustituyen la imagen aprobada.

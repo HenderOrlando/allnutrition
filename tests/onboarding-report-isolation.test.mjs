@@ -13,6 +13,7 @@ import { buildBusinessReport, generateReportSnapshot, getReportSnapshot } from '
 import { exportBusinessReport } from '../lib/business/report-export.mjs';
 import { recordCollection } from '../lib/business/collections.mjs';
 import { createBusinessFixture, businessOrderInput } from './business-fixtures.mjs';
+import { COMMERCIAL_TABLES, CORE_BACKUP_TABLES } from '../lib/backup-schema.mjs';
 
 const XLSX = createRequire(import.meta.url)('xlsx');
 const requestId = () => randomUUID();
@@ -26,12 +27,15 @@ function workbookEvidence(report) {
     XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true })]));
 }
 async function operationalState(store) {
-  const tables = ['orders', 'order_audit', 'order_collections', 'shipments', 'shipment_events', 'expenses', 'cash_entries', 'records', 'product_costs', 'counters', 'report_snapshots'];
-  return Object.fromEntries(await Promise.all(tables.map(async table =>
-    [table, await store.db.all(`SELECT * FROM ${store.t(table)} ORDER BY id`)])));
+  const tables = {
+    orders: { key: ['id'] }, records: { key: ['id'] }, settings: { key: ['id'] }, counters: { key: ['id'] }, job_runs: { key: ['key'] },
+    ...CORE_BACKUP_TABLES, ...COMMERCIAL_TABLES
+  };
+  return Object.fromEntries(await Promise.all(Object.entries(tables).map(async ([table, definition]) =>
+    [table, await store.db.all(`SELECT * FROM ${store.t(table)}${table === 'business_requests' ? " WHERE scope<>'onboarding:trial'" : ''} ORDER BY ${definition.key.join(',')}`)])));
 }
 
-test('la práctica persiste sin alterar ventas existentes, informes posteriores, snapshots, Excel, caja ni stock', async () => {
+test('dos prácticas persisten sin alterar la operación existente, informes posteriores, snapshots, Excel, caja ni stock', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'allnutrition-onboarding-reports-'));
   const env = { DB_DRIVER: 'sqlite', SQLITE_PATH: join(directory, 'business.sqlite') };
   let store = await openStore(env);
@@ -41,7 +45,10 @@ test('la práctica persiste sin alterar ventas existentes, informes posteriores,
     const today = bogotaDate(), historicalYear = Number(today.slice(0, 4)) - 1;
     const fixture = await createBusinessFixture(store, { year: historicalYear, actorId: user.id });
     await runOnboardingAction(store, { action: 'prepare', requestId: requestId(), responsibleId: fixture.person.id, accountId: fixture.account.id, openingConfirmed: true }, user);
-    await runOnboardingAction(store, { action: 'orders', requestId: requestId(), policyConfirmed: true }, user);
+    const existing = await getOnboarding(store, user);
+    assert.deepEqual(existing.existingOrders, { count: 1, latestNumber: 1 });
+    assert.equal(existing.readiness.orders, true);
+    assert.notEqual(existing.settings.setupPolicyConfirmed, true);
     await runOnboardingAction(store, { action: 'complete', requestId: requestId() }, user);
 
     const historicalQuery = { period: 'month', anchorDate: `${historicalYear}-09-01`, asOf: `${historicalYear + 1}-02-01T12:00:00.000Z` };
@@ -52,8 +59,10 @@ test('la práctica persiste sin alterar ventas existentes, informes posteriores,
     assert.equal(reportsBefore[0].metrics.netProductSales.value, fixture.a.price * 100 * 2);
     const saved = await generateReportSnapshot(store, historicalQuery, user.id);
     const savedBefore = await getReportSnapshot(store, saved.snapshot.id);
+    const currentSaved = await generateReportSnapshot(store, trialPeriodQuery, user.id);
+    const currentSavedBefore = await getReportSnapshot(store, currentSaved.snapshot.id);
     const stateBefore = await operationalState(store);
-    const workbookBefore = workbookEvidence(reportsBefore[0]);
+    const workbooksBefore = reportsBefore.map(workbookEvidence);
     const settingsBefore = (await getOnboarding(store, user)).settings;
 
     const input = { action: 'trial', requestId: requestId(), productId: fixture.a.id };
@@ -62,22 +71,40 @@ test('la práctica persiste sin alterar ventas existentes, informes posteriores,
     assert.equal(trial.isTest, true);
     assert.equal(trial.status, 'received');
     assert.equal(trial.items[0].itemId, fixture.a.id);
+    assert.match(trial.id, /^trial:/);
+    assert.equal(Object.hasOwn(trial, 'number'), false);
     assert.equal(trial.totalMinor, fixture.a.price * 100);
     assert.deepEqual((await runOnboardingAction(store, input, user)).trialOrder, trial);
     assert.equal(await store.order(trial.id), null);
     await assert.rejects(() => recordCollection(store, { requestId: requestId(), orderId: trial.id, version: 1, holder: 'business', accountId: fixture.account.id, amountMinor: trial.totalMinor, occurredOn: today, method: 'Efectivo', reference: 'Intento inválido de cobro de práctica' }, user.id), { status: 404 });
     assert.deepEqual(await operationalState(store), stateBefore);
     assert.deepEqual((await getOnboarding(store, user)).settings, settingsBefore);
+    const secondInput = { action: 'trial', requestId: requestId(), productId: fixture.b.id };
+    const secondTrial = (await runOnboardingAction(store, secondInput, user)).trialOrder;
+    assert.notEqual(secondTrial.id, trial.id);
+    assert.ok(secondTrial.receivedAt > trial.receivedAt);
+    assert.equal(secondTrial.items[0].itemId, fixture.b.id);
+    assert.equal(secondTrial.totalMinor, fixture.b.price * 100);
+    assert.deepEqual((await runOnboardingAction(store, secondInput, user)).trialOrder, secondTrial);
+    assert.deepEqual((await runOnboardingAction(store, input, user)).trialOrder, trial);
+    assert.deepEqual((await getOnboarding(store, user)).trialOrder, secondTrial);
+    assert.equal(await store.order(secondTrial.id), null);
+    assert.deepEqual(await operationalState(store), stateBefore);
+    const receipts = await store.db.all(`SELECT actor_id,result_json FROM ${store.t('business_requests')} WHERE scope='onboarding:trial' ORDER BY request_id`);
+    assert.equal(receipts.length, 2);
+    assert.ok(receipts.every(row => row.actor_id === user.id));
+    assert.deepEqual(receipts.map(row => JSON.parse(row.result_json).id).sort(), [trial.id, secondTrial.id].sort());
 
     await store.close();
     store = null;
     store = await openStore(env);
-    assert.deepEqual((await getOnboarding(store, user)).trialOrder, trial);
+    assert.deepEqual((await getOnboarding(store, user)).trialOrder, secondTrial);
     assert.deepEqual(await operationalState(store), stateBefore);
     const reportsAfter = await Promise.all(queries.map(query => buildBusinessReport(store, query)));
     assert.deepEqual(reportsAfter.map(reportEvidence), reportsBefore.map(reportEvidence));
     assert.deepEqual(await getReportSnapshot(store, saved.snapshot.id), savedBefore);
-    assert.deepEqual(workbookEvidence(reportsAfter[0]), workbookBefore);
+    assert.deepEqual(await getReportSnapshot(store, currentSaved.snapshot.id), currentSavedBefore);
+    assert.deepEqual(reportsAfter.map(workbookEvidence), workbooksBefore);
 
     const next = await store.saveOrder(businessOrderInput(fixture.a, { placedOn: today, deliveryMethod: 'pickup', shippingChargeMinor: 0 }), user.id);
     assert.equal(next.number, 2);

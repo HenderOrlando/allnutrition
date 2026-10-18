@@ -18,9 +18,11 @@ Realizar estas comprobaciones en Next.js compilado y en un entorno de revisión 
 - Confirmar el saldo real de apertura, incluido cero; comprobar caja editable, responsable reutilizado y cuentas/avisos predeterminados. Volver o reintentar no duplica personas, cuentas ni aperturas.
 - Crear el primer producto sin salir de la guía con nombre, precio y conteo físico; confirmar disponibilidad administrativa, sin foto/costo/inventario inventados ni publicación automática.
 - Confirmar reglas vigentes sin modificar su historia; comprobar que los detalles avanzados son opcionales y accesibles.
-- Antes y después de la práctica, comparar informes del período, métricas, caja, stock, numeración y revisión de datos. Recargar y consultar después el mismo período: todo debe permanecer igual y el recibo de práctica seguir disponible.
+- Con caja, productos y pedidos ya guardados, abrir la guía sin las marcas antiguas de confirmación: comprobar etapas «Realizado» con motivos concretos y resumen visible también en la etapa final. Los pedidos previos no deben presentarse como una revisión explícita de reglas.
+- Continuar y finalizar sin importar pedidos, subir archivos ni configurar perfiles. La importación debe aparecer como opcional.
+- Ejecutar dos diagnósticos, también después de finalizar la guía: botón disponible tras cada éxito, recibos ficticios con identificadores/fechas distintos y último resultado conservado al recargar. Comparar antes y después informes del período y futuro, métricas, productos/reservas, caja, numeración, revisión, auditoría y snapshots: todo debe permanecer igual.
 - Comprobar que el ID de práctica no permite registrar cobros ni envíos; crear después un pedido comercial sintético únicamente en el entorno descartable y comprobar numeración e inventario normales.
-- Finalizar también sin ejecutar la práctica. No aceptar finalización inicial si falta cuenta/responsable activo, producto con precio/existencias o reglas vigentes confirmadas.
+- Finalizar también sin ejecutar la práctica. No aceptar finalización inicial si falta cuenta/responsable activo, producto con precio/existencias o reglas vigentes; sin pedidos previos se exige confirmar las reglas. Un fallo durante el guardado real del diagnóstico debe revertir todas sus escrituras y conservar el último recibo correcto.
 - Revisar en móvil, teclado y navegación con cambios pendientes; agotar existencias después no debe impedir editar preferencias normales.
 
 ## Productos, catálogos e imágenes
