@@ -9,6 +9,7 @@ import Icon from './Icons';
 import useDialog from './useDialog';
 import { BusinessActionForm } from './BusinessActionDialog';
 import { ShipmentControls } from './ShipmentsWorkspace';
+import WorkspaceTabs from './WorkspaceTabs';
 import styles from './OrderExperience.module.css';
 
 const blank = () => ({ requestId: crypto.randomUUID(), placedOn: bogotaDate(), cancellationOn:bogotaDate(), sellerId:null, customerName:'', phone:'', city:'', department:'', address:'', addressNotes:'', email:'', documentType:'', documentNumber:'', notes:'', status:'new', statusReason:'', deliveryMethod:'carrier', shippingChargeMinor:0, items:[] });
@@ -20,6 +21,9 @@ const copyForm=record=>{
   const base=blank();if(!record)return base;
   return {...Object.fromEntries(Object.keys(base).map(key=>[key,Object.hasOwn(record,key)?record[key]:base[key]])),id:record.id,version:record.version,items:record.items.map(({lineId,kind,itemId,quantity,unitPriceMinor,discountMinor,title,productType})=>({lineId,kind,itemId,quantity,unitPriceMinor,discountMinor,title,productType}))};
 };
+
+const detailTabs=[{id:'agreement',label:'Acuerdo'},{id:'shipments',label:'Envíos'},{id:'collections',label:'Cobros'},{id:'profit',label:'Rentabilidad'}];
+const newOrderTabs=[{id:'agreement',label:'Destinatario y productos'}];
 
 export default function OrderEditor({ record, all, api, onClose, onSaved, onReload, onInteractionStateChange }) {
   const [detail,setDetail]=useState(record), [form,setForm]=useState(()=>copyForm(record));
@@ -106,7 +110,7 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
     setFinancialAction(null);setFinancialState({dirty:false,busy:false});
     await onSaved({kind:'orders',record:saved,operation:'action',keepOpen:true});
   }
-  const tabs=detail?.id?[['agreement','Acuerdo'],['shipments','Envíos'],['collections','Cobros'],['profit','Rentabilidad']]:[['agreement','Destinatario y productos']];
+  const tabs=detail?.id?detailTabs:newOrderTabs;
   function changeTab(next){
     if(interactionBusy||next===tab)return;
     if(dirty&&!window.confirm('Hay cambios sin guardar. ¿Descartarlos y cambiar de sección?'))return;
@@ -114,12 +118,12 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
     setFinancialAction(null);setFinancialState({dirty:false,busy:false});setTab(next);
   }
   return <dialog ref={dialog} className={`editor-drawer ${styles.editor}`} aria-labelledby="order-title">
-    <header><div><p className="eyebrow">Pedidos · {detail?.id?'Detalle y operaciones':'Captura manual'}</p><h2 id="order-title" tabIndex={-1} data-dialog-initial-focus>{number(detail)}</h2><p role="status">{dirty?'Cambios sin guardar':detail?.id?'Acuerdo guardado':'Por crear · completa el destinatario y las referencias'}</p></div><button type="button" className="icon-button" aria-label="Cerrar pedido" disabled={interactionBusy} onClick={close}><Icon name="close"/></button></header>
+    <header><div><p className="eyebrow">Pedidos · {detail?.id?'Detalle y operaciones':'Captura manual'}</p><h2 id="order-title" tabIndex={-1} data-dialog-initial-focus>{number(detail)}</h2><p>{detail?.id?'Acuerdo, envíos y movimientos del pedido':'Por crear · completa el destinatario y las referencias'}</p></div><button type="button" className="icon-button" aria-label="Cerrar pedido" disabled={interactionBusy} onClick={close}><Icon name="close"/></button></header>
     <div className="drawer-body">
       {error&&<div ref={errorSummary} tabIndex={-1} className="error" role="alert">{error.message}{error.status===409&&<button type="button" className="text-button" onClick={onReload}>Cargar versión guardada</button>}</div>}
       {financialAction?<BusinessActionForm key={financialAction.action+':'+(financialAction.context.documentId||'')} action={financialAction.action} context={{order:detail,...financialAction.context}} api={api} onSaved={financialSaved} onCancel={cancelFinancial} onInteractionStateChange={reportFinancial}/>:<>
-      <nav className={`admin-actions ${styles.detailNav}`} aria-label="Detalle del pedido">{tabs.map(([key,title])=><button key={key} type="button" className={`button ${tab===key?'primary':'subtle'}`} aria-current={tab===key?'page':undefined} onClick={()=>changeTab(key)}>{title}</button>)}</nav>
-      {detail?.id&&<section className={styles.quickActions} aria-label="Operaciones del pedido"><p className={styles.sectionLabel}>Registrar un hecho</p><div className="admin-actions order-primary-actions"><button type="button" className="button primary" data-financial-action disabled={interactionBusy||detail.totalMinor===0} onClick={()=>openFinancial('collection')}>Registrar cobro</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>changeTab('shipments')}>Actualizar envío</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>openFinancial('return')}>Registrar devolución</button></div><p className="small muted">El acuerdo, el movimiento de dinero y los eventos de envío se guardan por separado.</p></section>}
+      <WorkspaceTabs label="Detalle del pedido" items={tabs} value={tab} onChange={changeTab} disabled={interactionBusy}/>
+      {detail?.id&&tab==='agreement'&&<section className={styles.quickActions} aria-label="Operaciones del pedido"><p className={styles.sectionLabel}>Registrar un hecho</p><div className="admin-actions order-primary-actions"><button type="button" className="button primary" data-financial-action disabled={interactionBusy||detail.totalMinor===0} onClick={()=>openFinancial('collection')}>Registrar cobro</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>changeTab('shipments')}>Actualizar envío</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>openFinancial('return')}>Registrar devolución</button></div><p className="small muted">El acuerdo, el movimiento de dinero y los eventos de envío se guardan por separado.</p></section>}
       {tab==='agreement'&&<form id="order-agreement" onSubmit={save} aria-busy={busy}><fieldset className="editor-fieldset" disabled={busy}>
         <section className="form-section"><h3>1. Destinatario y fecha</h3><p className="small muted">Datos para identificar y entregar el pedido. Los campos con * son obligatorios.</p><div className="product-form-grid">{input('customerName','Nombre del destinatario',{required:true,maxLength:150})}{input('phone','Celular',{required:true,type:'tel',maxLength:30})}{input('city','Ciudad',{required:true,maxLength:100})}{input('department','Departamento',{maxLength:100})}{input('address','Dirección exacta')}{input('placedOn','Fecha del pedido',{required:true,type:'date',disabled:frozen})}</div></section>
         <section className="form-section"><h3>2. Productos y valor acordado</h3><p className="small muted">Guardar reserva las unidades de todas las líneas y sus componentes. El servidor valida las existencias en conjunto; seleccionar aquí no reserva todavía.</p>{frozen&&<p className="hint">Acuerdo cerrado: cantidades, precios y flete se corrigen con una devolución o ajuste explícito, no editando el pedido.</p>}

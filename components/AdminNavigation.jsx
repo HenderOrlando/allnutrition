@@ -7,12 +7,15 @@ import { schemas } from '@/lib/schema.mjs';
 import Icon from './Icons';
 import ImageByUrl from './ImageByUrl';
 import useDialog from './useDialog';
+import WorkspaceTabs from './WorkspaceTabs';
 
 const quickSections = adminAreas.filter(section => ['home', 'orders', 'cash'].includes(section.id));
 const createActions = [
   ...Object.entries(schemas).map(([kind, schema]) => ({ kind, label: `Crear ${schema.singular}`, icon: 'plus' })),
   { kind: 'orders', label: 'Nuevo pedido', icon: 'plus' },
 ];
+const productDestinations = adminTaskGroups.find(group => group.id === 'products').tasks;
+const productViews = productDestinations.map(task => ({ id: task.id, label: task.id === 'products' ? 'Productos' : task.label }));
 const normalize = text => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').trim();
 const taskSearchText = new Map(adminTasks.map(task => {
   const section = adminSections.find(section => section.id === task.view.section);
@@ -52,13 +55,11 @@ function GroupedNavigation({ view, onNavigate, interactionLocked }) {
 export function AreaNavigation({ view, onNavigate, interactionLocked = false }) {
   const area = adminSections.find(section => section.id === view.section)?.area;
   if (area !== 'products') return null;
-  const destinations = adminSections.filter(section => section.area === area);
-  const button = section => <button type="button" className="button subtle" key={section.id}
-    disabled={interactionLocked} aria-current={view.section === section.id ? 'page' : undefined}
-    onClick={() => onNavigate({ section: section.id })}>{section.label}</button>;
-  return <nav className="area-navigation" aria-label="Vistas de productos">
-    {destinations.map(button)}
-  </nav>;
+  const value = view.section === 'products' && view.productType === 'gift' ? 'gifts' : view.section;
+  return <WorkspaceTabs label="Vistas de productos" items={productViews} value={value} disabled={interactionLocked}
+    onChange={id => {
+      if (!interactionLocked) onNavigate(productDestinations.find(task => task.id === id).view);
+    }} />;
 }
 
 function Account({ user, onSignOut, interactionLocked }) {
@@ -67,7 +68,7 @@ function Account({ user, onSignOut, interactionLocked }) {
     <div><strong>Administrador</strong><span>{user.email}</span></div>
     <button type="button" className="icon-button" disabled={interactionLocked}
       aria-label="Cerrar sesión" title="Cerrar sesión" onClick={onSignOut}>
-      <Icon name="external" size={20} />
+      <Icon name="logout" size={20} />
     </button>
   </div>;
 }
@@ -99,8 +100,10 @@ function NavigationMenu({ view, user, onNavigate, onSignOut, onClose, interactio
     </header>
     <div className="navigation-dialog-body">
       <GroupedNavigation view={view} onNavigate={select} interactionLocked={interactionLocked} />
-      <h3 className="navigation-tasks-heading">Acceso directo a cada tarea</h3>
-      <TaskDirectory view={view} onNavigate={select} interactionLocked={interactionLocked} />
+      <details className="navigation-task-directory">
+        <summary>Todas las tareas</summary>
+        <TaskDirectory view={view} onNavigate={select} interactionLocked={interactionLocked} />
+      </details>
       <Account user={user} onSignOut={signOut} interactionLocked={interactionLocked} />
     </div>
   </dialog>;
@@ -110,6 +113,9 @@ function NavigationLauncher({ view, onNavigate, onCreate, onClose, interactionLo
   const ref = useRef(null);
   const titleId = useId();
   const inputId = useId();
+  const helpId = useId();
+  const inputRef = useRef(null);
+  const resultsRef = useRef(null);
   const [query, setQuery] = useState('');
   function dismiss() {
     ref.current?.close();
@@ -124,6 +130,39 @@ function NavigationLauncher({ view, onNavigate, onCreate, onClose, interactionLo
     dismiss();
     callback(value);
   }
+  function enabledResults() {
+    return resultsRef.current?.querySelectorAll('button:not(:disabled)') || [];
+  }
+  function focusResult(button) {
+    button?.focus();
+    button?.scrollIntoView({ block: 'nearest' });
+  }
+  function inputKeyDown(event) {
+    if (event.nativeEvent.isComposing || interactionLocked) return;
+    const results = enabledResults();
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusResult(results[event.key === 'ArrowDown' ? 0 : results.length - 1]);
+    } else if (event.key === 'Enter' && search && results.length) {
+      event.preventDefault();
+      results[0].click();
+    }
+  }
+  function resultKeyDown(event) {
+    if (event.nativeEvent.isComposing || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const button = event.target.closest('button');
+    if (!button) return;
+    const results = enabledResults();
+    const index = Array.prototype.indexOf.call(results, button);
+    if (index < 0) return;
+    event.preventDefault();
+    if (event.key === 'ArrowUp' && index === 0) inputRef.current?.focus();
+    else {
+      const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? results.length - 1
+        : event.key === 'ArrowUp' ? index - 1 : Math.min(index + 1, results.length - 1);
+      focusResult(results[nextIndex]);
+    }
+  }
   return <dialog ref={ref} className="navigation-dialog launcher-dialog" aria-labelledby={titleId}>
     <header>
       <h2 id={titleId} tabIndex={-1}>Ir a…</h2>
@@ -133,10 +172,13 @@ function NavigationLauncher({ view, onNavigate, onCreate, onClose, interactionLo
     </header>
     <div className="navigation-dialog-body">
       <label className="field" htmlFor={inputId}>Buscar sección o acción
-        <input id={inputId} name="admin-destination" type="text" value={query}
-          data-dialog-initial-focus autoComplete="off" onChange={event => setQuery(event.target.value)} />
+        <input ref={inputRef} id={inputId} name="admin-destination" type="text" value={query}
+          data-dialog-initial-focus autoComplete="off" aria-describedby={helpId}
+          onKeyDown={inputKeyDown} onChange={event => setQuery(event.target.value)} />
       </label>
-      <div className="launcher-results">
+      <p className="launcher-help" id={helpId}>Usa las flechas para recorrer resultados, Enter para abrir y Esc para cerrar.</p>
+      <p className="launcher-count" role="status">{destinations.length + actions.length} resultados</p>
+      <div ref={resultsRef} className="launcher-results" onKeyDown={resultKeyDown}>
         {destinations.length > 0 && <section className="nav-group" aria-label="Tareas">
           <h3>Tareas · {destinations.length}</h3>
           {destinations.map(task => <button type="button" key={task.id} disabled={interactionLocked}
@@ -153,8 +195,36 @@ function NavigationLauncher({ view, onNavigate, onCreate, onClose, interactionLo
             <Icon name={action.icon} /><span>{action.label}</span>
           </button>)}
         </section>}
-        {!destinations.length && !actions.length && <p role="status">No encontramos esa sección o acción</p>}
+        {!destinations.length && !actions.length && <p>No encontramos esa sección o acción. Prueba con otro nombre.</p>}
       </div>
+    </div>
+  </dialog>;
+}
+
+function KeyboardShortcuts({ shortcut, onClose }) {
+  const ref = useRef(null);
+  const titleId = useId();
+  function dismiss() {
+    ref.current?.close();
+    onClose();
+  }
+  const close = useDialog(ref, { busy: false, dirty: false, onClose: dismiss });
+  return <dialog ref={ref} className="navigation-dialog shortcuts-dialog" aria-labelledby={titleId}>
+    <header>
+      <h2 id={titleId} tabIndex={-1} data-dialog-initial-focus>Atajos de teclado</h2>
+      <button type="button" className="icon-button" aria-label="Cerrar atajos" onClick={close}><Icon name="close" /></button>
+    </header>
+    <div className="navigation-dialog-body">
+      <dl className="shortcuts-list">
+        <div><dt><kbd>{shortcut === '⌘ K' ? '⌘' : 'Ctrl'}</kbd> + <kbd>K</kbd></dt><dd>Abrir «Ir a…» fuera de campos editables y diálogos.</dd></div>
+        <div><dt><kbd>Tab</kbd> / <kbd>Mayús</kbd> + <kbd>Tab</kbd></dt><dd>Recorrer los controles hacia delante o atrás.</dd></div>
+        <div><dt><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>Recorrer los resultados del buscador.</dd></div>
+        <div><dt><kbd>Inicio</kbd> / <kbd>Fin</kbd></dt><dd>Ir al primer o último resultado desde la lista.</dd></div>
+        <div><dt><kbd>Enter</kbd></dt><dd>Abrir el resultado enfocado o el primero si has escrito una búsqueda.</dd></div>
+        <div><dt><kbd>Espacio</kbd></dt><dd>Activar el botón enfocado.</dd></div>
+        <div><dt><kbd>Esc</kbd></dt><dd>Cerrar el diálogo cuando no hay una operación en curso.</dd></div>
+      </dl>
+      <p>Si hay cambios sin guardar, se pide confirmación antes de descartarlos al cerrar o cambiar de vista.</p>
     </div>
   </dialog>;
 }
@@ -167,7 +237,8 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
   }, []);
   useEffect(() => {
     function openShortcut(event) {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'k') return;
+      if (event.isComposing || event.repeat || event.altKey || event.shiftKey
+        || !(event.ctrlKey || event.metaKey) || (event.ctrlKey && event.metaKey) || event.key.toLowerCase() !== 'k') return;
       if (interactionLocked || document.querySelector('dialog[open]')) return;
       const target = document.activeElement;
       if (target instanceof Element && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return;
@@ -186,7 +257,6 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
   const closeDialog = () => setDialog(null);
   const activeArea = adminSections.find(section => section.id === view.section)?.area;
   const secondarySection = !quickSections.some(section => section.id === activeArea);
-  const currentGroup = adminTaskGroups.find(group => group.tasks.some(task => isCurrentAdminTask(task, view)));
   return <>
     <a className="admin-skip-link" href="#admin-workspace">Saltar al contenido</a>
     <aside className="admin-sidebar">
@@ -196,12 +266,6 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
         <span>ALL NUTRITION<small>Mesa de trabajo</small></span>
       </button>
       <GroupedNavigation view={view} onNavigate={navigate} interactionLocked={interactionLocked} />
-      {currentGroup && activeArea !== 'business' && <nav className="sidebar-tasks" aria-label={`Tareas de ${currentGroup.label}`}>
-        <p className="sidebar-label">{currentGroup.label}</p>
-        {currentGroup.tasks.map(task => <button type="button" key={task.id} disabled={interactionLocked}
-          aria-current={isCurrentAdminTask(task, view) ? 'page' : undefined} data-admin-task={task.id}
-          onClick={() => navigate(task.view)}>{task.label}</button>)}
-      </nav>}
       <Account user={user} onSignOut={onSignOut} interactionLocked={interactionLocked} />
     </aside>
     <header className="admin-topbar">
@@ -212,9 +276,12 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
       <p className="topbar-location"><span>Administración</span><Icon name="chevron" size={14} /><strong>{view.section === 'business' && (!view.tab || view.tab === 'setup') ? 'Configuración' : adminLocationLabel(view)}</strong></p>
       <div className="topbar-actions">
         <button type="button" className="button subtle launcher-trigger" disabled={interactionLocked}
-          aria-haspopup="dialog" aria-expanded={dialog === 'launcher'} onClick={() => openDialog('launcher')}>
+          aria-haspopup="dialog" aria-expanded={dialog === 'launcher'} aria-keyshortcuts={shortcut === '⌘ K' ? 'Meta+K' : 'Control+K'}
+          onClick={() => openDialog('launcher')}>
           <Icon name="search" size={18} /><span>Ir a…</span><kbd className="launcher-shortcut">{shortcut}</kbd>
         </button>
+        <button type="button" className="button subtle shortcuts-trigger" disabled={interactionLocked}
+          aria-haspopup="dialog" aria-expanded={dialog === 'shortcuts'} onClick={() => openDialog('shortcuts')}>Atajos</button>
         <a className="button subtle preview-link" href="/?preview=1" target="_blank" rel="noopener noreferrer"
           aria-label="Ver mi página (abre en otra pestaña)">
           <span className="preview-link-label">Ver mi página</span><Icon name="external" size={18} />
@@ -229,12 +296,13 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
       </button>)}
       <button type="button" className={secondarySection ? 'active' : undefined} disabled={interactionLocked}
         aria-haspopup="dialog" aria-expanded={dialog === 'menu'} onClick={() => openDialog('menu')}>
-        <Icon name="grid" /><span>Más</span>
+        <Icon name="menu" /><span>Más</span>
       </button>
     </nav>
     {dialog === 'menu' && <NavigationMenu view={view} user={user} onNavigate={onNavigate}
       onSignOut={onSignOut} onClose={closeDialog} interactionLocked={interactionLocked} />}
     {dialog === 'launcher' && <NavigationLauncher view={view} onNavigate={onNavigate} onCreate={onCreate}
       onClose={closeDialog} interactionLocked={interactionLocked} />}
+    {dialog === 'shortcuts' && <KeyboardShortcuts shortcut={shortcut} onClose={closeDialog} />}
   </>;
 }

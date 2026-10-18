@@ -17,7 +17,7 @@ import BusinessActionDialog from './BusinessActionDialog';
 import CashWorkspace from './CashWorkspace';
 import BusinessSettings from './BusinessSettings';
 import ConfigurationNavigation from './ConfigurationNavigation';
-import { adminTasks,isCurrentAdminTask } from './admin-tasks.mjs';
+import { adminTasks,adminLocationLabel,isCurrentAdminTask } from './admin-tasks.mjs';
 import configurationStyles from './ConfigurationExperience.module.css';
 const contentKeys=Object.keys(schemas);
 const initialResources=()=>Object.fromEntries(contentKeys.map(key=>[key,{records:null,loading:false,error:''}]));
@@ -55,10 +55,12 @@ export default function Admin({csrf,user}) {
  const updateContent=useCallback((kind,patch)=>{const next={...resourcesRef.current,[kind]:{...resourcesRef.current[kind],...patch}};resourcesRef.current=next;setResources(next);},[]);
  const section=view.section;
  const sectionInfo=adminSections.find(item=>item.id===section),sectionLabel=sectionInfo?.label;
- const isConfiguration=sectionInfo?.area==='business',configurationTab=isConfiguration?view.tab:undefined;
+ const isConfiguration=sectionInfo?.area==='business';
  const configurationTask=isConfiguration?adminTasks.find(task=>isCurrentAdminTask(task,view)):null;
  const configurationHome=isConfiguration&&section==='business'&&(!view.tab||view.tab==='setup');
  const settingsDirty=Boolean(settings&&JSON.stringify(settings)!==settingsSnapshot.current);
+ const savedPublication=useMemo(()=>settingsSnapshot.current?Boolean(JSON.parse(settingsSnapshot.current).launchApproved):false,[settingsSnapshot.current]);
+ const giftView=section==='products'&&view.productType==='gift';
  guardState.current={rootBusy:busy,settingsDirty:section==='settings'&&settingsDirty,busy:busy||editorInteractionRef.current.busy||workspaceInteractionRef.current.busy,dirty:editorInteractionRef.current.dirty||workspaceInteractionRef.current.dirty||(section==='settings'&&settingsDirty)};
  const syncGuard=useCallback(()=>{
   const state=guardState.current;
@@ -179,13 +181,11 @@ export default function Admin({csrf,user}) {
   if(href!==adminHref(accepted.current)){if(!navigationHandler.current())writeHistory(adminHref(accepted.current),{replace:true});}
   else if(window.location.pathname+window.location.search!==href)writeHistory(href,{replace:true});
  },[paramString,writeHistory]);
- useEffect(()=>{document.querySelector('[data-admin-section-heading]')?.focus();},[section,configurationTab]);
+ useEffect(()=>{document.querySelector('[data-admin-section-heading]')?.focus();},[section,view.tab,giftView]);
  useEffect(()=>{
-  if(!configurationTask)return;
-  const previous=document.title;
-  document.title=(configurationHome?'Configuración':configurationTask.label+' · Configuración')+' | All Nutrition';
-  return()=>{document.title=previous;};
- },[configurationTask,configurationHome]);
+  const label=adminLocationLabel(view)+(isConfiguration?' · Configuración':'');
+  document.title=label+' | All Nutrition';
+ },[view.section,view.tab,giftView,isConfiguration]);
  useEffect(()=>{const unload=event=>{if(guardState.current.dirty||guardState.current.busy){event.preventDefault();event.returnValue='';}};window.addEventListener('beforeunload',unload);return()=>window.removeEventListener('beforeunload',unload);},[]);
  const navigate=key=>acceptView(typeof key==='string'?{section:key}:key);
  function setQuery(value){setQueryInput(value);cancelSearch();const generation=searchGeneration.current;searchTimer.current=setTimeout(()=>{if(searchGeneration.current===generation)acceptView({...accepted.current,q:value,page:1},{replace:true,check:false});},200);}
@@ -256,7 +256,7 @@ export default function Admin({csrf,user}) {
  return <div className="admin-shell">
   <AdminNavigation view={view} user={user} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onSignOut={signOut} interactionLocked={Boolean(editing)||Boolean(cashAction)||busy||interaction.busy||workspaceInteraction.busy}/>
   <div className={`admin-main${isConfiguration?' '+configurationStyles.viewport:''}`}><main className="admin-content" id="admin-workspace" tabIndex={-1}>
-   {!['home','reports','cash'].includes(section)&&<div className="admin-heading"><div><p className="eyebrow">{isConfiguration?(configurationHome?'Administración':'Configuración'):'Mesa de trabajo'}</p><h1 tabIndex="-1" data-admin-section-heading>{configurationHome?'Configuración':section==='settings'?'Datos y publicación de la vitrina':configurationTask?.label||sectionLabel}</h1><p>{configurationHome?'Todo lo que necesitas para organizar el negocio, mantener tu vitrina y gestionar el acceso.':configurationTask?.description||schemas[section]?.help||(section==='orders'?'Pedidos, envíos y cobros acordados.':'Gestiona los datos de tu negocio.')}</p></div></div>}
+   {!['home','reports','cash'].includes(section)&&<div className="admin-heading"><div><p className="eyebrow">{isConfiguration?(configurationHome?'Administración':'Configuración'):'Mesa de trabajo'}</p><h1 tabIndex="-1" data-admin-section-heading>{configurationHome?'Configuración':section==='settings'?'Datos y publicación de la vitrina':giftView?'Obsequios':configurationTask?.label||sectionLabel}</h1><p>{configurationHome?'Organiza la operación, la vitrina y el acceso al panel.':configurationTask?.description||schemas[section]?.help||(section==='orders'?'Pedidos, envíos y cobros acordados.':'Gestiona los datos de tu negocio.')}</p></div></div>}
    {error&&<div className="error alert" role="alert">{error}<button type="button" className="icon-button" aria-label="Cerrar error" onClick={()=>setError('')}><Icon name="close"/></button></div>}
    {notice&&<div className="success alert" role="status"><Icon name="check"/>{notice}<button type="button" className="icon-button" aria-label="Cerrar aviso" onClick={()=>setNotice('')}><Icon name="close"/></button></div>}
    {opening&&<div className="admin-action-feedback" aria-busy={opening.loading}>{opening.loading?<p role="status">Preparando {opening.record?.title||opening.record?.customerName||'el editor'}…</p>:<div className="error" role="alert">{opening.error}<button type="button" className="text-button" onClick={()=>openEditor(opening.kind,opening.record)}>Reintentar apertura</button></div>}</div>}
@@ -269,7 +269,7 @@ export default function Admin({csrf,user}) {
    {section==='cash'&&<CashWorkspace key={'cash:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
    {section==='business'&&<BusinessSettings key={'business:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
    {section==='settings'&&settings&&<form className={`settings-form ${configurationStyles.vitrinaForm}`} onSubmit={saveSettings} aria-busy={busy} aria-describedby="vitrina-form-help">
-    <div className={configurationStyles.formIntro}><div><strong>{settings.launchApproved?'Publicación seleccionada: vitrina visible':'Publicación seleccionada: modo preparación'}</strong><p id="vitrina-form-help">Revisa los datos y confirma con «Guardar configuración». No hay guardado automático.</p></div></div>
+    <div className={configurationStyles.formIntro}><div><strong>{savedPublication?'Estado guardado: vitrina publicada':'Estado guardado: modo preparación'}</strong>{Boolean(settings.launchApproved)!==savedPublication&&<p>Selección pendiente: {settings.launchApproved?'publicar la vitrina':'volver a modo preparación'}. Se aplicará al guardar.</p>}<p id="vitrina-form-help">Confirma con «Guardar configuración». No hay guardado automático.</p></div></div>
     <nav className={configurationStyles.formIndex} aria-label="Secciones de datos de la vitrina">{settingsGroups.map((group,index)=><button type="button" className="button subtle" key={group.key} onClick={()=>{const heading=document.getElementById(`settings-${group.key}`);heading?.focus({preventScroll:true});heading?.scrollIntoView({block:'start'});}}><span aria-hidden="true">{index+1}</span>{group.action}</button>)}</nav>
     <fieldset className="auth-fieldset" disabled={busy}>
      {settingsGroups.map(group=><section className="settings-group" key={group.key} aria-labelledby={`settings-${group.key}`}>

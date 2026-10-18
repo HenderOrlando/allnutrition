@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Field } from './Fields';
 import useDialog from './useDialog';
+import Icon from './Icons';
 import { bogotaDate } from '@/lib/business/dates.mjs';
 import { formatMoneyMinor, MAX_MONEY_MINOR } from '@/lib/business/money.mjs';
 import styles from './FinanceExperience.module.css';
@@ -213,7 +214,8 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         <p>Neto de líneas vinculadas: {display(net)}</p>
       </>}
       {['payroll-prepare','payroll-confirm'].includes(action)&&<>
-        <div className="product-form-grid">{personSelect()}{input('startOn','Inicio del período',{required:true,type:'date'})}{input('endOnExclusive','Fin exclusivo del período',{required:true,type:'date'})}{amount('bonusMinor','Bonificación (COP)')}{amount('discountMinor','Descuento interno (COP)')}</div>{form.discountMinor>0&&reason()}
+        <div className="product-form-grid">{personSelect()}{input('startOn','Inicio del período',{required:true,type:'date'})}{input('endOnExclusive','Fecha de corte (este día no se incluye)',{required:true,type:'date'})}{amount('bonusMinor','Bonificación (COP)')}{amount('discountMinor','Descuento interno (COP)')}</div>{form.discountMinor>0&&reason()}
+        <p className="hint">Para incluir septiembre completo, usa el 1 de septiembre como inicio y el 1 de octubre como fecha de corte.</p>
         <p className="hint">Control interno, no liquidación laboral legal ni nómina electrónica. Los anticipos no duplican costo; créditos de comisión se compensan antes de pagar.</p>
         {preview&&<section className="form-section" aria-live="polite"><h4>Revisión del período · {preview.state}</h4><dl className="summary-values">{[['Devengado','earnedMinor'],['Obligaciones pendientes','outstandingMinor'],['Créditos del período','creditMinor'],['Créditos disponibles anteriores','availableCreditMinor'],['Anticipos disponibles','advanceAvailableMinor'],['Anticipos a aplicar','advanceToApplyMinor'],['Anticipos aplicados','advanceAppliedMinor'],['Pago nuevo propuesto','amountToPayMinor']].filter(([,key])=>preview[key]!=null).map(([title,key])=><div key={key}><dt>{title}</dt><dd>{display(preview[key])}</dd></div>)}</dl><p>Días por materializar: {preview.missingDayCount??0}. Confirmar registra devengos una sola vez; pagar es una acción separada.</p>{(preview.obligations||[]).map(e=><p key={e.id}>{e.category||e.concept} · {display(e.amountMinor)}</p>)}{(preview.carriedCredits||[]).map(e=><p key={e.id}>Crédito {e.category} · {display(e.creditMinor)}</p>)}<button className="button primary" type="button" onClick={confirmPrepared}>Confirmar período revisado</button></section>}
       </>}
@@ -234,5 +236,5 @@ export default function BusinessActionDialog({action,context,api,onClose,onSaved
   const close=useDialog(ref,{...interaction,onClose});
   const callback=useRef(onInteractionStateChange);callback.current=onInteractionStateChange;
   const report=useRef(state=>{setInteraction(state);callback.current(state);}).current;
-  return <dialog ref={ref} className={`editor-drawer ${styles.actionDialog}`} aria-labelledby="business-action-title"><header><h2 id="business-action-title" tabIndex={-1} data-dialog-initial-focus>{configuration&&action==='account-save'?(context.account?.id?'Editar cuenta':'Crear cuenta'):titles[action]}</h2><button type="button" className="button subtle" onClick={close} disabled={interaction.busy}>{configuration?'Cerrar formulario':'Cerrar'}</button></header><div className="drawer-body"><BusinessActionForm action={action} context={context} api={api} onSaved={onSaved} onCancel={close} onInteractionStateChange={report} configuration={configuration}/></div></dialog>;
+  return <dialog ref={ref} className={`editor-drawer ${styles.actionDialog}`} aria-labelledby="business-action-title"><header><div><p className="eyebrow">Operación del negocio</p><h2 id="business-action-title" tabIndex={-1} data-dialog-initial-focus>{configuration&&action==='account-save'?(context.account?.id?'Editar cuenta':'Crear cuenta'):titles[action]}</h2></div><button type="button" className="icon-button" onClick={close} disabled={interaction.busy} aria-label="Cerrar formulario"><Icon name="close"/></button></header><div className="drawer-body"><BusinessActionForm action={action} context={context} api={api} onSaved={onSaved} onCancel={close} onInteractionStateChange={report} configuration={configuration}/></div></dialog>;
 }

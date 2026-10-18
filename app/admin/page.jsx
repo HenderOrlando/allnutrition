@@ -7,8 +7,7 @@ export const dynamic='force-dynamic';
 export const runtime='nodejs';
 export async function generateMetadata({searchParams}){
  const view=readAdminView(await searchParams),configuration=adminSections.find(section=>section.id===view.section)?.area==='business';
- const home=view.section==='business'&&(!view.tab||view.tab==='setup');
- return {title:configuration?(home?'Configuración':adminLocationLabel(view)+' · Configuración'):'Administración',robots:{index:false,follow:false}};
+ return {title:adminLocationLabel(view)+(configuration?' · Configuración':''),robots:{index:false,follow:false}};
 }
 export default async function Page({searchParams}){
  const returnTo=adminHref(readAdminView(await searchParams));

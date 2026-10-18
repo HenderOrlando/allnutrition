@@ -6,7 +6,7 @@
 .editor .sectionStep {
   margin: 0 0 8px;
   color: var(--admin-muted);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -20,7 +20,7 @@
   border-radius: 50%;
   background: var(--admin-apricot);
   color: var(--admin-apricot-ink);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   vertical-align: middle;
 }
@@ -29,11 +29,46 @@
   grid-column: 1 / -1;
 }
 
-.checklistCount,
-.componentCount {
-  font-size: 13px;
+.checklistCount {
+  font-size: 14px;
   font-weight: 600;
   margin-block: 8px 12px;
+}
+
+.componentCount {
+  font-size: 14px;
+  font-weight: 600;
+  margin-block: 8px 12px;
+}
+
+.editor .requiredNote {
+  margin: 0 0 16px;
+  color: var(--admin-muted);
+  font-size: 14px;
+}
+
+.editor .help {
+  min-width: 0;
+  padding: 0 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.editor .help > summary {
+  min-height: 44px;
+  padding-block: 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.editor .help > p {
+  margin-block: 0 16px;
+  font-size: 14px;
+}
+
+.editor :global(.unsaved-flag) {
+  font-size: 14px;
 }
 
 .catalogChoices :global(.check-grid) {
@@ -49,7 +84,7 @@
 
 .selectionCount {
   color: var(--admin-muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
 }
 

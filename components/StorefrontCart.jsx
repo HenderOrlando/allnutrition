@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 import Icon from './Icons';
 import ImageByUrl from './ImageByUrl';
+import useDialog from './useDialog';
 import { money, whatsAppLink } from '@/lib/schema.mjs';
 
 const storageKey = 'allnutrition:order';
@@ -93,7 +95,7 @@ export function useStorefrontCart(products, combos) {
     setNotice('');
   }
 
-  return { lines, count, total: totalMinor / 100, add, setQuantity, remove, notice, ready };
+  return { lines, count, total: totalMinor / 100, unavailableCount: entries.length - lines.length, add, setQuantity, remove, notice, ready };
 }
 
 export function QuantityPicker({ quantity, onChange, label }) {
@@ -104,15 +106,19 @@ export function QuantityPicker({ quantity, onChange, label }) {
   </div>;
 }
 
-export default function StorefrontCart({ cart, settings, dialogRef }) {
+export default function StorefrontCart({ cart, settings, dialogRef, onClose }) {
+  const close = useDialog(dialogRef, { busy: false, dirty: false, onClose });
+  // Finish the dialog cleanup before the browser scrolls to the native anchor.
+  const followCatalog = () => flushSync(close);
   return <dialog className="store-cart" ref={dialogRef} aria-labelledby="cart-title"
-    onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close(); }}>
+    onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div className="cart-heading">
-      <div><p className="eyebrow">{cart.lines.length ? 'REVISA TU SELECCIÓN' : 'PREPARA TU PEDIDO'}</p><h2 id="cart-title">Mi pedido<span>.</span></h2></div>
-      <button type="button" className="icon-button" aria-label="Cerrar pedido" onClick={() => dialogRef.current.close()}><Icon name="close" size={24}/></button>
+      <div><p className="eyebrow">{cart.lines.length ? 'REVISA TU SELECCIÓN' : 'PREPARA TU PEDIDO'}</p><h2 id="cart-title" tabIndex={-1} data-dialog-initial-focus>Mi pedido<span>.</span></h2></div>
+      <button type="button" className="icon-button" aria-label="Cerrar pedido" onClick={close}><Icon name="close" size={24}/></button>
     </div>
     <div className="cart-lines">
-      {cart.lines.length === 0 ? <div className="cart-empty"><Icon name="box" size={48}/><h3>Tu pedido empieza aquí.</h3><p>Elige productos del catálogo y ajusta las unidades antes de continuar.</p><button className="button primary" onClick={() => dialogRef.current.close()}>Elegir productos <Icon name="arrow"/></button></div> : cart.lines.map(line =>
+      {cart.unavailableCount > 0 && <p className="cart-unavailable" role="status">Hay {cart.unavailableCount} {cart.unavailableCount === 1 ? 'artículo no disponible' : 'artículos no disponibles'} en tu selección guardada. No se incluye{cart.unavailableCount === 1 ? '' : 'n'} en el subtotal ni en el mensaje de WhatsApp.</p>}
+      {cart.lines.length === 0 ? <div className="cart-empty"><Icon name="cart" size={48}/><h3>Tu pedido empieza aquí.</h3><p>Elige productos del catálogo y ajusta las unidades antes de continuar.</p><a className="button primary" href="/#catalogo" onClick={followCatalog}>Elegir productos <Icon name="arrow"/></a></div> : cart.lines.map(line =>
         <article className="cart-line" key={`${line.kind}:${line.id}`}>
           <ImageByUrl src={line.image} alt={line.title} width="82" height="100"/>
           <div className="cart-line-info"><h3>{line.title}</h3><p>{[line.presentation, line.flavor].filter(Boolean).join(' · ')}</p><strong>{money(Math.round(line.price * 100) * line.quantity / 100)} <small>COP</small></strong>
@@ -123,9 +129,9 @@ export default function StorefrontCart({ cart, settings, dialogRef }) {
     {cart.lines.length > 0 && <div className="cart-summary">
       <div className="cart-total"><span>Subtotal · {cart.count} {cart.count === 1 ? 'unidad' : 'unidades'}</span><strong data-cart-total>{money(cart.total)} <small>COP</small></strong></div>
       <p>Abre WhatsApp con este resumen para confirmar disponibilidad y envío.</p>
-      <a className="button primary full" href={orderWhatsAppLink(settings, cart.lines)} target="_blank" rel="noopener noreferrer"><Icon name="chat"/>Continuar por WhatsApp <Icon name="arrow"/></a>
+      <a className="button primary full" href={orderWhatsAppLink(settings, cart.lines)} target="_blank" rel="noopener noreferrer"><Icon name="chat"/>Continuar por WhatsApp</a>
       <span className="cart-reassurance"><Icon name="check" size={13}/>Sin cobros en la web.</span>
-      <button className="text-link cart-continue" onClick={() => dialogRef.current.close()}>Seguir eligiendo</button>
+      <button type="button" className="text-link cart-continue" onClick={close}>Seguir eligiendo</button>
     </div>}
   </dialog>;
 }

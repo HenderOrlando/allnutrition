@@ -24,7 +24,7 @@ const publicationHelp={
 const contentSections={
  combos:[
   {key:'basics',title:'Datos de la oferta',description:'Define el nombre y el precio final del combo. El precio no se calcula a partir de sus productos.',fields:['title','description','price']},
-  {key:'components',title:'Productos del combo',description:'Añade cada referencia una sola vez e indica cuántas unidades incluye.',fields:['items'],singleColumn:true},
+  {key:'components',title:'Productos del combo',description:'Añade cada referencia una sola vez e indica cuántas unidades incluye. Las existencias del combo dependen de estos componentes.',fields:['items'],singleColumn:true},
   {key:'presentation',title:'Imagen y condiciones',description:'Usa una imagen pública e indica los límites o condiciones confirmadas de la oferta.',fields:['image','conditions'],singleColumn:true},
   {key:'publication',title:'Organización y publicación',description:'Asigna catálogos, revisa la dirección corta y elige la visibilidad del combo.',fields:['slug','status','sort','catalogIds']}
  ],
@@ -169,7 +169,6 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
    {(kind==='combos'||isGift)&&<div><dt>Componentes</dt><dd>{form.items?.length?<ul>{form.items.map((item,index)=><li key={index}>{item.quantity} × {componentProducts.find(product=>product.id===item.productId)?.title||'Referencia sin seleccionar'}</li>)}</ul>:'Sin productos incluidos'}</dd></div>}
    <div><dt>Publicación</dt><dd>{publication}</dd></div>
   </dl>
-  <p className="hint">{publicationHelp[form.status]}</p>
   {!!checklist.length&&<>
    <h4>Revisión de la ficha</h4>
    <p className={styles.checklistCount}>{checklist.filter(item=>item.complete).length} de {checklist.length} comprobaciones completas</p>
@@ -181,15 +180,14 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
  return (
   <dialog ref={dialog} className={`editor-drawer ${styles.editor}${configurationContent?' '+configurationStyles.contentEditor:''}`} aria-labelledby="editor-title">
    <header role={configurationContent?'presentation':undefined}>
-    <div><p className="eyebrow">{schema.label}</p><h2 id="editor-title" tabIndex="-1" data-dialog-initial-focus>{record.id?'Editar':'Crear'} {schema.singular}</h2><p className="unsaved-flag" role="status">{dirty?'Cambios sin guardar':'Sin cambios pendientes'}</p></div>
+    <div><p className="eyebrow">{schema.label}</p><h2 id="editor-title" tabIndex="-1" data-dialog-initial-focus>{record.id?'Editar':'Crear'} {schema.singular}</h2></div>
     <button type="button" className="icon-button" aria-label="Cerrar editor" onClick={close} disabled={interactionBusy}><Icon name="close"/></button>
    </header>
    <form onSubmit={save} aria-busy={interactionBusy}>
     <fieldset className="editor-fieldset" disabled={interactionBusy}>
      <div className="drawer-body">
       {error&&<div ref={errorSummary} className="editor-error error" role="alert" tabIndex="-1"><p>{error.message}</p>{error.status===409&&record.id&&<button type="button" className="button subtle" onClick={reload} disabled={interactionBusy}>Cargar versión guardada</button>}</div>}
-      <p className="hint">{schema.help}</p>
-      <p className="small muted">Los campos con <span className="required">*</span> son obligatorios. Revisa las secciones y el resumen antes de guardar. Elegir «Publicado» aplica la visibilidad al guardar, si la vitrina global está habilitada.</p>
+      <p className={styles.requiredNote}>Los campos con <span className="required">*</span> son obligatorios.</p>
       <div className="editor-jump"><label htmlFor="editor-section">Ir a sección del formulario</label><select id="editor-section" name="editorSection" value={activeSection} onChange={event=>goToSection(event.target.value)}>{sections.map(section=><option key={section.key} value={section.key}>{section.title}</option>)}</select></div>
       <details className="editor-mobile-summary"><summary>Así va tu ficha</summary>{summary}</details>
       <div className="editor-layout">
@@ -211,14 +209,20 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
          </div>
          {section.key==='inventory'&&<>{isGift?<p className="hint">Este obsequio no tiene existencias propias: utiliza las unidades de sus componentes. Posibles ahora: {availableUnits??'por contar'}.</p>:<><p className="hint">Reservadas: {record.stockReserved||0} · Disponibles para nuevos pedidos: {availableUnits??'sin contar'}. El conteo físico debe incluir las unidades reservadas.</p>{form.stockQuantity==null&&<p className="hint">Sin un conteo no se pueden reservar ni despachar nuevas unidades de esta referencia.</p>}</>}<p className="small muted">El conteo queda auditado. Registrar existencias no crea compras, gastos ni movimientos de caja. Las reservas se confirman al guardar el pedido, no al seleccionar productos.</p></>}
          {kind==='combos'&&section.key==='components'&&componentCost}
+         {section.key==='publication'&&<p className="hint">La visibilidad elegida se aplica al guardar. «Publicado» solo aparece en la vitrina si su publicación global está habilitada.</p>}
         </section>)}
+        <details className={styles.help}>
+         <summary>Ayuda para completar</summary>
+         <p>{schema.help}</p>
+         <p>Revisa las secciones y el resumen antes de guardar. Guardar aplica los cambios de la ficha; cancelar conserva la última versión guardada.</p>
+        </details>
         {record.id&&<details className="editor-more-options"><summary>{configurationContent?'Eliminar contenido':'Más opciones'}</summary><p className="hint">Eliminar retira este registro de forma irreversible. Si tiene referencias, el servidor puede impedir su eliminación.</p><button className="text-button danger" type="button" onClick={remove} disabled={interactionBusy}>Eliminar {schema.singular}</button></details>}
        </div>
        <aside className="editor-summary" aria-label="Resumen de la ficha" tabIndex={configurationContent?0:undefined}>{summary}</aside>
       </div>
      </div>
      <footer className="editor-footer">
-      <span className="unsaved-flag">{dirty?'Cambios sin guardar':'Sin cambios pendientes'}</span>
+      <span className="unsaved-flag" role="status">{dirty?'Cambios sin guardar':'Sin cambios pendientes'}</span>
       <button type="button" className="button subtle" onClick={close} disabled={interactionBusy}>{configurationContent?'Cancelar edición':'Cancelar'}</button>
       <button type="submit" className="button primary" disabled={interactionBusy}>{busy?'Procesando…':uploadingImage?'Subiendo imagen…':record.id?'Guardar cambios':`Crear ${schema.singular}`}<Icon name="check" size={16}/></button>
      </footer>

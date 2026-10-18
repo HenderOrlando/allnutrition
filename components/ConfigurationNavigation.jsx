@@ -9,9 +9,9 @@ const businessTasks = adminTaskGroups.find(group => group.id === 'business').tas
 const storefrontTasks = adminTaskGroups.find(group => group.id === 'storefront').tasks;
 const setupTask = businessTasks.find(task => task.id === 'setup');
 const groups = [
-  { id: 'business', title: 'Operación del negocio', description: 'Personas, cuentas y reglas para el trabajo interno.', icon: 'sun', tasks: businessTasks.filter(task => !['setup', 'users'].includes(task.id)) },
-  { id: 'storefront', title: 'Vitrina pública', description: 'Lo que ven tus clientes; no cambia pedidos ni envíos.', icon: 'edit', tasks: storefrontTasks },
-  { id: 'access', title: 'Acceso al panel', description: 'Quién puede entrar y administrar el negocio.', icon: 'plus', tasks: businessTasks.filter(task => task.id === 'users') },
+  { id: 'business', title: 'Operación del negocio', description: 'Personas, cuentas y reglas internas.', icon: 'settings', tasks: businessTasks.filter(task => !['setup', 'users'].includes(task.id)) },
+  { id: 'storefront', title: 'Vitrina pública', description: 'Contenido para clientes, no campañas ni seguimiento de guías.', icon: 'edit', tasks: storefrontTasks },
+  { id: 'access', title: 'Acceso al panel', description: 'Usuarios que pueden administrar, distintos de las personas responsables.', icon: 'users', tasks: businessTasks.filter(task => task.id === 'users') },
 ];
 const tasks = [setupTask, ...groups.flatMap(group => group.tasks)];
 
@@ -32,7 +32,7 @@ export default function ConfigurationNavigation({ view, onNavigate, interactionL
   </nav>;
 
   return <nav className={styles.directory} aria-label="Vistas de configuración">
-    <div className={styles.directoryHeading}><h2>¿Qué necesitas configurar?</h2><p>Elige una tarea. Los cambios solo se aplican cuando los guardas.</p></div>
+    <div className={styles.directoryHeading}><h2>¿Qué necesitas configurar?</h2></div>
     <div className={styles.directoryGrid}>
       {groups.map(group => <section className={`${styles.group} ${styles[group.id]}`} key={group.id} aria-labelledby={`${id}-${group.id}`}>
         <header><span className={styles.groupIcon} aria-hidden="true"><Icon name={group.icon}/></span><div><h3 id={`${id}-${group.id}`}>{group.title}</h3><p>{group.description}</p></div></header>
@@ -41,6 +41,6 @@ export default function ConfigurationNavigation({ view, onNavigate, interactionL
         </button></li>)}</ul>
       </section>)}
     </div>
-    <div className={styles.getStarted}><div><strong>¿Estás empezando?</strong><p>Revisa responsables, apertura de cuentas y reglas con el asistente. No es obligatorio para trabajar con pedidos.</p></div><button type="button" className="button subtle" disabled={interactionLocked} data-configuration-task="setup" onClick={() => { const heading = document.getElementById('configuration-setup'); heading?.focus({ preventScroll: true }); heading?.scrollIntoView({ block: 'start' }); }}>Revisar primeros pasos<Icon name="chevron" size={16}/></button></div>
+    <div className={styles.getStarted}><div><strong>¿Estás empezando?</strong><p>Revisa responsables, cuentas y reglas iniciales con el asistente. Es opcional.</p></div><button type="button" className="button subtle" disabled={interactionLocked} data-configuration-task="setup" onClick={() => { const heading = document.getElementById('configuration-setup'); heading?.focus({ preventScroll: true }); heading?.scrollIntoView({ block: 'start' }); }}>Revisar primeros pasos<Icon name="chevron" size={16}/></button></div>
   </nav>;
 }

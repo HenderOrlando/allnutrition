@@ -168,6 +168,17 @@
   margin-bottom: 0;
 }
 
+.workspace .selectedAlert {
+  border: 2px solid var(--admin-accent);
+  background: var(--admin-paper);
+}
+
+.selectionLabel {
+  color: var(--admin-accent-hover);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 @media (max-width: 640px) {
   .setupSteps.setupSteps,
   .preferenceSummary {
