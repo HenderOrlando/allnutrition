@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { openStore } from '../lib/db/index.mjs';
 import { insertRow, stamp } from '../lib/business/commands.mjs';
 import { bogotaDate } from '../lib/business/dates.mjs';
+import { emptyRecord } from '../lib/schema.mjs';
 import { getBusinessSettings, saveBusinessSettings, saveResource, listResources, ALERT_TYPES } from '../lib/business/settings.mjs';
 import { saveAccount } from '../lib/business/cash.mjs';
 import { listAlertRules, getAlertRule, saveAlertRule, pageAlerts, getAlert, updateAlert, alertClientData } from '../lib/business/alerts.mjs';
@@ -90,6 +91,8 @@ test('configuración completa exige recursos reales, no crea caja ni exige sueld
   await assert.rejects(()=>saveBusinessSettings(store,{version:settings.version,requestId:requestId(),setupCompleted:true,setupPolicyConfirmed:true},actor),{status:400});
   const person=await saveResource(store,'people',{name:'Responsable real',requestId:requestId()},actor);
   const account=await saveAccount(store,{name:'Banco real',type:'bank',responsibleId:person.id,openingOn:bogotaDate(),openingBalanceMinor:0,requestId:requestId()},actor);
+  await assert.rejects(()=>saveBusinessSettings(store,{version:settings.version,requestId:requestId(),setupCompleted:true,setupPolicyConfirmed:true,defaultReceiptAccountId:account.id,defaultPaymentAccountId:account.id,alertDefaults:{responsibleId:person.id,reminderHours:24}},actor),/producto/);
+  await store.save('products',{...emptyRecord('products'),title:'Producto real',slug:'producto-real',price:1000,stockQuantity:1,orderable:true},null,null,actor);
   settings=await saveBusinessSettings(store,{version:settings.version,requestId:requestId(),setupCompleted:true,setupPolicyConfirmed:true,defaultReceiptAccountId:account.id,defaultPaymentAccountId:account.id,alertDefaults:{responsibleId:person.id,reminderHours:24},automation:{status:'running'}},actor);
   assert.equal(settings.setupCompleted,true);assert.equal(settings.automation,undefined);assert.equal(settings.setupPayrollSkipped,undefined);
   assert.equal((await listResources(store,'people'))[0].salaryAgreements.length,0);
