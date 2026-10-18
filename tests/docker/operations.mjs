@@ -180,7 +180,8 @@ try {
     ensure(order.totalMinor === 11900000 && order.subtotalMinor === 11000000 && order.shippingChargeMinor === 900000, 'Total operativo incorrecto: se requieren 11900000 centavos.');
     const counter = await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='orders'`);
     const account = await store.db.get(`SELECT id,email,password,active FROM ${store.t('users')} WHERE id=?`, [session.user.id]);
-    const snapshot = { product, payload, actor: session.user.id, order, session, account, counter: counter.value, orderCount: (await store.orders()).length, commercial: await commercialSnapshot(store) };
+    // Reserving the order changes inventory/version; snapshot the committed product, not its pre-order save result.
+    const snapshot = { product: await store.get('products', product.id), payload, actor: session.user.id, order, session, account, counter: counter.value, orderCount: (await store.orders()).length, commercial: await commercialSnapshot(store) };
     writeFileSync(snapshotFile, JSON.stringify(snapshot, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
     console.log('Snapshot operativo privado creado: pedido de 119000, historial, cuenta, sesión e idempotencia.');
   } else if (command === 'assert') {

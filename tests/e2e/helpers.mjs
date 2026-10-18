@@ -27,10 +27,13 @@ export async function navigate(page,destination){
   await menu.getByRole('navigation',{name:'Administración',exact:true}).getByRole('button',{name:area.label,exact:true}).click();
   await expect(menu).toHaveCount(0);
  }
- if(section.id!==area.id){
-  const subnav=page.getByRole('navigation',{name:section.area==='products'?'Vistas de productos':'Vistas de configuración',exact:true});
-  if(section.area==='business')await subnav.locator(`[data-configuration-task="${section.id}"]`).click();
-  else await subnav.getByRole('button',{name:destination,exact:true}).click();
+ if(section.area==='products'){
+  await selectWorkspace(page,'Vistas de productos',destination);
+ }else if(section.id!==area.id){
+  const subnav=page.getByRole('navigation',{name:'Vistas de configuración',exact:true});
+  const selector=subnav.getByRole('combobox',{name:'Cambiar de tarea',exact:true});
+  if(await selector.isVisible())await selector.selectOption(section.id);
+  else await subnav.locator(`[data-configuration-task="${section.id}"]`).click();
  }
  await expect(page).toHaveURL(url=>(url.searchParams.get('section')||'home')===section.id);
 }
@@ -44,6 +47,31 @@ export async function signOut(page){
   await nav.getByRole('button',{name:'Más',exact:true}).click();
   await page.getByRole('dialog',{name:'Todas tus secciones',exact:true}).getByRole('button',{name:'Cerrar sesión',exact:true}).click();
  }
+}
+
+export async function selectWorkspace(scope,label,destination){
+ const nav=scope.getByRole('navigation',{name:label,exact:true});
+ const selector=nav.getByRole('combobox');
+ if(await selector.isVisible()){
+  await selector.selectOption({label:destination});
+  await expect(selector.locator('option:checked')).toHaveText(destination);
+ }else{
+  const button=nav.getByRole('button',{name:destination,exact:true});
+  await button.click();
+  await expect(button).toHaveAttribute('aria-current','page');
+ }
+}
+
+export async function openDisclosure(scope,label){
+ const summary=scope.locator('summary').filter({hasText:label});
+ await expect(summary).toHaveCount(1);
+ if(!await summary.evaluate(element=>element.parentElement.open))await summary.click();
+}
+
+export async function openCashOperation(page,label){
+ const action=page.getByRole('button',{name:label,exact:true});
+ if(!await action.isVisible())await openDisclosure(page,/^(Registrar operación|Otras operaciones)$/);
+ await action.click();
 }
 
 export function visibleRecord(page,text){

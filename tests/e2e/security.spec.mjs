@@ -129,13 +129,25 @@ test('descargar informe usa bytes privados y una sesión vencida no descarga JSO
 });
 
 async function savePublication(page, approved) {
-  await page.getByLabel('Publicar la vitrina (contenido revisado y aprobado)', { exact: true }).setChecked(approved);
+  const publication = page.getByLabel('Publicar la vitrina (contenido revisado y aprobado)', { exact: true });
+  const savedMode = page.getByText(/^Estado guardado:/);
+  const initialMode = await savedMode.innerText();
+  const initiallyApproved = await publication.isChecked();
+  await publication.setChecked(approved);
+  await expect(publication).toBeChecked({ checked: approved });
+  await expect(savedMode).toHaveText(initialMode);
+  const persistedBeforeSave = await page.request.get('/api/admin/settings');
+  expect(persistedBeforeSave.status()).toBe(200);
+  expect((await persistedBeforeSave.json()).launchApproved).toBe(initiallyApproved);
+  if (initiallyApproved !== approved) await expect(page.getByText(/^Selección pendiente:/)).toBeVisible();
   const savedResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/settings' && response.request().method() === 'PUT');
   await page.getByRole('button', { name: 'Guardar configuración', exact: true }).click();
   const response = await savedResponse;
   expect(response.status()).toBe(200);
   expect((await response.json()).launchApproved).toBe(approved);
   await expect(page.getByRole('button', { name: 'Guardar configuración', exact: true })).toBeEnabled();
+  if (initiallyApproved !== approved) await expect(savedMode).not.toHaveText(initialMode);
+  await expect(page.getByText(/^Selección pendiente:/)).toHaveCount(0);
 }
 
 test('publicar habilita la ficha anónima y despublicar vuelve a protegerla', async ({ page, browser, baseURL }, info) => {
@@ -158,7 +170,7 @@ test('publicar habilita la ficha anónima y despublicar vuelve a protegerla', as
   try {
     const publicPage = await anonymous.newPage();
     expect((await publicPage.goto(detailPath)).status()).toBe(404);
-    await navigate(page, 'Contacto y redes');
+    await navigate(page, 'Datos y publicación');
     await expect(page.getByLabel('Publicar la vitrina (contenido revisado y aprobado)', { exact: true })).not.toBeChecked();
     await savePublication(page, true);
     expect((await publicPage.goto(detailPath)).status()).toBe(200);
@@ -174,7 +186,7 @@ test('publicar habilita la ficha anónima y despublicar vuelve a protegerla', as
     try {
       // Reload settings to use the persisted version even if an assertion failed after saving.
       await page.goto('/admin');
-      await navigate(page, 'Contacto y redes');
+      await navigate(page, 'Datos y publicación');
       await savePublication(page, false);
       expect((await anonymous.request.get(detailPath)).status()).toBe(404);
     } finally {

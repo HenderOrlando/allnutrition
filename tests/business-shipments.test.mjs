@@ -74,7 +74,7 @@ test('local label observations keep unknown dates separate from recording timest
   await assert.rejects(event(store,shipment,'collected',{occurredAt:'2026-09-02T10:00:00Z'}));
   await assert.rejects(event(store,shipment,'unmapped-status'));
   const delivered = await event(store,shipment,'delivered',{occurredOn:null,sourceAsOf:'2026-09-03T16:00:00Z',rawStatus:'ENTREGADO',detail:'Confirmación sin fecha',source:'excel'});
-  assert.equal(delivered.events.at(-1).rawStatus,'ENTREGADO');
+  assert.equal(delivered.events.find(event => event.status === 'delivered')?.rawStatus,'ENTREGADO');
   const savedOrder = await loadOrderData(store,order.id);
   assert.equal(savedOrder.deliverySummary.complete,true);
   assert.equal(savedOrder.deliverySummary.datedDeliveredQuantity,0);
@@ -160,8 +160,8 @@ test('old observations, unknown codes, and snapshot incidents retain evidence wi
   assert.equal(shipment.status,'delivered');
   const recognition = (await loadOrderData(store,order.id)).recognition;
   shipment = await snapshot('unknown','2026-09-06T12:00:00Z',{rawStatus:'X-404'});
-  assert.equal(shipment.events.at(-1).status,'unknown');
-  assert.equal(shipment.events.at(-1).rawStatus,'X-404');
+  assert.equal(shipment.events.find(event => event.rawStatus === 'X-404')?.status,'unknown');
+  assert.equal(shipment.status,'delivered');
   assert.deepEqual((await loadOrderData(store,order.id)).recognition,recognition);
   await assert.rejects(snapshot('in_transit','2026-09-07T12:00:00Z'),conflict);
   assert.equal((await loadOrderData(store,order.id)).dispatchedOn,null);

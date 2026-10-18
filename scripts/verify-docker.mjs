@@ -245,14 +245,15 @@ try {
   const webId = compose(['ps', '-q', 'web'], 'Identificación del contenedor web', { quiet: true }).stdout.trim();
   const runningImage = run('docker', ['inspect', '--format', '{{.Image}}', webId], 'Identidad de imagen ejecutada', { quiet: true }).stdout.trim();
   ensure(runningImage === result.imageId, 'El contenedor ejecutado no coincide con el imageId construido.');
+  await startWorker();
+  passed('scheduler real: misma imagen limitada, sin puertos y heartbeat persistido');
+  // Import E2E observes the real worker's 60-second idle before parse/preview in both serial projects.
   run('npm', ['run', 'test:e2e'], 'E2E escritorio/móvil y fronteras HTTP', {
-    timeout: 300000,
+    timeout: 600000,
     env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright, PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json') },
   });
   passed('Playwright desktop/mobile: upload local, render público, límites HTTP, autenticación y CSRF');
 
-  await startWorker();
-  passed('scheduler real: misma imagen limitada, sin puertos y heartbeat persistido');
   const operations = command => compose(['run', '--rm', 'checks', 'node', 'tests/docker/operations.mjs', command], `Operaciones PostgreSQL: ${command}`);
   if (interactive) {
     stopWorker();
