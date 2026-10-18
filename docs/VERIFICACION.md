@@ -1,5 +1,38 @@
 # Verificación v3 — administración de negocio
 
+## Importación recuperable de Historial Guías · 18 de octubre de 2026
+
+Verificación local sobre Next.js **16.3.8** compilado, Node **24.14.1**, Chromium y dos bases SQLite aisladas. No se accedió a producción ni se ejecutaron comandos de migración. El Excel original permaneció intacto y no se añadió al repositorio: SHA-256 anterior, posterior y del original descargado por la API `45ae9ead4fd8003e7547e3ec1cf153c83cb739e474af1099698fbc9495d3284f`.
+
+### Causa y recorrido comprobados
+
+`Historial Guías.xlsx` contiene una hoja `Sheet1`, **341 filas y 15 columnas**: portada en fila 1, encabezados en fila 2, dos columnas «Estado» y **339 filas de datos**. La lectura parcial informaba 1×1 sin dimensiones completas; configurar el encabezado real provocaba `EXCEL_HEADER` y el objeto de error terminaba en la pantalla completa «No pudimos cargar la página». Se reprodujo esa cadena en una compilación anterior, no la duración de 5–10 minutos reportada en producción.
+
+Tras corregir dimensiones y renderizado se recuperó **el mismo lote ya fallido**, sin cambiar artificialmente la extracción ni subir de nuevo sus bytes. La extracción de comprobación asignó ID externo de envío, guía, transportadora, destinatario, teléfono y ciudad, con propósito de seguimiento. No se inventaron productos, cantidades, precios ni semántica financiera o fechas del reporte: el archivo no contiene las líneas comerciales necesarias para crear ventas completas.
+
+| Variante aislada | Saldo de apertura añadido al fixture (COP) | Filas de revisión válidas | Grupos rechazados |
+|---|---:|---:|---:|
+| Caja en cero | 0 | 339 | 0 |
+| Caja positiva | 12.345 | 339 | 0 |
+
+Ambas variantes llegaron al paso **3. Revisión** en navegador. Diez tablas de hechos comerciales conservaron sus filas frente al fixture de origen; la única diferencia intencional de preparación fue la nueva cuenta sintética y su apertura positiva. No se aceptaron ni aplicaron los grupos de este archivo.
+
+Una extracción con encabezado **999** produjo diagnóstico de configuración con hoja/fila, acción y código `EXCEL_HEADER`, sin romper el panel. Se navegó a Inicio, volvió a la entrada de importaciones, retomó el lote y recargó: conservaba archivo y encabezado 999. Corregir a 2 generó otra revisión de 339 filas en el mismo lote. Una copia truncada produjo diagnóstico de archivo `EXCEL_INVALID`, conservó el original de su lote y permitió navegar. Durante la generación de fondo también se salió del panel; la revisión solo se mostró al existir un resultado real. Vista móvil **390×844**, sin desbordamiento horizontal.
+
+### Comandos y límite pendiente
+
+| Comprobación | Resultado observado |
+|---|---|
+| `node --test tests/business-imports.test.mjs tests/import-excel.test.mjs` | **59 aprobadas**, cero fallidas u omitidas. Incluye dimensiones ausentes, recuperación, diagnóstico, disponibilidad, reversión y rechazo de revisiones obsoletas. |
+| `npm run check` | **176 archivos**, cero errores de sintaxis/imports locales. |
+| `npm run build` | Compilación y generación aprobadas, código **0**. |
+| Primer `npm test`, con conexión PostgreSQL de pruebas vacía | **426 aprobadas**, cero fallidas, una omitida PostgreSQL. |
+| Último `npm test`, después de añadir la regresión de relectura pendiente | **425 aprobadas**, dos fallos contabilizados —la subprueba de devolución irrecuperable y su contrato SQLite padre—, una omitida PostgreSQL. |
+
+El fallo pendiente está en `tests/business-inventory-contract.mjs`, caso «una devolución irrecuperable despachada no descuenta dos veces y una pendiente sí consume»: `lib/business/inventory.mjs:53` devuelve 409 al asignar unidades ya devueltas. Esa ruta no fue modificada y no se reintentó la suite hasta obtener verde. Revisar o corregir inventario requiere autorización para ampliar el alcance; no se acredita una suite completa final aprobada.
+
+Dos intentos de corrección del importador: el primero pasó los contratos pero el navegador detectó que un lote ya fallido con configuración guardada no reencolaba sus muestras; se añadió una regresión fallando antes y pasando después. Evidencia privada sanitizada en `.test-data/import-preview-zf44ag/{baseline,verification}.json` y capturas del recorrido. No se acredita ejecución PostgreSQL, E2E completo, CI remoto, push ni despliegue.
+
 ## Onboarding con datos previos y diagnóstico repetible · 18 de octubre de 2026
 
 Ajuste verificado **solo en local**, con Node **24.14.1**, Next.js **16.3.8**, Chromium y una copia privada de SQLite sintética. Sin acceso a datos reales, configuración productiva ni despliegue. No hay cambios de esquema de aplicación ni se ejecutaron comandos de migración.

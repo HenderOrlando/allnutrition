@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
+import { zipSync, unzipSync, strFromU8, strToU8 } from 'fflate';
 import { openStore } from '../lib/db/index.mjs';
 import { businessOrderInput, createBusinessBasics, fixtureActor, requestId } from './business-fixtures.mjs';
 import { saveResource } from '../lib/business/settings.mjs';
@@ -363,4 +364,162 @@ test('recaudo conocido sin fecha queda en cobertura pendiente, no fabrica caja n
   await finish(store,batch);const order=await linkedOrder(store,f.source.id), collection=order.collections[0];
   assert.equal(collection.amountMinor,6700000);assert.equal(collection.occurredOn,null);assert.equal(collection.requiresDateReview,true);assert.equal(collection.cashEntryId,null);assert.equal(await tableCount(store,'cash_entries'),1);assert.equal(await tableCount(store,'commission_entries'),0);
   await finish(store,await preview(store,await upload(store,f,[row])));assert.equal(await tableCount(store,'order_collections'),1);
+}));
+
+test('hoja sin dimensiones con portada y encabezados repetidos permite inspección y revisión sin efectos financieros',()=>fixture(async(store,f)=>{
+  const headers=['Guía','Estado','Estado','Transportadora'];
+  const entries=unzipSync(writeExcelSheets([{name:'Datos',rows:[['Reporte sintético'],headers,...Array.from({length:30},(_,index)=>[`000${index}`,'Tránsito','Observación','Transportadora sintética'])]}]));
+  entries['xl/worksheets/sheet1.xml']=strToU8(strFromU8(entries['xl/worksheets/sheet1.xml']).replace(/<dimension\b[^>]*\/>/g,''));
+  const bytes=Buffer.from(zipSync(entries));
+  const config=configFor([],{headerRow:2,purpose:'tracking',columns:headers.map((header,index)=>({index,header:header.toLowerCase(),destination:['tracking','rawStatus','','carrier'][index]}))});
+  let batch=await upload(store,f,[],{bytes,config,resolutions:[]});
+  assert.equal(batch.workbook.sheets[0].rowCount,32);assert.equal(batch.workbook.sheets[0].columnCount,4);
+  await processImportTurn(store,{batchId:batch.id});batch=await getImportBatch(store,batch.id);
+  assert.equal(batch.error,null);assert.equal(batch.workbook.headerRow,2);
+  batch=await preview(store,batch);
+  assert.equal(batch.preview.summary.valid,30);assert.equal(batch.rows.total,30);
+  assert.ok(batch.preview.groups.every(group=>group.tasks.some(task=>task.type==='link_order')));
+  assert.deepEqual((await downloadImportOriginal(store,batch.id)).bytes,bytes);
+  assert.equal(await tableCount(store,'orders'),0);assert.equal(await tableCount(store,'shipments'),0);assert.equal(await tableCount(store,'order_collections'),0);assert.equal(await tableCount(store,'cash_entries'),1);
+}));
+
+test('asignaciones que convergen en una columna fallan de forma durable y una corrección genera revisión fresca',()=>fixture(async(store,f)=>{
+  const headers=['tracking','carrier'], rows=[{tracking:'000MAP',carrier:'Transportadora sintética'}], bytes=bytesFor(rows,headers), config=configFor(headers,{purpose:'tracking'});
+  let batch=await preview(store,await upload(store,f,rows,{bytes,headers,config,resolutions:[]}));
+  const oldHash=batch.preview.previewHash;
+  const badConfig={...config,columns:[{index:0,header:'tracking',destination:'tracking'},{index:1,header:'tracking',destination:'externalShipmentId'}]};
+  batch=await updateImportBatch(store,batch.id,{version:batch.version,requestId:requestId(),config:badConfig},actor);
+  batch=await preview(store,batch);
+  assert.equal(batch.state,'review');assert.equal(batch.preview,null);
+  assert.equal(batch.error.code,'IMPORT_COLUMN_COLLISION');assert.equal(batch.error.category,'configuration');
+  assert.equal(batch.error.phase,'preview');assert.equal(batch.error.sheet,'Datos');assert.equal(batch.error.rowNumber,1);assert.equal(batch.error.column,1);assert.equal(batch.error.field,'externalShipmentId');assert.ok(batch.error.action);
+  assert.deepEqual(batch.progress.error,batch.error);assert.equal(batch.config.columns[1].destination,'externalShipmentId');
+  assert.deepEqual((await downloadImportOriginal(store,batch.id)).bytes,bytes);
+  assert.equal((await store.db.get(`SELECT state FROM ${store.t('job_runs')} WHERE key=?`,[`import:${batch.id}`])).state,'failed');
+  await assert.rejects(()=>commitImport(store,batch.id,{version:batch.version,previewHash:oldHash,requestId:requestId()},actor),{status:409});
+  assert.equal((await processImportTurn(store,{batchId:batch.id})).processed,0);
+  batch=await updateImportBatch(store,batch.id,{version:batch.version,requestId:requestId(),config},actor);
+  assert.equal(batch.progress.error,null);
+  batch=await preview(store,batch);assert.equal(batch.error,null);assert.equal(batch.preview.summary.valid,1);
+  assert.equal(await tableCount(store,'orders'),0);assert.equal(await tableCount(store,'shipments'),0);assert.equal(await tableCount(store,'import_revisions'),0);
+}));
+
+async function withImportDatabaseFailure(store,method,error,run) {
+  const original=store[method].bind(store);let injected=false;
+  store[method]=fn=>original(tx=>{
+    const get=tx.db.get.bind(tx.db);
+    tx.db={...tx.db,get:async(sql,values)=>{
+      if(!injected && sql.includes(tx.t('external_links'))){injected=true;throw error;}
+      return get(sql,values);
+    }};
+    return fn(tx);
+  });
+  try {await run();assert.equal(injected,true);} finally {store[method]=original;}
+}
+
+test('excepción interna en preparación termina el trabajo, conserva datos y permite reintentar sin revisión falsa',()=>fixture(async(store,f)=>{
+  let batch=await upload(store,f,[basicRow()]);
+  const config=batch.config,original=(await downloadImportOriginal(store,batch.id)).bytes;
+  await requestImportPreview(store,batch.id,{version:batch.version,requestId:requestId()},actor);
+  const failure=new TypeError('detalle interno que no se debe publicar');
+  await withImportDatabaseFailure(store,'readSnapshot',failure,async()=>{
+    await assert.rejects(()=>processImportTurn(store,{batchId:batch.id}),error=>error===failure);
+  });
+  batch=await getImportBatch(store,batch.id);
+  assert.equal(batch.state,'review');assert.equal(batch.preview,null);assert.equal(batch.error.code,'IMPORT_INTERNAL');assert.equal(batch.error.category,'system');assert.ok(batch.error.action);
+  assert.ok(!batch.error.message.includes('detalle interno'));assert.deepEqual(batch.config,config);assert.deepEqual((await downloadImportOriginal(store,batch.id)).bytes,original);
+  const job=await store.db.get(`SELECT state,error_code FROM ${store.t('job_runs')} WHERE key=?`,[`import:${batch.id}`]);
+  assert.equal(job.state,'failed');assert.equal(job.error_code,'IMPORT_INTERNAL');
+  assert.equal((await processImportTurn(store,{batchId:batch.id})).state,null);
+  batch=await preview(store,batch);assert.equal(batch.error,null);assert.equal(batch.preview.summary.valid,1);
+  assert.equal(await tableCount(store,'orders'),0);assert.equal(await tableCount(store,'order_collections'),0);
+}));
+
+test('disponibilidad durante preparación reintenta el trabajo sin convertir el fallo en rechazo de filas',()=>fixture(async(store,f)=>{
+  let batch=await upload(store,f,[basicRow()]);
+  await requestImportPreview(store,batch.id,{version:batch.version,requestId:requestId()},actor);
+  await withImportDatabaseFailure(store,'readSnapshot',Object.assign(new Error('servicio no disponible'),{status:503}),async()=>{
+    const turn=await processImportTurn(store,{batchId:batch.id});assert.equal(turn.state,'queued');assert.equal(turn.hasMore,true);
+  });
+  batch=await getImportBatch(store,batch.id);assert.equal(batch.state,'previewing');assert.equal(batch.preview,null);assert.equal(batch.error,null);
+  assert.equal((await store.db.get(`SELECT state,error_code FROM ${store.t('job_runs')} WHERE key=?`,[`import:${batch.id}`])).error_code,'IMPORT_UNAVAILABLE');
+  await processImportTurn(store,{batchId:batch.id});batch=await getImportBatch(store,batch.id);
+  assert.equal(batch.preview.summary.valid,1);assert.equal(batch.error,null);assert.equal(await tableCount(store,'orders'),0);
+}));
+
+test('disponibilidad real conserva revisión aceptada y grupos aplicados sin duplicarlos al reanudar',()=>fixture(async(store,f)=>{
+  const rows=[1,2].map(n=>basicRow({externalOrderId:`DB-${n}`,externalShipmentId:`DB-S-${n}`,tracking:`000DB${n}`,collectionExternalId:`DB-C-${n}`}));
+  let batch=await preview(store,await upload(store,f,rows));await accept(store,batch);
+  await processImportTurn(store,{batchId:batch.id,maxGroups:1});batch=await getImportBatch(store,batch.id);
+  const acceptedRevision=batch.acceptedRevision;assert.equal(await tableCount(store,'orders'),1);
+  await withImportDatabaseFailure(store,'transaction',Object.assign(new Error('connection reset'),{code:'ECONNRESET'}),async()=>{
+    assert.equal((await processImportTurn(store,{batchId:batch.id})).state,'queued');
+  });
+  batch=await getImportBatch(store,batch.id);assert.equal(batch.acceptedRevision,acceptedRevision);assert.equal(await tableCount(store,'orders'),1);assert.equal(await tableCount(store,'import_revisions'),1);
+  assert.equal((await processImportTurn(store,{batchId:batch.id})).state,'completed');
+  assert.equal(await tableCount(store,'orders'),2);assert.equal(await tableCount(store,'order_collections'),2);assert.equal(await tableCount(store,'import_revisions'),1);
+}));
+
+test('errores de fecha e importe identifican celda y campo sin atribuir una causa no demostrada',()=>fixture(async(store,f)=>{
+  const batch=await preview(store,await upload(store,f,[basicRow({placedOn:'31/12/2025',shippingOutCost:'no es importe'})]));
+  assert.equal(batch.preview.summary.valid,0);
+  for(const [code,field] of [['EXCEL_DATE','placedOn'],['EXCEL_MONEY','shippingOutCost']]){
+    const error=batch.preview.groups[0].errors.find(error=>error.code===code);
+    assert.equal(error.category,'system');assert.equal(error.sheet,'Datos');assert.equal(error.rowNumber,2);assert.equal(error.column,fields.indexOf(field)+1);assert.equal(error.field,field);assert.ok(error.action);
+  }
+  assert.equal(await tableCount(store,'orders'),0);assert.equal(await tableCount(store,'expenses'),0);
+}));
+
+test('inspección fallida conserva el original y permite corregir hoja y encabezado sin cargar otro archivo',()=>fixture(async(store,f)=>{
+  const bytes=writeExcelSheets([{name:'Datos',rows:[[],['tracking','carrier'],['000RECOVER','Transportadora sintética']]}]);
+  let batch=await createImportBatch(store,{sourceId:f.source.id,requestId:requestId()},actor);
+  batch=await uploadImportFile(store,batch.id,{filename:'encabezados.xlsx',bytes,version:batch.version,requestId:requestId()},actor);
+  await processImportTurn(store,{batchId:batch.id});batch=await getImportBatch(store,batch.id);
+  assert.equal(batch.state,'failed');assert.equal(batch.preview,null);assert.equal(batch.error.code,'EXCEL_HEADER');assert.equal(batch.error.category,'configuration');assert.equal(batch.error.phase,'inspect');assert.equal(batch.error.sheet,'Datos');assert.equal(batch.error.rowNumber,1);
+  assert.deepEqual((await downloadImportOriginal(store,batch.id)).bytes,bytes);
+  batch=await updateImportBatch(store,batch.id,{version:batch.version,requestId:requestId(),config:configFor(['tracking','carrier'],{headerRow:2,purpose:'tracking'})},actor);
+  await processImportTurn(store,{batchId:batch.id});batch=await getImportBatch(store,batch.id);
+  assert.equal(batch.error,null);assert.equal(batch.workbook.headerRow,2);
+  batch=await preview(store,batch);assert.equal(batch.preview.summary.valid,1);assert.equal(await tableCount(store,'shipments'),0);
+}));
+
+test('releer muestras pendientes conserva la configuración ya guardada tras una inspección fallida',()=>fixture(async(store,f)=>{
+  const headers=['tracking','carrier'],config=configFor(headers,{headerRow:2,purpose:'tracking'});
+  const bytes=writeExcelSheets([{name:'Datos',rows:[['Portada'],headers,['000PENDING','Transportadora sintética']]}]);
+  let batch=await upload(store,f,[],{bytes,headers,config:configFor(headers,{purpose:'tracking'}),resolutions:[]});
+  // Persisted batches from a failed inspection can have newer config than their samples.
+  const saved=await store.db.get(`SELECT data FROM ${store.t('import_batches')} WHERE id=?`,[batch.id]);
+  await store.db.run(`UPDATE ${store.t('import_batches')} SET state='failed',data=? WHERE id=?`,[
+    JSON.stringify({...JSON.parse(saved.data),config,error:{code:'EXCEL_HEADER',message:'Inspección pendiente',category:'configuration'}}),batch.id
+  ]);
+  batch=await getImportBatch(store,batch.id);
+  assert.equal(batch.config.headerRow,2);assert.equal(batch.workbook.headerRow,1);
+  batch=await updateImportBatch(store,batch.id,{version:batch.version,requestId:requestId(),config:batch.config},actor);
+  assert.equal(batch.state,'uploaded');
+  await processImportTurn(store,{batchId:batch.id});batch=await getImportBatch(store,batch.id);
+  assert.equal(batch.error,null);assert.equal(batch.workbook.headerRow,2);
+  batch=await preview(store,batch);
+  assert.equal(batch.preview.summary.valid,1);assert.equal(batch.rows.total,1);
+  assert.deepEqual((await downloadImportOriginal(store,batch.id)).bytes,bytes);
+  assert.equal(await tableCount(store,'shipments'),0);
+}));
+
+test('cambiar fila de encabezados invalida las filas almacenadas y relee todas las filas del original',()=>fixture(async(store,f)=>{
+  const headers=['tracking','carrier'],config=configFor(headers,{headerRow:3,purpose:'tracking'});
+  const bytes=writeExcelSheets([{name:'Datos',rows:[headers,['000EARLY','Transportadora sintética'],headers,['000LATE','Transportadora sintética']]}]);
+  let batch=await upload(store,f,[],{bytes,headers,config,resolutions:[]});
+  await processImportTurn(store,{batchId:batch.id});batch=await preview(store,await getImportBatch(store,batch.id));
+  assert.equal(batch.rows.total,1);
+  batch=await updateImportBatch(store,batch.id,{version:batch.version,requestId:requestId(),config:{...config,headerRow:1}},actor);
+  await processImportTurn(store,{batchId:batch.id});batch=await preview(store,await getImportBatch(store,batch.id));
+  assert.equal(batch.rows.total,3);assert.ok(batch.rows.records.some(row=>row.rowNumber===2));assert.ok(batch.rows.records.some(row=>row.rowNumber===4));
+  assert.equal(await tableCount(store,'shipments'),0);assert.deepEqual((await downloadImportOriginal(store,batch.id)).bytes,bytes);
+}));
+
+test('hoja sin filas de datos no genera una revisión vacía aceptable',()=>fixture(async(store,f)=>{
+  const headers=['tracking','carrier'];
+  const batch=await preview(store,await upload(store,f,[],{headers,config:configFor(headers,{purpose:'tracking'}),resolutions:[]}));
+  assert.equal(batch.preview,null);assert.equal(batch.error.code,'IMPORT_EMPTY_ROWS');assert.equal(batch.error.rowNumber,1);assert.equal(batch.error.sheet,'Datos');
+  assert.equal((await store.db.get(`SELECT state FROM ${store.t('job_runs')} WHERE key=?`,[`import:${batch.id}`])).state,'failed');
+  assert.equal(await tableCount(store,'shipments'),0);assert.equal(await tableCount(store,'import_revisions'),0);
 }));

@@ -49,7 +49,20 @@ function groupCaption(group){
  const guides=[...new Set((group.units||[]).flatMap(unit=>unit.shipments||[]).map(shipment=>shipment.values?.tracking||shipment.values?.externalShipmentId).filter(Boolean))];
  return guides.length?`${guides.length===1?'Guía':'Guías'} ${guides.join(', ')}`:`Filas ${(group.rowNumbers||[]).join(', ')||'por revisar'}`;
 }
-const messages=errors=>(errors||[]).map(error=>typeof error==='string'?error:error.message||error.reason||error.code||'Revisar dato');
+const diagnosticValue=value=>typeof value==='string'||typeof value==='number'?String(value):'';
+function diagnosticText(error){
+ if(error==null)return '';
+ return diagnosticValue(error)||diagnosticValue(error.message)||diagnosticValue(error.reason)||diagnosticValue(error.code)||'No se recibió un detalle legible del error.';
+}
+function diagnosticLocation(error){
+ if(!error||typeof error!=='object')return '';
+ return [['Hoja',error.sheet],['Fila',error.rowNumber],['Columna',error.column],['Campo',error.field]].map(([label,value])=>diagnosticValue(value)?`${label}: ${diagnosticValue(value)}`:'').filter(Boolean).join(' · ');
+}
+const messages=errors=>(Array.isArray(errors)?errors:errors?[errors]:[]).map(error=>[diagnosticText(error),diagnosticLocation(error),diagnosticValue(error?.action)].filter(Boolean).join(' · '));
+function ImportDiagnostic({diagnostic,alertRef}){
+ const category=diagnostic?.category,title=category==='file'?'Problema comprobado del archivo':category==='configuration'?'Revisa la configuración de extracción':'Problema del sistema o causa no determinada',location=diagnosticLocation(diagnostic),actions=Array.isArray(diagnostic?.actions)?diagnostic.actions.map(diagnosticValue).filter(Boolean):[diagnosticValue(diagnostic?.action)].filter(Boolean);
+ return <section className="error" role="alert" tabIndex={-1} ref={alertRef} aria-label="Diagnóstico de importación"><h3>{title}</h3><p>{diagnosticText(diagnostic)}</p>{location&&<p>{location}</p>}{actions.map((action,index)=><p key={index}><strong>Qué hacer:</strong> {action}</p>)}{!actions.length&&<p>Conserva este lote y su original. Puedes salir del importador y retomarlo; comunica el código y el lote si necesitas soporte.{category!=='file'&&category!=='configuration'?' No se ha determinado que el archivo sea la causa.':''}</p>}{diagnostic?.code&&<p className="small">Código: {diagnosticValue(diagnostic.code)}{diagnosticValue(diagnostic.phase)?` · Fase: ${diagnosticValue(diagnostic.phase)}`:''}</p>}</section>;
+}
 const safeName=value=>String(value||'archivo.xlsx').replace(/[\\/\u0000-\u001f]/g,'_');
 function profileConfig(profile){const {id,name,sourceId,version,createdAt,updatedAt,...data}=profile||{};return {...blankConfig(),...(profile?.profile||profile?.data||data)};}
 function summaryItems(summary){return Object.entries(summary||{}).filter(([key,value])=>RESULT_LABELS[key]&&typeof value==='number');}
@@ -59,32 +72,40 @@ function rowExternalKey(action,row){const values=row.normalized?.values||{};if(a
 
 export default function ImportWizard({api,view,onViewChange,onInteractionStateChange,onCreateProduct,onMutation}){
  const errorRef=useRef(null),headingRef=useRef(null),currentBatch=useRef(null),loadSequence=useRef(0),sourceSequence=useRef(0),profileSequence=useRef(0),lookupSequence=useRef(0),mounted=useRef(true),baseline=useRef(''),lastNotification=useRef('');
- const prefillContext=useRef('');
+ const prefillContext=useRef(''),diagnosticRef=useRef(null),requestBusy=useRef(false),requestedNew=useRef(false),listSequence=useRef(0);
  const [batch,setBatch]=useState(null),[batches,setBatches]=useState(null),[platforms,setPlatforms]=useState([]),[sources,setSources]=useState([]),[profiles,setProfiles]=useState([]),[platformId,setPlatformId]=useState(''),[sourceId,setSourceId]=useState(''),[profileId,setProfileId]=useState(''),[platformName,setPlatformName]=useState(''),[sourceName,setSourceName]=useState(''),[advancedSource,setAdvancedSource]=useState(false),[profileName,setProfileName]=useState(''),[file,setFile]=useState(null),[config,setConfig]=useState(blankConfig),[resolutions,setResolutions]=useState([]),[step,setStep]=useState(1),[busy,setBusy]=useState(''),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[ready,setReady]=useState(false),[page,setPage]=useState(1),[rowState,setRowState]=useState(''),[includeValidOnly,setIncludeValidOnly]=useState(false),[resolver,setResolver]=useState(null),[lookup,setLookup]=useState([]),[lookupQuery,setLookupQuery]=useState(''),[lookupLoading,setLookupLoading]=useState(false),[rules,setRules]=useState([]),[statusDraft,setStatusDraft]=useState('');
  const [resourceRetry,setResourceRetry]=useState(0);
  const [groupPage,setGroupPage]=useState(1);
- const locked=LOCKED_STATES.has(batch?.state),durable=locked||FINAL_STATES.has(batch?.state),draft=json({config,resolutions,profileId}),dirty=!!resolver||!!batch&&!locked&&draft!==baseline.current||!batch&&!!(file||platformName||sourceName||profileName);
+ const [newBatch,setNewBatch]=useState(!!(view?.source||view?.record));
+ const locked=LOCKED_STATES.has(batch?.state),durable=locked||FINAL_STATES.has(batch?.state),draft=json({config,resolutions,profileId}),dirty=!!resolver||!!statusDraft||!!profileName||!!batch&&!locked&&draft!==baseline.current||!batch&&!!(file||platformName||sourceName);
+ const diagnostic=batch?.error||batch?.progress?.error||(batch?.state==='failed'?(batch.progress?.message||{message:'El servidor no completó este lote.',category:'system'}):null);
+ const listSource=view?.source||(view?.record?sourceId:'');
+ const diagnosticKey=diagnostic?[diagnosticText(diagnostic),diagnosticLocation(diagnostic),diagnosticValue(diagnostic.code),diagnosticValue(diagnostic.phase)].join('|'):'';
  currentBatch.current=batch;
- useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;loadSequence.current++;lookupSequence.current++;};},[]);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;requestBusy.current=false;loadSequence.current++;sourceSequence.current++;profileSequence.current++;lookupSequence.current++;};},[]);
  useEffect(()=>{onInteractionStateChange?.({dirty,busy:!!busy});},[dirty,busy,onInteractionStateChange]);
  useEffect(()=>()=>onInteractionStateChange?.({dirty:false,busy:false}),[onInteractionStateChange]);
  useEffect(()=>{if(error)errorRef.current?.focus();},[error]);
+ useEffect(()=>{if(diagnosticKey)diagnosticRef.current?.focus();},[diagnosticKey]);
  useEffect(()=>{headingRef.current?.focus();},[step]);
  useEffect(()=>{setGroupPage(1);},[batch?.preview?.previewHash]);
  const acceptBatch=useCallback((data,{hydrate=false}={})=>{
   if(!data?.id)return;
+  const wasPreviewing=currentBatch.current?.state==='previewing';
   setBatch(data);
   if(hydrate||data.workbook&&!currentBatch.current?.workbook){const next={...blankConfig(),...(data.config||{}),sheetName:data.config?.sheetName||data.workbook?.sheetName||''};setConfig(next);setResolutions(data.resolutions||[]);setProfileId(data.profileId||'');baseline.current=json({config:next,resolutions:data.resolutions||[],profileId:data.profileId||''});setPlatformId(data.platformId||'');setSourceId(data.sourceId||'');}
   if(data.state==='queued'||data.state==='applying'||FINAL_STATES.has(data.state))setStep(4);
-  else if(data.preview?.previewHash||data.preview?.groups?.length)setStep(current=>hydrate?3:current);
-  else if(data.workbook)setStep(current=>hydrate||current===1?2:current);
+  else if(data.state==='review'&&data.preview?.previewHash)setStep(current=>hydrate||wasPreviewing?3:current);
+  else if(data.fileHash||data.workbook)setStep(current=>hydrate||current===1||data.state==='previewing'||!data.preview?.previewHash?2:current);
  },[]);
  const loadLists=useCallback(async()=>{
+  const sequence=++listSequence.current;
+  if(view?.record&&!listSource)return;
   setLoading(true);setError('');
-  try{const [platformData,batchData]=await Promise.all([api('/api/admin/business/platforms'),api('/api/admin/imports')]);if(!mounted.current)return;setPlatforms(records(platformData));setBatches(batchData);setReady(true);}
-  catch(cause){if(mounted.current)setError(cause.message);}finally{if(mounted.current)setLoading(false);}
- },[api]);
- useEffect(()=>{void loadLists();},[loadLists]);
+  try{const [platformData,batchData]=await Promise.all([api('/api/admin/business/platforms'),api('/api/admin/imports'+(listSource?'?'+new URLSearchParams({source:listSource}):''))]);if(!mounted.current||sequence!==listSequence.current)return;setPlatforms(records(platformData));setBatches(batchData);setReady(true);}
+  catch(cause){if(mounted.current&&sequence===listSequence.current)setError(diagnosticText(cause));}finally{if(mounted.current&&sequence===listSequence.current)setLoading(false);}
+ },[api,listSource,view?.record]);
+ useEffect(()=>{void loadLists();return()=>{listSequence.current++;};},[loadLists]);
  const loadBatch=useCallback(async(id,{hydrate=false,targetPage=1,state=''}={})=>{
   const sequence=++loadSequence.current;setLoading(true);
   try{const data=await api(`/api/admin/imports/${encodeURIComponent(id)}?${new URLSearchParams({page:String(targetPage),state})}`);if(sequence!==loadSequence.current||!mounted.current)return;acceptBatch(data,{hydrate});setError('');return data;}
@@ -92,10 +113,10 @@ export default function ImportWizard({api,view,onViewChange,onInteractionStateCh
   finally{if(sequence===loadSequence.current&&mounted.current)setLoading(false);}
  },[api,acceptBatch]);
  useEffect(()=>{
-  loadSequence.current++;setError('');setResolver(null);setIncludeValidOnly(false);setPage(1);setRowState('');
+  loadSequence.current++;setError('');setResolver(null);setStatusDraft('');setProfileName('');setIncludeValidOnly(false);setPage(1);setRowState('');
   if(view?.batch){if(currentBatch.current?.id!==view.batch){setBatch(null);void loadBatch(view.batch,{hydrate:true});}}
-  else{setBatch(null);setConfig(blankConfig());setResolutions([]);setFile(null);setStep(1);baseline.current='';}
- },[view?.batch,loadBatch]);
+  else{setNewBatch(requestedNew.current||!!(view?.source||view?.record));requestedNew.current=false;setBatch(null);setConfig(blankConfig());setResolutions([]);setFile(null);setPlatformId('');setSourceId('');setProfileId('');setStep(1);baseline.current='';prefillContext.current='';}
+ },[view?.batch,view?.source,view?.record,loadBatch]);
  useEffect(()=>{
   if(view?.batch)return;
   const context=json([view?.source||'',view?.record||'']);
@@ -129,22 +150,22 @@ export default function ImportWizard({api,view,onViewChange,onInteractionStateCh
   const sequence=++profileSequence.current;setProfiles([]);if(!sourceId)return;
   api('/api/admin/business/profiles?'+new URLSearchParams({source:sourceId})).then(data=>{if(sequence===profileSequence.current&&mounted.current)setProfiles(records(data));}).catch(cause=>{if(sequence===profileSequence.current)setError(cause.message);});
  },[sourceId,api,resourceRetry]);
- async function perform(label,fn){if(busy)return;loadSequence.current++;setLoading(false);setBusy(label);setError('');setNotice('');try{return await fn();}catch(cause){if(mounted.current)setError(cause.message);}finally{if(mounted.current)setBusy('');}}
+ async function perform(label,fn){if(requestBusy.current)return;requestBusy.current=true;loadSequence.current++;setLoading(false);setBusy(label);setError('');setNotice('');try{return await fn();}catch(cause){if(mounted.current)setError(diagnosticText(cause));}finally{requestBusy.current=false;if(mounted.current)setBusy('');}}
  async function createResource(resource,name){return api('/api/admin/business/'+resource,{method:'POST',body:json({name,requestId:requestId(),...(resource==='sources'?{platformId}:{})})});}
  async function addPlatform(event){event.preventDefault();await perform('platform',async()=>{const created=await createResource('platforms',platformName);setPlatforms(old=>[...old,created]);setPlatformId(created.id);setSourceId('');setPlatformName('');setNotice('Plataforma creada. Se usará su cuenta Principal.');});}
  async function addSource(event){event.preventDefault();await perform('source',async()=>{const created=await createResource('sources',sourceName);setSources(old=>[...old,created]);setSourceId(created.id);setProfileId('');setSourceName('');setNotice('Cuenta creada: sus identidades serán independientes.');});}
  function selectProfile(id){setProfileId(id);const selected=profiles.find(profile=>profile.id===id);if(selected)setConfig(profileConfig(selected));}
  function chooseFile(event){const selected=event.target.files?.[0];event.target.value='';if(!selected)return;setError('');if(selected.size>MAX_BYTES){setError('El archivo supera el máximo de 10 MiB.');return;}if(!/\.(xlsx|xls|xlsb|xlsm)$/i.test(selected.name)){setError('Selecciona un archivo .xlsx, .xls, .xlsb o .xlsm.');return;}setFile(selected);}
- async function upload(event){event.preventDefault();let createdId=null;
+ async function upload(event){event.preventDefault();let createdId=null,uploadedFile=false;
   await perform('upload',async()=>{
    if(!platformId||!sourceId)throw new Error('Selecciona una plataforma y una cuenta real.');if(!file)throw new Error('Selecciona el archivo Excel.');
    let target=batch;
    if(!target){target=await api('/api/admin/imports',{method:'POST',body:json({sourceId,profileId:profileId||undefined,requestId:requestId()})});createdId=target.id;acceptBatch(target,{hydrate:false});}
    if(target.fileHash)throw new Error('Los bytes de este lote son inmutables. Crea otro lote para otro archivo.');
    const uploaded=await api(`/api/admin/imports/${encodeURIComponent(target.id)}/file`,{method:'PUT',headers:{'Content-Type':file.type||'application/octet-stream','x-filename':encodeURIComponent(file.name),'x-batch-version':String(target.version),'x-request-id':requestId()},body:file});
-   acceptBatch(uploaded,{hydrate:true});setFile(null);setNotice('Archivo guardado. El proceso del servidor leerá las hojas sin ejecutar fórmulas ni macros.');
+   acceptBatch(uploaded,{hydrate:true});uploadedFile=true;setFile(null);setNotice('Archivo guardado. El proceso del servidor leerá las hojas sin ejecutar fórmulas ni macros.');
   });
-  if(createdId){onInteractionStateChange?.({busy:false,dirty:false});await new Promise(resolve=>requestAnimationFrame(resolve));onViewChange?.({batch:createdId,record:undefined});}
+  if(createdId&&uploadedFile&&mounted.current){onInteractionStateChange?.({busy:false,dirty:false});await new Promise(resolve=>requestAnimationFrame(resolve));if(mounted.current)onViewChange?.({batch:createdId,record:undefined});}
  }
  async function saveDraft({nextConfig=config,nextResolutions=resolutions,nextProfileId=profileId}={}){
   const target=currentBatch.current;if(!target)throw new Error('Primero guarda el archivo.');
@@ -161,9 +182,9 @@ export default function ImportWizard({api,view,onViewChange,onInteractionStateCh
   const storedConfig={...blankConfig(),...(result.config||nextConfig)},storedResolutions=result.resolutions||nextResolutions,storedProfile=result.profileId||nextProfileId||'';
   acceptBatch(result);setConfig(storedConfig);setResolutions(storedResolutions);setProfileId(storedProfile);baseline.current=json({config:storedConfig,resolutions:storedResolutions,profileId:storedProfile});return result;
  }
- async function saveAndPreview(event){event?.preventDefault();await perform('preview',async()=>{if(!config.sheetName)throw new Error('Selecciona una hoja para revisar.');if(!samplesCurrent)throw new Error('Lee las muestras de esta hoja y fila de encabezados antes de revisar.');if(!config.columns.some(column=>column.destination&&column.destination!=='ignore'))throw new Error('Asigna al menos una columna; las demás se ignorarán.');const saved=await saveDraft();const data=await api(`/api/admin/imports/${encodeURIComponent(saved.id)}/preview`,{method:'POST',body:json({version:saved.version,requestId:requestId()})});acceptBatch(data);setStep(3);setIncludeValidOnly(false);});}
+ async function saveAndPreview(event){event?.preventDefault();await perform('preview',async()=>{if(batch?.state==='previewing')return;if(!config.sheetName)throw new Error('Selecciona una hoja para revisar.');if(!samplesCurrent)throw new Error('Lee las muestras de esta hoja y fila de encabezados antes de revisar.');if(!config.columns.some(column=>column.destination&&column.destination!=='ignore'))throw new Error('Asigna al menos una columna; las demás se ignorarán.');const saved=await saveDraft();const data=await api(`/api/admin/imports/${encodeURIComponent(saved.id)}/preview`,{method:'POST',body:json({version:saved.version,requestId:requestId()})});acceptBatch(data);setIncludeValidOnly(false);});}
  async function saveProfile(event){event.preventDefault();await perform('profile',async()=>{if(!profileName.trim())throw new Error('Escribe un nombre para el perfil.');const saved=await saveDraft(),selected=profiles.find(profile=>profile.id===profileId),data=await api('/api/admin/business/profiles'+(selected?'/'+encodeURIComponent(selected.id):''),{method:selected?'PUT':'POST',body:json({name:profileName,sourceId,profile:saved.config,requestId:requestId(),...(selected?{version:selected.version}:{})})});setProfiles(old=>[...old.filter(profile=>profile.id!==data.id),data]);setProfileId(data.id);currentBatch.current=saved;await saveDraft({nextConfig:saved.config,nextProfileId:data.id});setProfileName('');setNotice('Perfil guardado para esta cuenta. Los alias se conservan por separado en el origen.');});}
- async function commit(){await perform('commit',async()=>{if(dirty)throw new Error('Guarda los cambios y genera una revisión nueva antes de importar.');if(!batch.preview?.previewHash)throw new Error('Genera la revisión antes de importar.');const data=await api(`/api/admin/imports/${encodeURIComponent(batch.id)}/commit`,{method:'POST',body:json({version:batch.version,previewHash:batch.preview.previewHash,includeValidOnly,requestId:requestId()})});acceptBatch(data);setStep(4);onMutation?.({type:'import',batchId:data.id,state:data.state});});}
+ async function commit(){await perform('commit',async()=>{if(dirty)throw new Error('Guarda los cambios y genera una revisión nueva antes de importar.');if(!reviewReady)throw new Error('Espera una revisión completa y válida antes de importar.');const data=await api(`/api/admin/imports/${encodeURIComponent(batch.id)}/commit`,{method:'POST',body:json({version:batch.version,previewHash:batch.preview.previewHash,includeValidOnly,requestId:requestId()})});acceptBatch(data);setStep(4);onMutation?.({type:'import',batchId:data.id,state:data.state});});}
  async function download(kind){await perform('download',async()=>{const blob=await api(`/api/admin/imports/${encodeURIComponent(batch.id)}/${kind}`,{responseType:'blob'}),url=URL.createObjectURL(blob),anchor=document.createElement('a');try{anchor.href=url;anchor.download=kind==='file'?safeName(batch.filename):safeName(`errores-${batch.id}.xlsx`);document.body.appendChild(anchor);anchor.click();anchor.remove();}finally{setTimeout(()=>URL.revokeObjectURL(url),1000);}});}
  function updateConfig(key,value){setConfig(old=>({...old,[key]:value}));setIncludeValidOnly(false);}
  function changeColumn(index,header,patch){setConfig(old=>{const columns=[...old.columns],position=columns.findIndex(column=>column.index===index),next={destination:'ignore',group:0,...(columns[position]||{}),index,header:normalizedHeader(header),...patch};if(!LINE_FIELDS.has(next.destination)||old.layout==='item_rows')next.group=0;if(position<0)columns.push(next);else columns[position]=next;return {...old,columns};});setIncludeValidOnly(false);}
@@ -201,23 +222,30 @@ export default function ImportWizard({api,view,onViewChange,onInteractionStateCh
  }
  const workbook=batch?.workbook,sheets=workbook?.sheets||[],samplesCurrent=!!workbook&&workbook.sheetName===config.sheetName&&Number(workbook.headerRow)===Number(config.headerRow),sampleRows=samplesCurrent?(workbook.rows||[]):[],selectedSheet=sheets.find(sheet=>sheet.name===config.sheetName),headerSample=sampleRows.find(row=>row.rowNumber===Number(config.headerRow)),headers=headerSample?.cells||[],sampleColumns=samplesCurrent?Math.min(200,Math.max(headers.length,selectedSheet?.columnCount||0,...sampleRows.map(row=>row.cells?.length||0))):0,groups=serverGroups(batch),summary=batch?.preview?.summary||batch?.summary||{},invalidGroups=groups.filter(group=>['conflict','rejected','invalid'].includes(group.state)||group.valid===false||group.errors?.length),invalidCount=Number(summary.conflict??0)+Number(summary.rejected??summary.invalid??0)||invalidGroups.length,validCount=Number(summary.valid??groups.length-invalidGroups.length),hasPreview=!!batch?.preview?.previewHash;
  const settlementsPending=Number(summary.settlementsPending||0),hasImportable=validCount>0||settlementsPending>0;
+ const previewing=batch?.state==='previewing',reviewReady=batch?.state==='review'&&hasPreview&&!diagnostic;
+ const showWizard=!!batch||newBatch;
  const groupPages=Math.max(1,Math.ceil(groups.length/20)),shownGroups=groups.slice((groupPage-1)*20,groupPage*20);
  const setResolverField=(key,value)=>setResolver(old=>({...old,[key]:value}));
  const select=(key,label,options)=><Field field={{name:key,label,type:'select',options:options.map(([value,label])=>({value,label}))}} value={config[key]} onChange={value=>updateConfig(key,value)}/>;
  const resume=id=>onViewChange?.({batch:id});
+ const listPage=async next=>perform('batch-list',async()=>{const sequence=++listSequence.current,data=await api('/api/admin/imports?'+new URLSearchParams({page:String(next),source:listSource}));if(mounted.current&&sequence===listSequence.current)setBatches(data);});
+ function startNewBatch(){setNewBatch(true);requestedNew.current=!!batch;if(batch)onViewChange?.({batch:'',record:undefined});}
  function retryRead(){setResourceRetry(value=>value+1);if(resolver?.action?.startsWith('link_'))void searchLookup(resolver.action,lookupQuery);if(batch)void loadBatch(batch.id,{targetPage:page,state:rowState});else if(view?.batch)void loadBatch(view.batch,{hydrate:true});else void loadLists();}
  return <section className={`admin-card ${styles.wizard}`} aria-label="Importar Excel">
-  <header className="admin-heading"><div><p className="eyebrow">Importaciones · Excel</p><h2 ref={headingRef} tabIndex={-1}>Importar Excel</h2><p className="muted">Pedidos, seguimiento y liquidaciones de cualquier plataforma mediante columnas revisadas.</p></div>{batch&&<button type="button" className="button subtle" disabled={!!busy} onClick={()=>onViewChange?.({batch:''})}>Nuevo lote</button>}</header>
-  <ol className={`order-progress ${styles.progress}`} aria-label="Pasos de importación">{['Archivo y origen','Columnas','Revisión','Importar'].map((label,index)=><li key={label} aria-current={step===index+1?'step':undefined} data-saved={step>index+1}><strong>{index+1}. {label}</strong>{step===index+1&&<span>Estás aquí</span>}</li>)}</ol>
-  <div className={styles.stepGuide}><p className={styles.sectionLabel}>Paso {step} de 4</p><h3>{STEP_GUIDANCE[step-1][0]}</h3><p>{STEP_GUIDANCE[step-1][1]}</p></div>
-  {error&&!resolver&&<div className="error" role="alert" tabIndex={-1} ref={errorRef}><p>{error}</p><button type="button" className="button subtle" disabled={!!busy} onClick={retryRead}>Reintentar lectura</button></div>}
+  <header className="admin-heading"><div><p className="eyebrow">Importaciones · Excel</p><h2 ref={headingRef} tabIndex={-1}>Importar Excel</h2><p className="muted">Pedidos, seguimiento y liquidaciones de cualquier plataforma mediante columnas revisadas.</p></div>{(batch||!newBatch)&&<button type="button" className="button subtle" disabled={!!busy} onClick={startNewBatch}>Nuevo lote</button>}</header>
+  {showWizard&&<><ol className={`order-progress ${styles.progress}`} aria-label="Pasos de importación">{['Archivo y origen','Columnas','Revisión','Importar'].map((label,index)=><li key={label} aria-current={step===index+1?'step':undefined} data-saved={step>index+1}><strong>{index+1}. {label}</strong>{step===index+1&&<span>Estás aquí</span>}</li>)}</ol>
+  <div className={styles.stepGuide}><p className={styles.sectionLabel}>Paso {step} de 4</p><h3>{STEP_GUIDANCE[step-1][0]}</h3><p>{STEP_GUIDANCE[step-1][1]}</p></div></>}
+  {error&&!resolver&&<div className="error" role="alert" tabIndex={-1} ref={errorRef}><p>{diagnosticText(error)}</p><button type="button" className="button subtle" disabled={!!busy} onClick={retryRead}>Reintentar lectura</button></div>}
   {notice&&<p role="status">{notice}</p>}
   {loading&&<p className="muted" role="status">Consultando datos del servidor…</p>}
   {batch&&<p className="small muted">Lote {batch.id} · {STATE_LABELS[batch.state]||batch.state}{batch.filename?` · ${batch.filename}`:''}</p>}
-  {batch?.state==='failed'&&<p className="error" role="alert">El servidor no completó este lote. {batch.error||batch.progress?.error||batch.progress?.message||'Revisa las advertencias y columnas; si el archivo es inválido, descarga el original y crea un lote con el archivo corregido.'}</p>}
-  {batch?.progress?.settlementIssues?.length>0&&<section className="error" role="alert"><h3>Liquidaciones por revisar</h3><p>Los pedidos ya aplicados no se repetirán. Corrige estos vínculos o documentos y genera una revisión nueva.</p><ul>{batch.progress.settlementIssues.map((issue,index)=><li key={issue.key||index}>{issue.key} · {messages([issue.error||issue]).join(' ')}</li>)}</ul></section>}
+  {diagnostic&&<ImportDiagnostic diagnostic={diagnostic} alertRef={diagnosticRef}/>}
+  {previewing&&<p role="status">Preparando revisión en el servidor. El archivo y la configuración están guardados. Puedes navegar o cerrar el panel y retomar este lote; la confirmación estará disponible solo cuando termine la revisión.</p>}
+  {!diagnostic&&batch?.progress?.message&&<p role="status">{diagnosticText(batch.progress.message)}</p>}
+  {batch?.progress?.settlementIssues?.length>0&&<section className="error" role="alert"><h3>Liquidaciones por revisar</h3><p>Los pedidos ya aplicados no se repetirán. Corrige estos vínculos o documentos y genera una revisión nueva.</p><ul>{batch.progress.settlementIssues.map((issue,index)=><li key={diagnosticValue(issue.key)||index}>{diagnosticValue(issue.key)} · {messages([issue.error||issue]).join(' ')}</li>)}</ul></section>}
   {!batch&&view?.batch&&!loading&&!error&&<p role="status">Abriendo lote…</p>}
-  {step===1&&(!view?.batch||batch)&&<>
+  {!batch&&!view?.batch&&batches&&<section aria-label="Importaciones guardadas"><h3>Retomar una importación guardada</h3><p>El archivo, las columnas guardadas y el progreso siguen en su lote. No vuelvas a subir el archivo para continuar.</p>{records(batches).length?<ul className="history-timeline">{records(batches).map(item=><li key={item.id}><strong>{item.filename||'Sin archivo guardado'}</strong><p>{STATE_LABELS[item.state]||item.state} · {item.createdAt}</p><p className="small muted">Lote {item.id} · Cuenta {item.sourceId}</p><button type="button" className="button primary" disabled={!!busy} onClick={()=>resume(item.id)}>Retomar lote</button></li>)}</ul>:<p>No hay lotes guardados en esta lista. Usa Nuevo lote para seleccionar un archivo.</p>}<div className="admin-actions"><button type="button" className="button subtle" disabled={!!busy||(batches.page||1)<=1} onClick={()=>listPage((batches.page||1)-1)}>Lotes anteriores</button><span>Página {batches.page||1}</span><button type="button" className="button subtle" disabled={!!busy||(batches.page||1)*(batches.pageSize||20)>=(batches.total||0)} onClick={()=>listPage((batches.page||1)+1)}>Más lotes</button></div></section>}
+  {showWizard&&step===1&&(!view?.batch||batch)&&<>
    <form onSubmit={upload}>
     <fieldset disabled={!!busy||!!batch?.fileHash} className={`field ${styles.importGroup}`}><legend>1. Origen del archivo</legend>
      <label className="field">Plataforma<select required disabled={!!batch} value={platformId} onChange={event=>{setPlatformId(event.target.value);setSourceId('');setProfileId('');}}><option value="">Selecciona la plataforma</option>{platforms.map(platform=><option key={platform.id} disabled={!platform.active&&!batch} value={platform.id}>{platform.name}{platform.active?'':' · Archivada'}</option>)}</select></label>
@@ -231,15 +259,15 @@ export default function ImportWizard({api,view,onViewChange,onInteractionStateCh
    </form>
    {!batch&&<details><summary>Crear plataforma por nombre</summary><form onSubmit={addPlatform}><label className="field">Nombre de la plataforma<input required maxLength={150} value={platformName} onChange={event=>setPlatformName(event.target.value)}/></label><button className="button subtle" disabled={!!busy}>Crear plataforma y cuenta Principal</button></form></details>}
    {!batch&&platformId&&advancedSource&&<form onSubmit={addSource}><label className="field">Nombre de la otra cuenta<input required maxLength={150} value={sourceName} onChange={event=>setSourceName(event.target.value)}/></label><button className="button subtle" disabled={!!busy}>Crear cuenta independiente</button></form>}
-   {!batch&&batches&&<details><summary>Retomar una importación anterior ({batches.total??records(batches).length})</summary>{records(batches).length?<ul className="history-timeline">{records(batches).map(item=><li key={item.id}><strong>{item.filename||'Sin archivo'}</strong><p>{STATE_LABELS[item.state]||item.state} · {item.createdAt}</p><button type="button" className="button subtle" onClick={()=>resume(item.id)}>Abrir lote</button></li>)}</ul>:<p>No hay lotes anteriores. Selecciona un archivo para comenzar.</p>}<div className="admin-actions"><button type="button" className="button subtle" disabled={!!busy||(batches.page||1)<=1} onClick={()=>perform('batch-list',async()=>setBatches(await api('/api/admin/imports?page='+((batches.page||1)-1))))}>Lotes anteriores</button><span>Página {batches.page||1}</span><button type="button" className="button subtle" disabled={!!busy||(batches.page||1)*(batches.pageSize||20)>=(batches.total||0)} onClick={()=>perform('batch-list',async()=>setBatches(await api('/api/admin/imports?page='+((batches.page||1)+1))))}>Más lotes</button></div></details>}
   </>}
   {batch&&step===2&&<>
-   {!workbook?<p role="status">El servidor está leyendo las hojas. Puedes salir y retomar este lote después.</p>:<>
+   {!workbook?<p role="status">{diagnostic?'No se pudo completar la lectura de las hojas. Consulta el diagnóstico de este lote; el original guardado sigue disponible.':'El servidor está leyendo las hojas. Puedes salir y retomar este lote después.'}</p>:<>
     <form onSubmit={saveAndPreview}>
-     <fieldset disabled={!!busy||locked||batch.fileExpired} className={`field ${styles.importGroup}`}><legend>1. Cómo leer el archivo</legend><div className="form-grid">
+     <fieldset disabled={!!busy||locked||previewing||batch.fileExpired} className={`field ${styles.importGroup}`}><legend>1. Cómo leer el archivo</legend><div className="form-grid">
       <label className="field">Hoja<select required value={config.sheetName} onChange={event=>updateConfig('sheetName',event.target.value)}><option value="">Selecciona la hoja</option>{sheets.map(sheet=><option key={sheet.name} value={sheet.name}>{sheet.name} · {sheet.rowCount} filas · {sheet.columnCount} columnas</option>)}</select></label>
       <label className="field">Fila de encabezados<input type="number" min={1} max={10000} required value={config.headerRow} onChange={event=>updateConfig('headerRow',Number(event.target.value))}/></label>
       {select('purpose','Qué contiene el archivo',[['orders','Pedidos y sus envíos'],['tracking','Solo seguimiento (no exige productos)'],['settlements','Liquidaciones declaradas (no ingresa dinero a caja)']])}
+      <p className="small muted">Si el archivo contiene guías y estados, pero no identifica productos, cantidades y precios, usa Solo seguimiento para vincularlo con pedidos existentes. No se inventarán ventas ni productos.</p>
       {select('layout','Distribución de productos',[['item_rows','Una fila por producto; agrupar por pedido'],['order_rows','Una fila por pedido; varios grupos de columnas']])}
       {select('dateFormat','Orden explícito de las fechas',[['DMY','Día / mes / año'],['MDY','Mes / día / año'],['ISO','Año-mes-día (ISO)']])}
       {select('decimalSeparator','Separador decimal',[ [',','Coma (1234,50)'],['.','Punto (1234.50)'] ])}
@@ -262,13 +290,13 @@ export default function ImportWizard({api,view,onViewChange,onInteractionStateCh
      })}</div>
      {!sampleColumns&&<p>No se recibieron columnas de muestra. Selecciona hoja y encabezado, guarda y solicita revisión para leerlos en el servidor.</p>}
      <StatusMapping config={config} disabled={!!busy||locked} onChange={value=>updateConfig('statusMap',value)} statusDraft={statusDraft} setStatusDraft={setStatusDraft}/>
-     </fieldset><div className="admin-actions"><button className="button primary" disabled={!!busy||locked||batch.fileExpired}>{busy==='preview'?'Solicitando revisión…':'Guardar columnas y revisar'}</button><button type="button" className="button subtle" disabled={!!busy||locked} onClick={()=>perform('save',async()=>{await saveDraft();setNotice('Configuración guardada.');})}>Guardar sin revisar</button>{hasPreview&&<button type="button" className="button subtle" onClick={()=>setStep(3)}>Volver a la revisión</button>}</div>
+     </fieldset><div className="admin-actions"><button className="button primary" disabled={!!busy||locked||previewing||batch.fileExpired}>{busy==='preview'?'Solicitando revisión…':previewing?'Preparando revisión…':'Guardar columnas y revisar'}</button><button type="button" className="button subtle" disabled={!!busy||locked||previewing} onClick={()=>perform('save',async()=>{await saveDraft();setNotice('Configuración guardada.');})}>Guardar sin revisar</button>{hasPreview&&!previewing&&<button type="button" className="button subtle" onClick={()=>setStep(3)}>Volver a la revisión</button>}</div>
     </form>
     <details><summary>Guardar como perfil reutilizable de esta cuenta</summary><form onSubmit={saveProfile}><label className="field">Nombre del perfil<input required maxLength={150} value={profileName} onChange={event=>setProfileName(event.target.value)} placeholder={profiles.find(profile=>profile.id===profileId)?.name||'Nombre descriptivo'}/></label>{profileId&&<p>Se actualizará el perfil seleccionado. Otros lotes ya aceptados conservan su versión congelada.</p>}<button className="button subtle" disabled={!!busy||locked}>Guardar perfil</button>{profileId&&<button type="button" className="button subtle" disabled={!!busy||locked} onClick={()=>setProfileId('')}>Guardar como un perfil nuevo</button>}</form></details>
    </>}
   </>}
   {batch&&step===3&&<>
-   {batch.state==='previewing'?<p role="status">El servidor está normalizando la hoja y comparando identidades. Puedes cerrar esta vista; el lote es reanudable.</p>:<>
+   {!hasPreview?<><p role="status">Todavía no hay una revisión completa. Conservamos el archivo y la configuración guardada.</p><button type="button" className="button subtle" disabled={!!busy} onClick={()=>setStep(2)}>Volver a columnas</button></>:previewing?<p role="status">La revisión anterior ya no permite confirmar mientras se prepara la nueva.</p>:<>
     <h3>Revisa grupos completos antes de importar</h3><p>Un pedido o envío se aplica completo. No se crean productos ficticios, ventas incompletas ni movimientos de caja por un estado de entrega.</p>
     {summaryItems(summary).length>0&&<dl className={`form-grid ${styles.summaryMetrics}`}>{summaryItems(summary).map(([key,value])=><div key={key}><dt>{RESULT_LABELS[key]}</dt><dd>{value}</dd></div>)}</dl>}
     {batch.preview?.warnings?.length>0&&<ul>{messages(batch.preview.warnings).map((message,index)=><li key={index}>{message}</li>)}</ul>}
@@ -287,20 +315,20 @@ export default function ImportWizard({api,view,onViewChange,onInteractionStateCh
     <SourceRows batch={batch} page={page} rowState={rowState} busy={!!busy||loading} onFilter={state=>{setRowState(state);setPage(1);void loadBatch(batch.id,{targetPage:1,state});}} onPage={next=>{setPage(next);void loadBatch(batch.id,{targetPage:next,state:rowState});}} onResolve={(action,row)=>openResolver(action,{entityKey:row.entityKey||row.groupKey,sheet:row.sheet||config.sheetName,rowNumber:row.rowNumber,externalKey:rowExternalKey(action,row)})}/>
     {invalidCount>0&&<label className="checkbox-field"><input type="checkbox" checked={includeValidOnly} onChange={event=>setIncludeValidOnly(event.target.checked)} disabled={dirty||!!busy}/><span>Importar solo los {validCount} grupos válidos; omitir explícitamente {invalidCount} grupos con errores o conflictos. Ningún grupo se importa a medias.</span></label>}
     {dirty&&<p role="status">Hay cambios sin validar. Genera una nueva revisión antes de confirmar.</p>}
-    <button type="button" className="button primary" disabled={!!busy||dirty||!hasPreview||!hasImportable||invalidCount>0&&!includeValidOnly||batch.fileExpired} onClick={()=>setStep(4)}>Continuar a confirmación</button>
+    <button type="button" className="button primary" disabled={!!busy||dirty||!reviewReady||!hasImportable||invalidCount>0&&!includeValidOnly||batch.fileExpired} onClick={()=>setStep(4)}>Continuar a confirmación</button>
    </>}
   </>}
   {batch&&step===4&&<>
    <h3>{durable?'Resultado y progreso':'Confirmar importación'}</h3>
-   {!durable&&<><p>Se aplicará únicamente esta revisión: <strong>{batch.preview?.previewHash?.slice(0,16)||'Sin revisión'}</strong>. El archivo, las resoluciones y las versiones de destino quedan congelados al confirmar. La recepción de liquidaciones se confirma luego en Caja.</p>{includeValidOnly&&<p>Se omitirán {invalidCount} grupos completos; se seleccionaron {validCount} válidos.</p>}<div className="admin-actions"><button type="button" className="button subtle" disabled={!!busy} onClick={()=>setStep(3)}>Volver a revisar</button><button type="button" className="button primary" disabled={!!busy||dirty||!hasPreview||!hasImportable||invalidCount>0&&!includeValidOnly} onClick={commit}>{busy==='commit'?'Aceptando importación…':'Confirmar e importar'}</button></div></>}
-   {locked&&<><p role="status">{STATE_LABELS[batch.state]}. El trabajo quedó guardado; puedes navegar o cerrar el panel. Se reanudará sin repetir grupos aplicados.</p><progress aria-label="Operaciones procesadas" max={Number(batch.progress?.total)||1} value={Number(batch.progress?.processed??batch.progress?.applied)||0} style={{width:'100%'}}/><p>{batch.progress?.phase==='settlements'?'Vinculando declaraciones de liquidación':'Aplicando pedidos y envíos'} · {batch.progress?.processed??batch.progress?.applied??0} de {batch.progress?.total??'—'} operaciones.</p></>}
+   {!durable&&<><p>Se aplicará únicamente esta revisión: <strong>{batch.preview?.previewHash?.slice(0,16)||'Sin revisión'}</strong>. El archivo, las resoluciones y las versiones de destino quedan congelados al confirmar. La recepción de liquidaciones se confirma luego en Caja.</p>{includeValidOnly&&<p>Se omitirán {invalidCount} grupos completos; se seleccionaron {validCount} válidos.</p>}<div className="admin-actions"><button type="button" className="button subtle" disabled={!!busy} onClick={()=>setStep(3)}>Volver a revisar</button><button type="button" className="button primary" disabled={!!busy||dirty||!reviewReady||!hasImportable||invalidCount>0&&!includeValidOnly||batch.fileExpired} onClick={commit}>{busy==='commit'?'Aceptando importación…':'Confirmar e importar'}</button></div></>}
+   {locked&&<><p role="status">{STATE_LABELS[batch.state]}. El trabajo quedó guardado; puedes navegar o cerrar el panel. Se reanudará sin repetir grupos aplicados.</p><progress aria-label="Operaciones procesadas" max={Number(batch.progress?.total)||1} value={Number(batch.progress?.processed??batch.progress?.applied)||0} style={{width:'100%'}}/><p>{batch.progress?.phase==='settlements'?'Vinculando declaraciones de liquidación':'Aplicando pedidos y envíos'} · {diagnosticValue(batch.progress?.processed??batch.progress?.applied)||'0'} de {diagnosticValue(batch.progress?.total)||'—'} operaciones.</p></>}
    {FINAL_STATES.has(batch.state)&&<p role="status">{STATE_LABELS[batch.state]}. Los hechos aplicados y las filas fuente se conservaron.</p>}
    <dl className={`form-grid ${styles.summaryMetrics}`}>{summaryItems(batch.progress||batch.result||summary).map(([key,value])=><div key={key}><dt>{RESULT_LABELS[key]}</dt><dd>{value}</dd></div>)}</dl>
    {(batch.state==='failed'||batch.state==='completed_with_errors')&&<button type="button" className="button subtle" disabled={!!busy} onClick={()=>setStep(3)}>Revisar pendientes sin repetir aplicados</button>}
    <SourceRows batch={batch} page={page} rowState={rowState} busy={!!busy||loading} onFilter={state=>{setRowState(state);setPage(1);void loadBatch(batch.id,{targetPage:1,state});}} onPage={next=>{setPage(next);void loadBatch(batch.id,{targetPage:next,state:rowState});}}/>
   </>}
   {resolver&&!locked&&<ResolutionDialog title={RESOLUTION_LABELS[resolver.action]} busy={!!busy} onClose={closeResolver} onSubmit={applyResolution}>
-   {error&&<div className="error" role="alert" tabIndex={-1} ref={errorRef}><p>{error}</p><button type="button" className="button subtle" disabled={!!busy} onClick={retryRead}>Reintentar lectura</button></div>}
+   {error&&<div className="error" role="alert" tabIndex={-1} ref={errorRef}><p>{diagnosticText(error)}</p><button type="button" className="button subtle" disabled={!!busy} onClick={retryRead}>Reintentar lectura</button></div>}
    <fieldset className="field" disabled={!!busy}>
     {resolver.entityKey&&<p>Grupo: {resolver.entityKey}</p>}
     <div className="form-grid"><label className="field">Fila de origen (si aplica)<input type="number" min={1} max={10000} value={resolver.rowNumber||''} onChange={event=>setResolverField('rowNumber',event.target.value)}/></label>{['link_product','link_person','link_order','link_shipment','status'].includes(resolver.action)&&<label className="field">Identificador exacto del archivo{['link_product','link_person','status'].includes(resolver.action)?' *':''}<input required={['link_product','link_person','status'].includes(resolver.action)} maxLength={300} value={resolver.externalKey} onChange={event=>setResolverField('externalKey',event.target.value)}/><small className="muted">La clave externa (externalKey) debe respetar mayúsculas y ceros iniciales. Para estado, escribe el texto exacto de la celda.</small></label>}</div>

@@ -1,5 +1,13 @@
 # Cambios — administración v3 y antecedentes
 
+## Importación Excel: dimensiones reales, diagnóstico y reanudación · 18 de octubre de 2026
+
+- Corregido el rechazo falso de encabezados en archivos cuya lectura parcial solo informa la portada: se obtienen las dimensiones reales de la hoja seleccionada sin confundirlas con la muestra.
+- Errores estructurados de archivo, extracción y procesamiento se muestran dentro del importador, con ubicación y acciones cuando están respaldadas. Se evita el error de página completa y no se ocultan fallos internos tras reintentos indefinidos de disponibilidad.
+- Revisión disponible solo después de terminar su generación; extracción modificada invalida revisiones y filas cacheadas. Las muestras desactualizadas pueden releerse sin cambiar artificialmente la configuración ni volver a subir el archivo.
+- Entrada con lotes guardados y «Retomar lote» visible, archivo/configuración conservados al navegar o recargar y «Nuevo lote» explícito. El procesamiento de fondo no bloquea salir del panel.
+- Verificación local con `Historial Guías.xlsx`, 339 filas de seguimiento, saldo cero y positivo, y errores controlados. 59 contratos específicos aprobados; `check` y `build` correctos. La última suite completa encontró un fallo de devoluciones en inventario no modificado, documentado en [VERIFICACION.md](VERIFICACION.md) y pendiente de autorización para ampliar el alcance. Sin push, despliegue ni cambios de esquema.
+
 ## Onboarding con datos previos y diagnóstico repetible · 18 de octubre de 2026
 
 - Caja, productos y pedidos existentes se reconocen como realizados con motivos basados en los datos guardados; el resumen permanece visible al abrir la etapa final. Los pedidos previos permiten continuar sin repetir la confirmación inicial, sin debilitar las condiciones de caja, existencias o reglas vigentes ni afirmar que se revisaron estas últimas.

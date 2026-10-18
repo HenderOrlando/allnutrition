@@ -62,6 +62,9 @@ Realizar estas comprobaciones en Next.js compilado y en un entorno de revisión 
 ## Negocio, importación y automatización
 
 - Importar el Excel sintético principal y reordenado por UI: misma venta/guía/recaudo/cargos, sin duplicados; mapear y resolver identidades de productos/vendedor reales por cuenta.
+- Abrir un Excel con portada en la fila 1 y encabezados reales en la 2, incluso sin dimensiones declaradas: leer muestras y generar la revisión completa, conservando encabezados repetidos por posición.
+- Provocar un archivo truncado y una fila de encabezados fuera de rango: comprobar diagnóstico de archivo o extracción con ubicación y acción, sin error de página completa. Navegar a Inicio, volver a Importar Excel, retomar el mismo lote y recargar: archivo y configuración guardada deben conservarse.
+- Corregir la extracción sin volver a subir el original y comprobar que se releen muestras pendientes, aunque la configuración ya estuviera guardada. Durante el procesamiento debe poder navegarse; confirmar exige una revisión real sin error. Comprobar con saldo cero y positivo, sin alterar pedidos, existencias ni caja al generar la vista previa.
 - Confirmar retenciones y recepción bancaria, preparar/confirmar/pagar sueldo; cotejar cifras exactas de septiembre y secuencia de caja en `VERIFICACION.md`.
 - Cambiar A a costo30000 desde octubre y crear un pedido nuevo A×1 el1octubre, sin guía/cobro: snapshot30000; septiembre conserva costo46000. Devolver A recuperable el2octubre, luego reembolso/flete el3octubre; contribución de octubre−36250, no septiembre.
 - Con saldo127500, detener worker, configurar mínimo128000 y solicitar snapshot septiembre. Cerrar paneles y ejecutar la orden Compose exacta impresa; reabrir snapshot/alerta. Repetir no duplica; «En atención» no resuelve. Ingreso no comercial500 con referencia del manifest y otra corrida resuelven el mismo episodio y dejan128000.

@@ -64,6 +64,17 @@ El estado de cobro se deriva de recaudos, reembolsos y créditos. Cliente pagado
 
 Al guardar se conserva la composición histórica de productos/combos. Cambiar un combo mañana no cambia lo que figuraba en un pedido anterior. Un identificador de intento evita que reintentar el mismo guardado cree dos pedidos. Una edición antigua recibe conflicto 409 y requiere recargar.
 
+### Importación Excel recuperable
+
+El archivo original y la extracción guardada pertenecen a un lote durable, incluso antes de aceptar la importación. Entrar de nuevo muestra los lotes guardados de su contexto con una acción visible para retomarlos; la URL del lote recupera el archivo, configuración y último paso válido al recargar. Crear otro lote requiere una acción explícita. Las guardas de cambios sin guardar se conservan, pero un trabajo de lectura o revisión ya aceptado no bloquea la navegación del panel.
+
+La inspección obtiene las dimensiones reales de la hoja seleccionada aunque el archivo omita su declaración y el muestreo solo incluya una portada. No rechaza un encabezado real por el tamaño de una muestra. Una relectura pendiente se encola también cuando la configuración ya estaba guardada pero las muestras aún corresponden a otra hoja o encabezado.
+
+Los errores de lectura, configuración, celdas y procesamiento se presentan dentro del importador, sin interpolar objetos de diagnóstico como hijos de React. Se conserva código/mensaje y se añade categoría, acción, fase y ubicación comprobada cuando existan. Un problema ambiguo de fecha o importe se mantiene como causa no determinada, con indicación de revisar tanto la celda como el formato. Los fallos internos no se presentan como archivo dañado ni se reencolan indefinidamente como indisponibilidad; las caídas de base de datos conocidas sí conservan su reanudación. No se publica el detalle interno de excepciones.
+
+Solicitar la vista previa mantiene el paso de columnas con progreso hasta que exista una revisión real sin error de lote. Cambiar extracción o resoluciones invalida la revisión anterior; no se acepta una selección vacía, encabezados inexistentes ni asignaciones que confluyan ambiguamente en una columna. Generar la revisión no depende del saldo de caja ni autoriza crear productos o ventas incompletos a partir de un historial de guías.
+
+
 ### Existencias conectadas a pedidos
 
 Cada producto normal guarda `stockQuantity` (conteo físico, incluidas las unidades reservadas) y `stockReserved` (calculado por el servidor). El panel deriva `stockAvailable`; la vitrina recibe únicamente disponibilidad, no cantidades. Los conteos son enteros seguros no negativos. `null` significa sin contar y cero significa ninguna unidad: una referencia sin contar no admite nuevas reservas ni salidas. Un conteo ya conocido no puede volver a quedar vacío ni bajar de las reservas vigentes. El conteo queda auditado y no registra compras, gastos ni caja.
