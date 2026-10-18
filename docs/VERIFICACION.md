@@ -42,6 +42,12 @@ El verificador inicia el scheduler real antes del E2E de Excel; las esperas cont
 
 No se ejecutaron suites, semillas, migraciones ni guardados contra los servicios o bases originales. El navegador de aceptación usó perfiles privados, sin trasladar cookies del origen original. No hubo despliegue, publicación real, prueba en Safari/Firefox, lector de pantalla ni certificación WCAG; las mediciones y recorridos descritos no sustituyen una auditoría integral de accesibilidad.
 
+## Preparación de promoción amd64 · 18 de octubre de 2026
+
+El commit `74fc04c727469f1f2235f47ac3b62ac5207a1a25` conserva exactamente el árbol de la entrega UI aceptada y se publicó en `origin/trunk` después de separar código, regresiones y documentación. El primer intento nativo, `c3de518d436ec4aa`, compiló Next.js 16.3.8 en la VM `amd64` y aprobó sintaxis/imports; los contratos SQLite/PostgreSQL agotaron el límite global de 180 segundos antes de completar la suite. No llegó a E2E ni autorizó una promoción.
+
+El verificador permite ahora hasta 30 minutos para la suite completa de contratos, necesaria también en la VM de 2 vCPU con PostgreSQL persistente. No se quitaron casos ni se relajaron aserciones; siguen siendo obligatorios PostgreSQL real, cero pruebas omitidas y el resto de la aceptación interactiva. El intento fallido y el respaldo previo se conservan privadamente; la aplicación y la base reales permanecieron en su versión anterior durante ese intento.
+
 ## Inventario conectado a Pedidos · 17 de octubre de 2026
 
 Verificación local con Node **24.14.1** y Next.js **16.3.8**. Datos sintéticos y recursos aislados: SQLite nueva para UI/API y un contenedor PostgreSQL 16 descartable, publicado solo en `127.0.0.1:35432`. No se modificaron bases del negocio ni se desplegó una versión. La compilación y el navegador usaron una raíz/salida temporal independiente para no interferir con los servidores locales ya abiertos.
