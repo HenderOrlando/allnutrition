@@ -2,6 +2,8 @@
 
 Realizar estas comprobaciones en Next.js compilado y en un entorno de revisión separado. Consultar `REQUISITOS_Y_DECISIONES.md` para distinguir respuestas del cliente, instrucciones posteriores y reglas propuestas.
 
+La cancelación de importaciones y el esquema **5** aprobaron aceptación nativa interactiva y promoción al dominio real el **19 de octubre de 2026**. Evidencia y límites en [VERIFICACION.md](VERIFICACION.md); este documento conserva el recorrido para próximas aceptaciones.
+
 ## Instalación y acceso
 
 - Ejecutar `npm run verify:docker -- --interactive` con Node24, Docker/Compose, OpenSSL, puerto9443 libre y Chromium. Mantiene build, check, contratos SQLite/PostgreSQL reales, auditoría, E2E, TLS, rol limitado, caída/reinicio y restore.

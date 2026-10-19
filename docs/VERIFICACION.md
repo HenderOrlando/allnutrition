@@ -1,8 +1,52 @@
 # Verificación v3 — administración de negocio
 
+## Cancelación publicada · aceptación nativa y producción · 19 de octubre de 2026
+
+Fuente de aplicación `cfaee8070f45ec78fe9903af82205cdcf165b780`, publicada en `origin/trunk`. Commits separados: `d11a4dc` (dominio/API/migración), `ad050af` (importador), `23936a8` (contrato y evidencia local) y `cfaee80` (preparación PostgreSQL). Git archive SHA-256 `3a74fe2b4b2e1184dcec99ddb26d769384f160161d6a86f1b9c62b8ac3b0c5e1`. La documentación posterior no reconstruye la imagen.
+
+Imagen aprobada y ejecutada por **web y scheduler**: `allnutrition:release-73620e997c62`, ID `sha256:73620e997c629329a2a77c6974da899a42e44595242e54d1212295c9529e11f7`; Linux/amd64, Node **24.22.0**, UID **1000**, Next.js **16.3.8**.
+
+### Aceptación nativa y recuperación previa
+
+`npm run verify:docker -- --interactive`, ejecución **`cbb6674080e6a41a`**, terminó con **código 0**. Controlador Node 24.21.0, Docker 29.8.1 y Compose 5.5.1.
+
+| Comprobación | Resultado observado |
+|---|---|
+| Build y sintaxis | Build productivo correcto; **172 archivos** JavaScript/JSX, cero errores. Runtime sin herramientas de desarrollo. |
+| Contratos SQLite/PostgreSQL | **535 aprobados**, cero fallidos y cero omitidos. |
+| E2E escritorio/móvil | **36 aprobados**. |
+| Auditoría de dependencias de producción | Cero vulnerabilidades notificadas. |
+| UI de cancelación sobre la imagen nativa | Descarte local sin cambios en la base; cancelación del original guardado `200`, estado `cancelled`, original `404` y hechos comerciales intactos. La cancelación no añadió revisión comercial; las dos revisiones internas correspondieron a crear/subir el borrador. |
+| Importación terminada | `canCancel=false`, intento posterior `409` y original todavía `200`. |
+| Recorrido comercial | Main y reordenado sin duplicar venta; recepción/retenciones, sueldo/comisión, informe de septiembre, costo prospectivo, devolución, reembolso y flete comprobados desde formularios reales. Snapshot y alerta procesados con todos los paneles cerrados; repetición sin hechos duplicados y mismo episodio resuelto solo tras el aporte real. |
+| Reinicio y móvil | Revisión válida de 60 guías con scheduler activo; cola 0 con worker detenido y cancelación habilitada a **390 px**, sin desbordamiento. El verificador comprobó **0→25→60**, reinicio y repetición sin ventas ni dinero adicionales. |
+| Operación aislada | Rol runtime sin DDL, rechazo de CA incorrecta y TCP sin TLS, caída real con 503 y recuperación, persistencia de WebP/datos/sesiones y dump/restore separado aprobados. |
+
+Un primer pase fue rechazado por `Query read timeout` en **la preparación `TRUNCATE`**, antes de ejecutar tres escenarios; PostgreSQL esperaba fsync. Se amplió únicamente esa consulta de limpieza descartable a **120 s**. El límite de consultas del runtime sigue en **15 s**; no se modificaron expectativas funcionales ni se promovió la imagen fallida.
+
+Recuperación independiente con la imagen final: dump nuevo de producción por TLS, **42 tablas / 65 filas**, restaurado en `allnutrition_recovery_d6e2bf32be`. Tras migrar, las **41 tablas restantes** conservaron conteos y hashes completos; marcadores **[2,3,4]→[2,3,4,5]** y filas previas de migración intactas. Conexión `allnutrition_app` con TLS verificado; clon/red/volumen retirados. Evidencia `recovery-approved/result.json`; dump SHA-256 `21a7fca6174138688226a97905bc6c30464679e21a1c468c7f1710f12ff7857f`.
+
+### Corte y comprobación del dominio real
+
+Producción **https://allnutrition.wintimeapp.co** actualizada entre **21:26:10 y 21:27:34 UTC**:
+
+- Respaldo final con **ambos escritores detenidos**: dump de 42 tablas, listado y bloques comprimidos validados; archivo separado de medios y copia de las fuentes reemplazadas.
+- Migración 5 validada antes del arranque: contenido exacto de las 41 tablas ajenas a `migrations` y filas de marcadores 2/3/4 intactos; solo se añadió el marcador 5.
+- Mismo contenedor PostgreSQL, configuración/contraseñas/TLS y proxy Nginx. Los dos escritores arrancaron con el ID aprobado, sin rebuild, y el scheduler emitió un heartbeat nuevo.
+- Salud pública y catálogo `200`; cuatro WebP comparados con sus bytes almacenados (**494.094 bytes**). Catálogo y volumen de medios conservados.
+- Sesión propia creada antes del corte todavía válida (`200`); cierre posterior y rechazo del token revocado (`401`), sin revocar otras sesiones.
+- Cancelación sin sesión `401`, sin CSRF `403` y sobre ID confirmado inexistente `404`. No se cancelaron ni reimportaron lotes reales.
+- UI real en escritorio y **390×844**, cero errores de navegador observados y ancho documental **390 px**. `Historial Guías.xlsx` conserva su estado/diagnóstico histórico, configuración y original; **Descartar archivo** aparece habilitado. La comprobación fue de lectura, no una corrección ni reaplicación del lote.
+
+El primer corte se detuvo **antes de intentar migrar**: `tar` dentro del contenedor creó el respaldo de medios con su propia umask, y la barrera de permisos privados lo rechazó. Se recuperaron fuentes/selector y escritores v4, con salud comprobada y marcadores 2/3/4. Se conservó ese intento, se creó el archivo de respaldo con modo **0600 desde el inicio** y se repitieron preflight, congelación y respaldos nuevos; únicamente el segundo corte llegó a esquema 5. No se restauró ni degradó automáticamente la base.
+
+Evidencia privada de corte: `/home/allnutrition/cancel-release-d6e2bf32be/` y `.test-data/cancel-release-d6e2bf32be/` local. `production-frozen-v4.dump` SHA-256 **`359029e7dc7a80abce626697b45393c6c6b6ceb987f84dd5b5283695f0265509`**; `production-frozen-media.tar` SHA-256 **`4ed0f12b2696ccb16d3fa51e4c33c431e90e57606d777acff46ee774ea7d46f1`**. Aceptación nativa en `/home/allnutrition/cancel-release-d6e2bf32be-candidate/.test-data/docker/cbb6674080e6a41a/artifacts/`; recorrido UI adicional en `native-ui/` local y `native-ui-evidence.tar` remoto.
+
+No se acredita CI remoto, dispositivo móvil físico ni una política nueva de copias cifradas/off-host. Los respaldos manuales no sustituyen esa política. Una imagen v4 aislada **no es rollback seguro** después de esta migración.
+
 ## Cancelación de importaciones · verificación local · 19 de octubre de 2026
 
-Verificado sobre Next.js **16.3.8** compilado y Node **24.14.1**, con SQLite aislado y PostgreSQL **16** en un contenedor propio publicado únicamente en loopback. La suite PostgreSQL usó `allnutrition_test`, la autorización explícita de reset y `DB_SSL=disable` solo en esa conexión local. Chromium accedió mediante HTTPS de localhost con certificado de prueba. **Sin publicación remota ni despliegue** de este cambio.
+Verificado sobre Next.js **16.3.8** compilado y Node **24.14.1**, con SQLite aislado y PostgreSQL **16** en un contenedor propio publicado únicamente en loopback. La suite PostgreSQL usó `allnutrition_test`, la autorización explícita de reset y `DB_SSL=disable` solo en esa conexión local. Chromium accedió mediante HTTPS de localhost con certificado de prueba. **Este pase local fue anterior a la aceptación nativa y al corte documentados arriba.**
 
 | Comprobación | Resultado observado |
 |---|---|

@@ -245,9 +245,9 @@ Confiar en la CA pública normal desde clientes; validar `/api/health`, login, c
 
 ## Esquema 5: cancelación de importaciones
 
-El código de esta revisión requiere esquema **5**. Esta ampliación no se ha promovido a producción; los cortes anteriores documentados arriba siguen siendo antecedentes, no evidencia de este cambio.
+El código de esta revisión requiere esquema **5**, publicado el **19 de octubre de 2026** con fuente `cfaee8070f45ec78fe9903af82205cdcf165b780` e imagen nativa `allnutrition:release-73620e997c62`. Los cortes anteriores documentados arriba son antecedentes, no una alternativa de rollback de imagen sobre este esquema.
 
-Antes de una promoción autorizada:
+Para otra promoción o recuperación autorizada:
 
 1. Aceptar la imagen candidata en la arquitectura del servidor y ensayar la migración sobre una recuperación separada. Respaldar y detener juntos **web y scheduler** antes del cambio de esquema.
 2. Ejecutar `npm run db:migrate` con la conexión privilegiada del entorno autorizado. PostgreSQL amplía el `CHECK` de estados; SQLite reconstruye la tabla de lotes y comprueba sus claves foráneas antes del commit. La migración es atómica e idempotente y no reescribe hechos, contraseñas ni sesiones. SQLite la aplica también al abrir la base; prever espacio para la reconstrucción y un respaldo válido.
@@ -256,6 +256,16 @@ Antes de una promoción autorizada:
 No mezclar escritores v4/v5 ni asumir que una imagen anterior interpreta lotes `cancelled`. No hay degradación automática del esquema ni rollback de datos por cancelar un archivo; una recuperación a una versión anterior requiere una decisión y un procedimiento coordinados.
 
 Una cancelación confirmada elimina la entrada `import:<id>` de `job_runs`, revocando el lease bajo el bloqueo de escritura. Su ausencia es esperada: actor, instante y cantidades conservadas/detenidas quedan en `import_batches.data.cancellation` y en `business_audit`. Las revisiones/filas fuente y los hechos confirmados permanecen; el original privado se elimina. Restaurar el respaldo no reconstruye trabajo para ese lote.
+
+### Corte auditado de esquema 5 (2026-10-19, 21:26–21:27 UTC)
+
+- Aceptación interactiva nativa `cbb6674080e6a41a`, código 0; la misma imagen Linux/amd64 se ejecuta en web y scheduler, sin rebuild.
+- Recuperación previa en una base TLS separada: marcadores 2/3/4→2/3/4/5, 41 tablas conservadas por contenido completo y tres filas de migración anteriores intactas. El clon, su red y su volumen se retiraron.
+- Web y scheduler detenidos juntos durante el respaldo final y la migración. PostgreSQL mantuvo su contenedor; no se modificaron `.env.server.local`, certificados, Nginx, DNS ni volúmenes.
+- Respaldos privados en `/home/allnutrition/cancel-release-d6e2bf32be/`: `production-frozen-v4.dump` (42 tablas y bloques de datos validados), `production-frozen-media.tar` y `production-oldchangedsource.tar`. Copias privadas y evidencia en `.test-data/cancel-release-d6e2bf32be/` del equipo de operación; no están en Git.
+- Antes de reabrir escritores se comprobó igualdad exacta de las 41 tablas restantes y de los marcadores previos, añadiendo únicamente el 5. Catálogo, cuatro imágenes, sesión anterior, rol limitado/TLS y nuevo heartbeat se comprobaron después del arranque.
+- El dominio real mostró el lote histórico conservado y **Descartar archivo** disponible, también a 390 px. Se comprobaron rechazos 401/403/404 sin tocar importaciones reales. Detalle de incidencias, hashes y límites en [VERIFICACION.md](VERIFICACION.md).
+
 
 ## Automatización de negocio v3
 

@@ -1,13 +1,16 @@
 # Cambios — administración v3 y antecedentes
 
-## Cancelación de importaciones · 19 de octubre de 2026 · sin desplegar
+## Cancelación de importaciones publicada · 19 de octubre de 2026
 
 - Descarte del archivo local o guardado y cancelación durante carga, preparación, resolución, cola y aplicación. El control sigue disponible durante las peticiones; la creación aún sin respuesta se resuelve antes de cancelar su lote.
 - Cancelación transaccional: revoca el lease y elimina el original privado, sin revertir grupos/liquidaciones ya confirmados ni modificar indicadores por cancelar. Conserva filas fuente, revisión aceptada y auditoría; ni el worker anterior ni una restauración reanudan el lote cancelado.
 - La última operación confirmada impide cancelar aunque falte publicar el estado final. Una importación terminada con o sin excepciones tampoco admite cancelación después de revisar o reintentar pendientes.
 - Respuestas tardías no restauran el archivo ni el paso anterior. El resultado cancelado conserva su URL y permite abrir **Nuevo lote**, también al cancelar antes de recibir el ID de creación. Las excepciones conservadas se explican como historial, no como una invitación a reanudar el lote.
 - Migración de esquema 5 para SQLite/PostgreSQL, conservando datos y relaciones. Los respaldos admiten el estado cancelado y las huellas comerciales SHA-256 de productos en revisiones congeladas, sin aceptar huellas arbitrarias.
-- Verificación local y límites en [VERIFICACION.md](VERIFICACION.md). Sin publicación remota ni promoción a producción en esta entrega.
+- Publicado en `origin/trunk` y en producción con `allnutrition:release-73620e997c62`, sin reconstruir la imagen aceptada. Web y scheduler comparten el mismo ID, con esquema 5.
+- Aceptación nativa interactiva: 535 contratos SQLite/PostgreSQL y 36 E2E aprobados, sin omisiones; recorrido comercial por UI, cancelación real del fixture, rechazo al finalizar, reinicio 0→25→60, caída/recuperación y restore.
+- La preparación descartable PostgreSQL admite 120 s únicamente para `TRUNCATE`, tras observar fsync lento antes de ejecutar tres escenarios. Se mantiene el límite SQL de producción de 15 s y no se relajan comprobaciones funcionales.
+- Recuperación separada y corte conservaron exactamente las 41 tablas ajenas al marcador de migración, incluidas contraseñas, sesiones, productos y originales privados. Medios, configuración y proxy público intactos; no se reimportó ni canceló el archivo real durante el humo. Evidencia, respaldos e incidencias protegidas en [VERIFICACION.md](VERIFICACION.md).
 
 ## Publicación de importación recuperable y diagnóstico · 18 de octubre de 2026
 
