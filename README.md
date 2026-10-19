@@ -133,6 +133,11 @@ La lectura de muestras no se usa como tamaño completo de la hoja: los archivos 
 
 Si falla la lectura o la extracción, el diagnóstico permanece dentro del importador e indica código, fase, ubicación conocida y una acción correctiva. Distingue archivo, configuración y fallo interno cuando hay evidencia; una fecha o importe ambiguos no se atribuyen automáticamente a una causa. Puedes navegar y volver a **Retomar lote**: conserva el archivo, las columnas guardadas y el último paso válido. **Nuevo lote** es una elección explícita, no un reinicio automático. Un historial de guías sin productos, cantidades y precios se revisa como seguimiento o se vincula con pedidos existentes; no genera ventas incompletas ni exige un saldo específico de caja.
 
+Antes de terminar puedes **Descartar archivo** durante la carga/preparación o **Cancelar importación** después de confirmar, incluso con el worker activo. Se detiene lo pendiente al concluir la transacción en curso y se elimina el original privado; **no se revierten pedidos, existencias, recaudos ni liquidaciones ya confirmados**. Se conservan revisiones y filas fuente como evidencia. El lote cancelado queda de solo lectura: para otro archivo, usa **Nuevo lote**.
+
+Una importación terminada, también con excepciones, **no admite descarte ni cancelación**, aunque la pantalla esté desactualizada o después se revisen sus pendientes. El servidor rechaza la operación con `409`; confirmar la última operación también cierra la posibilidad de cancelar antes de que el worker publique su estado final. Esta ampliación requiere **esquema 5** y todavía **no se ha desplegado**; véase [DESPLIEGUE.md](docs/DESPLIEGUE.md).
+
+
 Informes diarios, semanales, mensuales, trimestrales, semestrales y anuales en `America/Bogota`: consulta viva, detalle explicativo, snapshots inmutables y XLSX con Resumen/Detalle/Definiciones. Los períodos históricos anteriores a `reportsStartOn` se solicitan expresamente. Falta de costo/fecha se muestra como cobertura pendiente, no beneficio ficticio; un corte de archivo sin hora no adquiere la hora de subida. Los importes internos son centavos enteros seguros. Agregados con 16 o más dígitos en centavos se exportan como texto decimal COP exacto para evitar la pérdida de precisión de Excel.
 
 ## Despliegue

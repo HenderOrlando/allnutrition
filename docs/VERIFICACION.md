@@ -1,5 +1,30 @@
 # Verificación v3 — administración de negocio
 
+## Cancelación de importaciones · verificación local · 19 de octubre de 2026
+
+Verificado sobre Next.js **16.3.8** compilado y Node **24.14.1**, con SQLite aislado y PostgreSQL **16** en un contenedor propio publicado únicamente en loopback. La suite PostgreSQL usó `allnutrition_test`, la autorización explícita de reset y `DB_SSL=disable` solo en esa conexión local. Chromium accedió mediante HTTPS de localhost con certificado de prueba. **Sin publicación remota ni despliegue** de este cambio.
+
+| Comprobación | Resultado observado |
+|---|---|
+| `npm run check` | **179 archivos** JavaScript/JSX, cero errores de sintaxis/imports locales. |
+| Suite Node completa con entorno PostgreSQL descartable | **535 aprobadas**, cero fallidas y cero omitidas; SQLite y PostgreSQL reales. |
+| `npm run build` | Compilación y generación correctas; incluye `POST /api/admin/imports/[id]/cancel`. |
+| Migración 5 | Conservación de originales, perfiles, revisiones, filas, usuarios, sesiones e historia SQLite v4; claves foráneas restrictivas, idempotencia y rollback del reemplazo de tabla al fallar el marcador. Esquema PostgreSQL 5 ejercido por los contratos reales. |
+| Cancelación y worker | Borrador, inspección en cola/ejecutándose, preparación, revisión aceptada en cola y aplicación parcial. Barreras después de commits reales comprobaron que un worker revocado no aplica el grupo siguiente ni publica una revisión tardía. |
+| Terminación y revisiones posteriores | Rechazo `409` cuando la última operación ya confirmó aunque siga `applying`, después de terminar con/sin excepciones y durante la revisión/reaplicación de pendientes de un lote antes terminado. |
+| Respaldo | Restauración de cancelación parcial sin reencolar ni perder hechos; huellas comerciales de productos válidas aceptadas y huellas arbitrarias rechazadas antes de restaurar. |
+| Archivo local | Descarte antes de enviar y nueva selección del mismo archivo; origen conservado. |
+| Creación con respuesta retenida por CDP | Cancelación disponible antes de recibir el ID; resultado `cancelled`, cero PUT de archivo y URL del resultado conservada. **Nuevo lote** vuelve a abrir el selector. |
+| Upload recibido, respuesta todavía retenida | Se comprobó un hash guardado real antes de cancelar. Cancelación `200`, original `404`, respuesta antigua sin resucitar archivo/paso y resultado móvil de **390 px**, sin overflow horizontal. |
+| Parcial y excepciones | Hechos comerciales/contadores idénticos antes y después de cancelar. Se conservó un grupo y se detuvo su liquidación pendiente. Otra cancelación conservó dos grupos y una excepción anterior, detuvo la declaración restante y explicó el error como historial; repetir el worker procesó **0 operaciones**. |
+| Diálogo móvil | Descarte desde el resolver, sin exigir completar sus campos; cierre correcto y original `404`. Tres acciones accesibles a 390 px, alturas superiores a 44 px, captura después de finalizar la animación. |
+| Pantalla antigua tras finalizar | El control antiguo seguía habilitado, pero el servidor devolvió **409**. La pantalla cargó `completed`, sin controles de descarte/cancelación; original todavía **200**. |
+| Frontera HTTP | Cancelación autenticada **200**, sin sesión **401** y sin CSRF **403**. |
+
+Durante el humo se reprodujo un problema del flujo nuevo: cancelar antes de terminar la creación dejaba el resultado sin ID en la URL y **Nuevo lote** no abría el formulario. Tras conservar la URL del lote cancelado, se repitió la respuesta retenida y se comprobó la apertura del siguiente lote. La restauración también detectó la validación antigua de versiones enteras sobre las huellas comerciales de productos; se corrigió y quedó cubierta sin relajar los demás destinos.
+
+Evidencia sanitizada y capturas finales en **`.test-data/import-cancel-745d0bcc/smoke.json`** y su directorio. Los Excel de este pase son sintéticos: no se reimportó `Historial Guías.xlsx`, no se accedió a producción ni se acredita una nueva aceptación Docker/amd64, suite E2E completa, CI remoto o dispositivo móvil físico. Los escritores, navegador y PostgreSQL de prueba se retiraron; se conservan únicamente evidencia y datos locales aislados.
+
 ## Importación recuperable y diagnóstico publicados · 18 de octubre de 2026
 
 Producción **https://allnutrition.wintimeapp.co** actualizada entre **19:58:15 y 19:59:14 UTC**. Fuente de aplicación `1f51ad4269614f2e6135e8ead2263da485dbc3db`, publicada en `origin/trunk`; Git archive SHA-256 `085b2fbb1dbcaf1558b68e46f8b8eb04652e8e3bb8ab957c3a1e356074da3528`. Los commits posteriores de documentación no reconstruyen la imagen aprobada.

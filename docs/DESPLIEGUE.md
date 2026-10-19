@@ -243,6 +243,20 @@ Confiar en la CA pública normal desde clientes; validar `/api/health`, login, c
 - Dominio real: salud 200, sesión previa conservada, guía con motivos y opción de importación, lote antiguo retomable tras navegar/recargar, móvil sin overflow, logout propio 401, vitrina y cuatro WebP 200, heartbeat reciente. No se volvió a importar el Excel ni se crearon pedidos o movimientos comerciales reales. Solo variaron `job_runs` y la sesión propia del smoke.
 - Evidencia nativa en `/home/allnutrition/import-release-0c834d19a4-candidate-1f51ad4/.test-data/docker/196c12cbe881b794/artifacts/`; recuperación y corte bajo `/home/allnutrition/import-release-0c834d19a4/`. No se añadió retención, programación ni copia cifrada off-host.
 
+## Esquema 5: cancelación de importaciones
+
+El código de esta revisión requiere esquema **5**. Esta ampliación no se ha promovido a producción; los cortes anteriores documentados arriba siguen siendo antecedentes, no evidencia de este cambio.
+
+Antes de una promoción autorizada:
+
+1. Aceptar la imagen candidata en la arquitectura del servidor y ensayar la migración sobre una recuperación separada. Respaldar y detener juntos **web y scheduler** antes del cambio de esquema.
+2. Ejecutar `npm run db:migrate` con la conexión privilegiada del entorno autorizado. PostgreSQL amplía el `CHECK` de estados; SQLite reconstruye la tabla de lotes y comprueba sus claves foráneas antes del commit. La migración es atómica e idempotente y no reescribe hechos, contraseñas ni sesiones. SQLite la aplica también al abrir la base; prever espacio para la reconstrucción y un respaldo válido.
+3. Comprobar los marcadores **2, 3, 4 y 5** y arrancar web/scheduler con la misma imagen aprobada. El runtime PostgreSQL exige el marcador 5 y no ejecuta DDL.
+
+No mezclar escritores v4/v5 ni asumir que una imagen anterior interpreta lotes `cancelled`. No hay degradación automática del esquema ni rollback de datos por cancelar un archivo; una recuperación a una versión anterior requiere una decisión y un procedimiento coordinados.
+
+Una cancelación confirmada elimina la entrada `import:<id>` de `job_runs`, revocando el lease bajo el bloqueo de escritura. Su ausencia es esperada: actor, instante y cantidades conservadas/detenidas quedan en `import_batches.data.cancellation` y en `business_audit`. Las revisiones/filas fuente y los hechos confirmados permanecen; el original privado se elimina. Restaurar el respaldo no reconstruye trabajo para ese lote.
+
 ## Automatización de negocio v3
 
 `scheduler` ejecuta `node scripts/business-jobs.mjs` con la misma `${APP_IMAGE}`, usuario `node`, conexión limitada y CA de web; solo usa backend y no publica puertos. Debe actualizarse junto con web. No es un cron del navegador ni se ejecuta por GET.

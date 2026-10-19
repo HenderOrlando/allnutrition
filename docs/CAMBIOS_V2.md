@@ -1,5 +1,14 @@
 # Cambios — administración v3 y antecedentes
 
+## Cancelación de importaciones · 19 de octubre de 2026 · sin desplegar
+
+- Descarte del archivo local o guardado y cancelación durante carga, preparación, resolución, cola y aplicación. El control sigue disponible durante las peticiones; la creación aún sin respuesta se resuelve antes de cancelar su lote.
+- Cancelación transaccional: revoca el lease y elimina el original privado, sin revertir grupos/liquidaciones ya confirmados ni modificar indicadores por cancelar. Conserva filas fuente, revisión aceptada y auditoría; ni el worker anterior ni una restauración reanudan el lote cancelado.
+- La última operación confirmada impide cancelar aunque falte publicar el estado final. Una importación terminada con o sin excepciones tampoco admite cancelación después de revisar o reintentar pendientes.
+- Respuestas tardías no restauran el archivo ni el paso anterior. El resultado cancelado conserva su URL y permite abrir **Nuevo lote**, también al cancelar antes de recibir el ID de creación. Las excepciones conservadas se explican como historial, no como una invitación a reanudar el lote.
+- Migración de esquema 5 para SQLite/PostgreSQL, conservando datos y relaciones. Los respaldos admiten el estado cancelado y las huellas comerciales SHA-256 de productos en revisiones congeladas, sin aceptar huellas arbitrarias.
+- Verificación local y límites en [VERIFICACION.md](VERIFICACION.md). Sin publicación remota ni promoción a producción en esta entrega.
+
 ## Publicación de importación recuperable y diagnóstico · 18 de octubre de 2026
 
 - Publicado en `origin/trunk` y en producción con `allnutrition:release-1bc0af86a251`, aceptada nativamente antes del corte. Web y scheduler comparten el ID aprobado, sin rebuild.
