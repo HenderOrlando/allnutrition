@@ -11,3 +11,4 @@ backups/
 test-results/
 playwright-report/
 *.sqlite*
+!db/*.sqlite.sql

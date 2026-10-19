@@ -5,8 +5,12 @@ import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../lib/store.mjs';
 import { schemas } from '../lib/schema.mjs';
-import { BUSINESS_TABLES, convertV2Bundle, migrateBusinessV3, migrateInventoryV4 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, convertV2Bundle, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5 } from '../lib/db/migrations.mjs';
 import { resolveOrderRecognition } from '../lib/business/orders.mjs';
+import { saveResource, listResources } from '../lib/business/settings.mjs';
+import { writeExcelSheets } from '../lib/business/excel.mjs';
+import { createImportBatch, uploadImportFile, getImportBatch, requestImportPreview, commitImport, processImportTurn, cancelImportBatch } from '../lib/business/imports.mjs';
+import { requestId } from './business-fixtures.mjs';
 
 const CREATED = '2026-09-01T04:59:59.000Z';
 const UPDATED = '2026-09-03T15:00:00.000Z';
@@ -53,7 +57,7 @@ function legacyBundle() {
 }
 
 /** A disposable real SQLite v2 database; bypasses openStore's automatic v3 upgrade intentionally. */
-async function v2Store({ failMarker = false, failInventoryMarker = false } = {}) {
+async function v2Store({ failMarker = false, failInventoryMarker = false, failCancellationMarker = false } = {}) {
   const native = new DatabaseSync(':memory:');
   native.exec('PRAGMA foreign_keys=ON;');
   native.exec(await readFile(new URL('../db/sqlite.sql', import.meta.url), 'utf8'));
@@ -64,6 +68,7 @@ async function v2Store({ failMarker = false, failInventoryMarker = false } = {})
     run: async (sql, params = []) => {
       if (failMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at)')) throw new Error('Fallo sintético al guardar marcador v3');
       if (failInventoryMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(4,')) throw new Error('Fallo sintético al guardar marcador v4');
+      if (failCancellationMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(5,')) throw new Error('Fallo sintético al guardar marcador v5');
       return { changes: Number(native.prepare(sql).run(...params).changes) };
     },
     exec: async sql => native.exec(sql)
@@ -73,6 +78,11 @@ async function v2Store({ failMarker = false, failInventoryMarker = false } = {})
     transaction: async fn => {
       native.exec('BEGIN IMMEDIATE');
       try { const result = await fn(direct); native.exec('COMMIT'); return result; }
+      catch (error) { native.exec('ROLLBACK'); throw error; }
+    },
+    readSnapshot: async fn => {
+      native.exec('BEGIN');
+      try { const result = await fn({provider:direct.provider,table:direct.table,all:direct.all,get:direct.get}); native.exec('COMMIT'); return result; }
       catch (error) { native.exec('ROLLBACK'); throw error; }
     }
   };
@@ -391,4 +401,52 @@ test('inventario v4 acepta existencias enteras seguras sin imponer el límite co
     assert.equal(product.stockQuantity,Number.MAX_SAFE_INTEGER);
     assert.equal(product.stockReserved,2);
   } finally { await store.close(); }
+});
+
+async function seedV4Import(store) {
+  const actor='migration-import',platform=await saveResource(store,'platforms',{requestId:requestId(),name:'Origen conservado v5'},actor);
+  const source=(await listResources(store,'sources',{platform:platform.id}))[0];
+  const config={sheetName:'Datos',headerRow:1,purpose:'tracking',dateFormat:'ISO',columns:[{index:0,header:'Guía',destination:'tracking'},{index:1,header:'Transportadora',destination:'carrier'},{index:2,header:'Estado',destination:'rawStatus'},{index:3,header:'Corte',destination:'reportAsOf'}],statusMap:{Tránsito:'in_transit'}};
+  const profile=await saveResource(store,'profiles',{requestId:requestId(),name:'Perfil conservado',sourceId:source.id,profile:config},actor);
+  let batch=await createImportBatch(store,{requestId:requestId(),sourceId:source.id,profileId:profile.id},actor);
+  await uploadImportFile(store,batch.id,{requestId:requestId(),version:batch.version,filename:'v4.xlsx',bytes:writeExcelSheets([{name:'Datos',rows:[['Guía','Transportadora','Estado','Corte'],['000V5','Transportadora sintética','Tránsito','2025-09-05']]}])},actor);
+  await processImportTurn(store,{batchId:batch.id});batch=await getImportBatch(store,batch.id);
+  await requestImportPreview(store,batch.id,{version:batch.version,requestId:requestId()},actor);
+  await processImportTurn(store,{batchId:batch.id});batch=await getImportBatch(store,batch.id);
+  await commitImport(store,batch.id,{version:batch.version,previewHash:batch.preview.previewHash,requestId:requestId()},actor);
+  await processImportTurn(store,{batchId:batch.id});
+  return {source,batch:await getImportBatch(store,batch.id),actor};
+}
+
+test('cancelación v5 conserva originales, perfiles, revisiones, filas y toda la historia v4',async()=>{
+  const store=await v2Store();
+  try{
+    await seedV2(store);await migrateBusinessV3(store);await migrateInventoryV4(store);
+    const {source,batch,actor}=await seedV4Import(store);
+    assert.equal(batch.state,'completed');assert.equal(await rows(store,'import_revisions').then(items=>items.length),1);
+    const tables=[...BASE_TABLES.filter(table=>table!=='migrations'),...BUSINESS_TABLES],before=await snapshot(store,tables);
+    assert.deepEqual(await migrateImportCancellationV5(store),{migrated:true,version:5});
+    assert.deepEqual(await snapshot(store,tables),before);assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'),[]);
+    const all=await snapshot(store,[...BASE_TABLES,...BUSINESS_TABLES]);
+    assert.deepEqual(await migrateImportCancellationV5(store),{migrated:false,version:5});
+    assert.deepEqual(await snapshot(store,[...BASE_TABLES,...BUSINESS_TABLES]),all);
+    await assert.rejects(()=>cancelImportBatch(store,batch.id,{requestId:requestId()},actor),{status:409});
+    await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('import_batches')} WHERE id=?`,[batch.id]),/FOREIGN KEY/);
+    const draft=await createImportBatch(store,{requestId:requestId(),sourceId:source.id},actor);
+    assert.equal((await cancelImportBatch(store,draft.id,{requestId:requestId()},actor)).state,'cancelled');
+    await assert.rejects(()=>store.db.run(`UPDATE ${store.t('import_batches')} SET state='invalid' WHERE id=?`,[draft.id]),/CHECK/);
+  }finally{await store.close();}
+});
+
+test('un fallo del marcador v5 revierte también el reemplazo de tabla y sus relaciones',async()=>{
+  const store=await v2Store({failCancellationMarker:true});
+  try{
+    await seedV2(store);await migrateBusinessV3(store);await migrateInventoryV4(store);
+    const {batch}=await seedV4Import(store),before=await snapshot(store,[...BASE_TABLES,...BUSINESS_TABLES]);
+    await assert.rejects(()=>migrateImportCancellationV5(store),/Fallo sintético/);
+    assert.deepEqual(await snapshot(store,[...BASE_TABLES,...BUSINESS_TABLES]),before);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'),[]);
+    await assert.rejects(()=>store.db.run(`UPDATE ${store.t('import_batches')} SET state='cancelled' WHERE id=?`,[batch.id]),/CHECK/);
+    await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('import_batches')} WHERE id=?`,[batch.id]),/FOREIGN KEY/);
+  }finally{await store.close();}
 });
