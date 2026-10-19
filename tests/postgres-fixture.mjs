@@ -18,7 +18,8 @@ export async function resetPostgresStore(store) {
   const current = await store.db.get('SELECT current_database() AS name');
   if (current.name !== 'allnutrition_test') throw new Error('Reset rechazado: la conexión real no es allnutrition_test.');
   const tables = [...BUSINESS_TABLES, 'order_audit','order_events','idempotency','orders','records','sessions','users','attempts','settings'];
-  await store.db.exec(`TRUNCATE ${tables.map(name => store.t(name)).join(',')};`);
+  // TRUNCATE recreates relation files; slow fsync must not consume a runtime query's 15s limit.
+  await store.db.exec({ text: `TRUNCATE ${tables.map(name => store.t(name)).join(',')};`, query_timeout: 120000 });
   await store.db.run(`UPDATE ${store.t('counters')} SET value=0`);
   await store.initialize();
   await initializeBusinessDefaults(store);
