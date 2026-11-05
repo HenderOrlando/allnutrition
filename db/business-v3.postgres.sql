@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS allnutrition.settlement_receipts (
   CHECK((net_minor=0 AND cash_entry_id IS NULL) OR (net_minor<>0 AND cash_entry_id IS NOT NULL AND account_id IS NOT NULL))
 );
 CREATE TABLE IF NOT EXISTS allnutrition.expenses (
-  id TEXT PRIMARY KEY, category TEXT NOT NULL CHECK(category IN ('shipping_out','shipping_return','platform_fee','commission','salary','bonus','other')),
+  id TEXT PRIMARY KEY, category TEXT NOT NULL CHECK(category IN ('shipping_out','shipping_return','shipping_insurance','platform_fee','commission','salary','bonus','advertising','operating','other')),
   amount_minor BIGINT NOT NULL CHECK(amount_minor BETWEEN -10000000000000 AND 10000000000000), incurred_on TEXT,
   person_id TEXT REFERENCES allnutrition.people(id) ON DELETE RESTRICT, order_id TEXT REFERENCES allnutrition.orders(id) ON DELETE RESTRICT, shipment_id TEXT REFERENCES allnutrition.shipments(id) ON DELETE RESTRICT,
   source_key TEXT UNIQUE, version INTEGER NOT NULL DEFAULT 1 CHECK(version>=1), recorded_at TEXT NOT NULL,

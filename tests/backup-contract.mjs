@@ -6,14 +6,32 @@ import { emptyRecord, defaults, schemas } from '../lib/schema.mjs';
 import { createBusinessFixture, returnBusinessFixture, requestId } from './business-fixtures.mjs';
 import { saveResource } from '../lib/business/settings.mjs';
 import { writeExcelSheets } from '../lib/business/excel.mjs';
-import { createImportBatch, uploadImportFile, getImportBatch, requestImportPreview, commitImport, processImportTurn } from '../lib/business/imports.mjs';
+import { createImportBatch, uploadImportFile, getImportBatch, updateImportBatch, requestImportPreview, commitImport, processImportTurn } from '../lib/business/imports.mjs';
 import { generateReportSnapshot, saveReportSnapshot, processReportTurn } from '../lib/business/reports.mjs';
 import { claimJob } from '../lib/business/job-leases.mjs';
 import { saveAccount, recordAdvance, transferMoney, closeCash } from '../lib/business/cash.mjs';
 import { confirmPayroll } from '../lib/business/payroll.mjs';
 import { saveSettlement } from '../lib/business/settlements.mjs';
+import { createShipment, getShipment, saveShipment } from '../lib/business/shipments.mjs';
+import { recordExpense, payExpense } from '../lib/business/expenses.mjs';
+import { entity, hash } from '../lib/business/commands.mjs';
+import { inventoryState } from '../lib/business/inventory.mjs';
+import { COMMERCIAL_TABLES, CORE_BACKUP_TABLES } from '../lib/backup-schema.mjs';
 
-const stable = bundle => { const copy = structuredClone(bundle); delete copy.exportedAt; return copy; };
+const stable = bundle => {
+  const copy = structuredClone(bundle);
+  delete copy.exportedAt;
+  const sortRows = (rows,keys) => rows?.sort((left,right) => JSON.stringify(keys.map(key => left[key])).localeCompare(JSON.stringify(keys.map(key => right[key]))));
+  for (const [table,{key}] of Object.entries(COMMERCIAL_TABLES)) sortRows(copy.business?.[table],key);
+  for (const [table,{key}] of Object.entries(CORE_BACKUP_TABLES)) sortRows(copy[table],key);
+  for (const table of [...Object.keys(schemas),'orders','counters']) sortRows(copy[table],['id']);
+  sortRows(copy.pendingJobs,['key']);
+  return copy;
+};
+const configSheet = config => config.formatVersion === 2 ? config.sheets.find(sheet => sheet.enabled) : config;
+const shipmentAdditionalFields = values => values?.shipmentAdditionalFields || values?.additionalFields;
+const financialTables = ['order_collections','cash_entries','expense_payments'];
+const financialFacts = async store => Object.fromEntries(await Promise.all(financialTables.map(async table => [table,await store.db.all(`SELECT * FROM ${store.t(table)} ORDER BY id`)])));
 
 /** Use before a destination reset; its plain return value also crosses engines. */
 export async function createCommercialBackupScenario(store) {
@@ -29,30 +47,62 @@ export async function createCommercialBackupScenario(store) {
   const auth = await login(store,'backup-auth-only@example.test','backup-auth-only-password');
   const person = await store.db.get(`SELECT version FROM ${store.t('people')} WHERE id=?`,[fixture.person.id]);
   await saveResource(store,'people',{name:fixture.person.name,active:true,version:person.version,userId:auth.user.id,requestId:requestId()},fixture.actorId,fixture.person.id);
+  const insurance = await recordExpense(store,{requestId:requestId(),category:'shipping_insurance',shipmentId:fixture.shipmentId,amountMinor:100000,incurredOn:'2025-09-02',concept:'Prima conservada en respaldo'},fixture.actorId);
+  await payExpense(store,{requestId:requestId(),expenseId:insurance.id,version:insurance.version,amountMinor:25000,accountId:fixture.account.id,effectiveOn:'2025-09-06',reference:'PAGO-SEGURO-RESPALDO'},fixture.actorId);
+  const insuranceShipments = {known:fixture.shipmentId};
+  for (const [state,amountMinor] of [['zero',0],['unknown',null]]) {
+    const shipment = await createShipment(store,{requestId:requestId(),sourceId:fixture.source.id,externalId:`BACKUP-INSURANCE-${state}`,carrier:'Transportadora sintética',tracking:`BACKUP-${state}`},fixture.actorId);
+    insuranceShipments[state] = shipment.id;
+    await recordExpense(store,{requestId:requestId(),category:'shipping_insurance',shipmentId:shipment.id,amountMinor,incurredOn:'2025-09-02',concept:`Seguro ${state} conservado`},fixture.actorId);
+  }
+  const financesBeforeImports = await financialFacts(store);
   const query = {period:'month',anchorDate:'2025-09-01'};
   await generateReportSnapshot(store,query,fixture.actorId);
   const reportRequest = await saveReportSnapshot(store,{period:'month',anchorDate:'2025-10-01',requestId:requestId()},fixture.actorId);
   const config = {sheetName:'Seguimiento',headerRow:1,dateFormat:'ISO',purpose:'tracking',columns:[
     {index:0,header:'Guía',destination:'tracking'},{index:1,header:'Transportadora',destination:'carrier'},
     {index:2,header:'Estado',destination:'rawStatus'},{index:3,header:'Fecha',destination:'eventAt'},
-    {index:4,header:'Corte',destination:'reportAsOf'},
+    {index:4,header:'Corte',destination:'reportAsOf'},{index:5,header:'Estado',destination:'rawShipmentStatus'},
+    {index:6,header:'Extra',destination:'additionalField',fieldName:'Centro de despacho'},
+    {index:7,header:'Extra',destination:'additionalField',fieldName:'__proto__'},
+    {index:8,header:'Valor declarado',destination:'insuredValue'},{index:9,header:'Valor solicitado',destination:'expectedCollection'},
+    {index:10,header:'Tipo',destination:'shippingType'},{index:11,header:'Destinatario',destination:'customerName'},
   ],statusMap:{Entregado:'delivered'}};
   const profile = await saveResource(store,'profiles',{requestId:requestId(),name:'Seguimiento conservado',sourceId:fixture.source.id,profile:config},fixture.actorId);
-  const bytes = writeExcelSheets([{name:'Seguimiento',rows:[['Guía','Transportadora','Estado','Fecha','Corte'],['0000123456789','Transportadora sintética','Entregado','2025-09-03','2025-09-05']]}]);
-  let batch;
-  for (let pass=0;pass<2;pass++) {
-    batch = await createImportBatch(store,{requestId:requestId(),sourceId:fixture.source.id,profileId:profile.id},fixture.actorId);
+  const legacyProfile = await saveResource(store,'profiles',{requestId:requestId(),name:'Perfil antiguo pendiente de corregir',sourceId:fixture.source.id,profile:config},fixture.actorId);
+  const legacyConfig = {...config,columns:config.columns.map(column => column.index === 1 ? {...column,destination:'tracking'} : column)};
+  await store.db.run(`UPDATE ${store.t('import_profiles')} SET data=?,version=version+1 WHERE id=?`,[JSON.stringify(legacyConfig),legacyProfile.id]);
+  const otherSource = await saveResource(store,'sources',{requestId:requestId(),name:'Observaciones secundarias',platformId:fixture.platform.id},fixture.actorId);
+  const otherConfig = {...config,columns:config.columns.map(column => ['rawStatus','eventAt','reportAsOf'].includes(column.destination) ? {...column,destination:'ignore'} : column)};
+  const otherProfile = await saveResource(store,'profiles',{requestId:requestId(),name:'Información de otra fuente',sourceId:otherSource.id,profile:otherConfig},fixture.actorId);
+  const bytes = writeExcelSheets([{name:'Seguimiento',rows:[
+    ['Guía','Transportadora','Estado','Fecha','Corte','Estado','Extra','Extra','Valor declarado','Valor solicitado','Tipo','Destinatario'],
+    ['0000123456789','Transportadora sintética','Entregado','2025-09-03','2025-09-05','PAGADA','Bodega sintética','<b>00017</b>',55000,55000,'PAGO CONTRAENTREGA','Destinatario observado'],
+  ]}]);
+  let batch, firstImportedFields;
+  for (let pass=0;pass<3;pass++) {
+    const secondary = pass === 1;
+    batch = await createImportBatch(store,{requestId:requestId(),sourceId:secondary ? otherSource.id : fixture.source.id,profileId:secondary ? otherProfile.id : profile.id},fixture.actorId);
     await uploadImportFile(store,batch.id,{requestId:requestId(),version:batch.version,filename:'seguimiento.xlsx',bytes},fixture.actorId);
     await processImportTurn(store,{batchId:batch.id});
     batch = await getImportBatch(store,batch.id);
+    if (secondary) batch = await updateImportBatch(store,batch.id,{requestId:requestId(),version:batch.version,resolutions:[{action:'link_shipment',sheet:'Seguimiento',rowNumber:2,internalId:fixture.shipmentId}]},fixture.actorId);
     await requestImportPreview(store,batch.id,{requestId:requestId(),version:batch.version},fixture.actorId);
     await processImportTurn(store,{batchId:batch.id});
     batch = await getImportBatch(store,batch.id);
     assert.equal(batch.preview.summary.valid,1,JSON.stringify(batch.preview));
     await commitImport(store,batch.id,{requestId:requestId(),version:batch.version,previewHash:batch.preview.previewHash,includeValidOnly:false},fixture.actorId);
-    if (pass===0) {
+    if (pass<2) {
       await processImportTurn(store,{batchId:batch.id});
       assert.equal((await getImportBatch(store,batch.id)).state,'completed');
+      const fields = (await getShipment(store,fixture.shipmentId)).importedFields;
+      if (pass === 0) {
+        firstImportedFields = structuredClone(fields);
+        const shipment = await getShipment(store,fixture.shipmentId);
+        await saveShipment(store,{requestId:requestId(),version:shipment.version,notes:'Nota manual separada de la información importada',reason:'Conservar observaciones al corregir notas'},fixture.actorId,shipment.id);
+        assert.deepEqual((await getShipment(store,shipment.id)).importedFields,firstImportedFields);
+      }
+      else assert.deepEqual(fields.filter(field => field.sourceId === fixture.source.id),firstImportedFields,'A second source must preserve the first source provenance');
     }
   }
   const lease = await claimJob(store,{key:`import:${batch.id}`});
@@ -77,13 +127,65 @@ export async function createCommercialBackupScenario(store) {
   assert.equal(bundle.orders[0].financialSummary,undefined);
   assert.ok(bundle.order_audit.length && bundle.idempotency.length);
   assert.ok(bundle.business.external_links.length,'Applied source aliases are commercial data');
-  assert.equal(bundle.business.import_revisions.length,2);
+  assert.equal(bundle.business.import_revisions.length,3);
   assert.ok(bundle.business.payroll_offsets.length && bundle.business.cash_closings.length && bundle.business.order_returns.length);
   assert.ok(bundle.business.settlements.some(row => JSON.parse(row.data).reconciliationRequired));
   assert.equal(bundle.business.import_batches[0].file_bytes_base64,Buffer.from(bytes).toString('base64'));
   assert.equal(bundle.pendingJobs.find(job => job.kind === 'import').actorId,fixture.actorId);
   assert.equal(bundle.pendingJobs.find(job => job.kind === 'report').key,reportRequest.jobKey);
-  return {bundle,batchId:batch.id,bytes:Buffer.from(bytes).toString('base64'),actorId:fixture.actorId,orderId:fixture.orderId,personId:fixture.person.id,sourceUserId:auth.user.id};
+  assert.deepEqual(await financialFacts(store),financesBeforeImports,'Informational import must not create collections, cash entries, or expense payments');
+  const shipmentData = JSON.parse(bundle.business.shipments.find(row => row.id === fixture.shipmentId).data);
+  const fields = shipmentData.importedFields;
+  assert.equal(fields.length,14);
+  assert.deepEqual(fields.filter(field => field.sourceId === fixture.source.id),firstImportedFields);
+  for (const sourceId of [fixture.source.id,otherSource.id]) {
+    const observations = fields.filter(field => field.sourceId === sourceId);
+    const value = key => observations.find(field => field.key === key)?.value;
+    assert.equal(value('rawShipmentStatus'),'PAGADA');
+    assert.equal(value('shippingType'),'PAGO CONTRAENTREGA');
+    assert.equal(value('insuredValue'),5500000);
+    assert.equal(value('expectedCollection'),5500000);
+    assert.equal(value('additional:centro de despacho'),'Bodega sintética');
+    assert.equal(value('additional:__proto__'),'<b>00017</b>');
+    assert.equal(value('customerName'),'Destinatario observado');
+    for (const field of observations) {
+      assert.equal(field.sourceAsOf,sourceId === fixture.source.id ? '2025-09-06T04:59:59.999Z' : null);
+      assert.equal(field.sheet,'Seguimiento'); assert.deepEqual(field.rowNumbers,[2]);
+      assert.equal(bundle.business.import_batches.find(row => row.id === field.batchId).source_id,sourceId);
+      assert.equal(field.header,['Guía','Transportadora','Estado','Fecha','Corte','Estado','Extra','Extra','Valor declarado','Valor solicitado','Tipo','Destinatario'][field.columnIndex]);
+    }
+  }
+  assert.equal((await store.order(fixture.orderId)).customerName,'Destinatario sintético','Observed recipient is not an authorized order edit');
+  assert.equal(shipmentData.notes,'Nota manual separada de la información importada');
+  const frozen = JSON.parse(bundle.business.import_revisions.find(row => row.batch_id === batch.id).data);
+  assert.equal(configSheet(frozen.config).columns.find(column => column.index === 7).fieldName,'__proto__');
+  assert.deepEqual(shipmentAdditionalFields(frozen.groups[0].rows[0].values).map(field => [field.key,field.value,field.columnIndex]),[['additional:centro de despacho','Bodega sintética',6],['additional:__proto__','<b>00017</b>',7]]);
+  for (const [state,shipmentId] of Object.entries(insuranceShipments)) {
+    const data = JSON.parse(bundle.business.shipments.find(row => row.id === shipmentId).data);
+    assert.equal(data.costStatuses.shipping_insurance,state === 'unknown' ? 'unknown' : 'known');
+    assert.equal(data.costObservations.shipping_insurance.amountMinor,state === 'known' ? 100000 : state === 'zero' ? 0 : null);
+    const expense = bundle.business.expenses.find(row => row.source_key === `${shipmentId}:shipping_insurance`);
+    assert.equal(expense?.amount_minor,state === 'unknown' ? undefined : state === 'zero' ? 0 : 100000);
+  }
+  const baselineBundle = structuredClone(bundle);
+  // Restore opening evidence and imported metadata without changing stock.
+  const order = bundle.orders.find(value => value.id === fixture.orderId);
+  const audit = {confirmedBy:fixture.actorId,confirmedAt:'2025-10-02T12:00:00.000Z',reason:'Conteo físico confirmado del negocio'};
+  const shipments = bundle.business.shipments.map(entity).filter(value => value.orderId === order.id);
+  const events = new Map(shipments.map(shipment => [shipment.id,bundle.business.shipment_events.map(entity).filter(value => value.shipmentId === shipment.id)]));
+  const returns = bundle.business.order_returns.map(entity).filter(value => value.orderId === order.id);
+  order.marketingCampaign = 'CAMP-RESPALDO';
+  order.items.forEach((line,index) => {line.externalLineId = `LINEA-RESPALDO-${index+1}`;});
+  order.inventoryOpening = {on:'2025-10-01',sourceId:fixture.source.id,batchId:batch.id,confirmedBy:audit.confirmedBy,confirmedAt:audit.confirmedAt,eventClassifications:[...events.values()].flat().map(event => ({eventId:event.id,included:true,...audit})),returnClassifications:returns.map(returned => ({returnId:returned.id,included:true,...audit}))};
+  order.inventory = inventoryState(order,shipments,events,returns);
+  bundle.inventoryVersion = 2;
+  const provenance = {...firstImportedFields.find(field => field.key.startsWith('additional:')),declaredOrigin:{sheet:'Archivo anterior',rowNumber:17,columnIndex:3,header:'Referencia original'}};
+  order.importedFields = [provenance];
+  const importedExpense = {...bundle.business.expenses[0],id:randomUUID(),category:'advertising',amount_minor:2500000,incurred_on:'2025-09-02',person_id:null,order_id:null,shipment_id:null,source_key:`excel-expense:${hash([fixture.source.id,'GASTO-RESPALDO'])}`,version:1};
+  importedExpense.data = JSON.stringify({concept:'Publicidad conservada',supplier:'Proveedor sintético',source:'excel',sourceId:fixture.source.id,sourceAsOf:'2025-09-06T04:59:59.999Z',campaign:'CAMP-RESPALDO',quantity:10,unitCostMinor:250000,reference:'REF-RESPALDO',notes:'Sin pago implícito',importIdentity:{externalId:'GASTO-RESPALDO',generated:false},importedFields:[provenance]});
+  bundle.business.expenses.push(importedExpense);
+  assert.equal(bundle.business.expense_payments.filter(row => row.expense_id === insurance.id).reduce((sum,row) => sum+row.amount_minor,0),25000);
+  return {bundle,baselineBundle,batchId:batch.id,bytes:Buffer.from(bytes).toString('base64'),actorId:fixture.actorId,orderId:fixture.orderId,shipmentId:fixture.shipmentId,insuranceShipments,insuranceId:insurance.id,personId:fixture.person.id,sourceUserId:auth.user.id};
 }
 
 /** Restore into a fresh/reset store; no reset is performed by this helper. */
@@ -108,12 +210,30 @@ export async function restoreCommercialBackupScenario(store, scenario, {resume =
   assert.ok(jobs.every(row => JSON.parse(row.data).requestedBy === actorId));
   if (resume) {
     const before = await store.order(scenario.orderId);
+    const accepted = bundle.business.import_revisions.find(row => row.batch_id === batchId);
+    const acceptedBytes = accepted.data;
+    const profileId = JSON.parse(acceptedBytes).profileId;
+    if (profileId) await store.db.run(`UPDATE ${store.t('import_profiles')} SET version=version+1 WHERE id=?`,[profileId]);
+    const shipmentBefore = await getShipment(store,scenario.shipmentId), financesBefore = await financialFacts(store);
     await processImportTurn(store,{batchId});
     const batch = await getImportBatch(store,batchId);
     assert.equal(batch.state,'completed',JSON.stringify(batch.error || batch.progress));
     const after = await store.order(scenario.orderId);
     assert.deepEqual(after.paymentSummary,before.paymentSummary);
     assert.equal(after.totalMinor,before.totalMinor);
+    const shipmentAfter = await getShipment(store,scenario.shipmentId);
+    assert.equal(after.marketingCampaign,'CAMP-RESPALDO');
+    assert.deepEqual(after.inventoryOpening,before.inventoryOpening);
+    assert.deepEqual(after.inventory,before.inventory);
+    assert.equal((await store.db.get(`SELECT data FROM ${store.t('import_revisions')} WHERE batch_id=? AND revision=?`,[batchId,accepted.revision])).data,acceptedBytes,'Accepted bytes remain immutable after resume and profile edits');
+    assert.deepEqual(shipmentAfter.importedFields,shipmentBefore.importedFields,'Resume preserves original observation provenance');
+    assert.deepEqual(await financialFacts(store),financesBefore,'Resume must not duplicate insurance payments or other financial facts');
+    for (const shipmentId of Object.values(scenario.insuranceShipments)) {
+      const expectedData = JSON.parse(bundle.business.shipments.find(row => row.id === shipmentId).data);
+      const shipment = await getShipment(store,shipmentId);
+      assert.deepEqual(shipment.costObservations.shipping_insurance,expectedData.costObservations.shipping_insurance);
+      assert.equal(shipment.costStatuses.shipping_insurance,expectedData.costStatuses.shipping_insurance);
+    }
     const count = Number((await store.db.get(`SELECT COUNT(*) AS n FROM ${store.t('order_collections')}`)).n);
     await processImportTurn(store,{batchId});
     assert.equal(Number((await store.db.get(`SELECT COUNT(*) AS n FROM ${store.t('order_collections')}`)).n),count);
@@ -124,7 +244,10 @@ export async function restoreCommercialBackupScenario(store, scenario, {resume =
 
 export async function assertInvalidBackupsAtomic(store, bundle) {
   const before = stable(await store.exportData());
-  const mutateData = (copy,table,fn) => {const row = copy.business[table][0], data = JSON.parse(row.data);fn(data);row.data=JSON.stringify(data);};
+  const mutateData = (copy,table,fn,predicate = () => true) => {const row = copy.business[table].find(row => predicate(JSON.parse(row.data))), data = JSON.parse(row.data);fn(data);row.data=JSON.stringify(data);};
+  const mutateImported = (copy,fn) => mutateData(copy,'shipments',data => fn(data.importedFields),data => data.importedFields?.length);
+  const mutateFrozen = (copy,fn) => mutateData(copy,'import_revisions',data => fn(data.groups[0].units[0].shipments[0].importedFields));
+  const revisionEvents = data => data.groups.flatMap(group => group.units.flatMap(unit => unit.shipments.flatMap(shipment => shipment.events || [])));
   const invalid = [
     copy => {copy.business.expenses[0].amount_minor=Number.MAX_SAFE_INTEGER;},
     copy => {copy.business.cash_entries[0].account_id='missing-account';},
@@ -136,7 +259,7 @@ export async function assertInvalidBackupsAtomic(store, bundle) {
     copy => {copy.business.people[0].version=0;},
     copy => {copy.counters.find(row => row.id==='orders').value=0;},
     copy => mutateData(copy,'settlements',data => {data.lines[0].collectionId='missing-collection';}),
-    copy => mutateData(copy,'shipments',data => {data.assignments[0].lineId='missing-line';}),
+    copy => mutateData(copy,'shipments',data => {data.assignments[0].lineId='missing-line';},data => data.assignments?.length),
     copy => mutateData(copy,'order_returns',data => {data.lines[0].lineId='missing-line';}),
     copy => {copy.business.payroll_allocations[0].source_id='missing-obligation';},
     copy => mutateData(copy,'report_snapshots',data => {data.metrics.cashAvailable.value=Number.MAX_SAFE_INTEGER+1;}),
@@ -147,7 +270,57 @@ export async function assertInvalidBackupsAtomic(store, bundle) {
     copy => {copy.orders[0].inventory.products[0].productId='missing-product';},
     copy => {delete copy.orders[0].inventory;},
     copy => {delete copy.products[0].stockReserved;},
+    copy => {copy.inventoryVersion=1;},
+    copy => {copy.orders[0].inventoryOpening.sourceId='missing-source';},
+    copy => {copy.orders[0].inventoryOpening.batchId='missing-batch';},
+    copy => {copy.orders[0].inventory.openingProducts.push({productId:'missing-product',consumed:1});},
+    copy => {copy.orders[0].inventoryOpening.eventClassifications[0].eventId='missing-event';},
+    copy => {copy.orders[0].inventoryOpening.eventClassifications[0].included=null;},
+    copy => {copy.orders[0].inventoryOpening.returnClassifications[0].returnId='missing-return';},
+    copy => {const expense=copy.business.expenses.find(row => row.source_key?.startsWith('excel-expense:'));expense.source_key+='tampered';},
+    copy => mutateData(copy,'expenses',data => {data.importIdentity.externalId='another-id';},data => !!data.importIdentity),
+    copy => mutateData(copy,'expenses',data => {data.importIdentity.generated='false';},data => !!data.importIdentity),
+    copy => mutateData(copy,'expenses',data => {data.sourceId='missing-source';},data => !!data.importIdentity),
+    copy => {copy.orders[0].importedFields[0].declaredOrigin.columnIndex=200;},
+    copy => mutateData(copy,'import_revisions',data => {data.groups[0].rowRefs=[{sheet:'missing-sheet',rowNumber:2}];}),
+    copy => mutateData(copy,'import_revisions',data => {data.manifest=[];}),
+    copy => mutateData(copy,'import_revisions',data => {revisionEvents(data)[0].explicitExternalKey='false';},data => revisionEvents(data).length>0),
+    copy => mutateData(copy,'import_batches',data => {(data.progress ||= {}).expenseIds=['missing-expense'];}),
+    copy => mutateData(copy,'import_revisions',data => {(data.resolutions ||= []).push({action:'cell_value',sheet:'Seguimiento',rowNumber:2,columnIndex:200,value:'Dato',reason:'Corrección inválida'});}),
     copy => {copy.orders[0].inventory.products.push({...copy.orders[0].inventory.products[0]});},
+    copy => mutateImported(copy,fields => {fields[0].sourceId='missing-source';}),
+    copy => mutateImported(copy,fields => {fields[0].batchId='missing-batch';}),
+    copy => mutateImported(copy,fields => {fields[0].sourceId=fields.find(field => field.sourceId !== fields[0].sourceId).sourceId;}),
+    copy => mutateImported(copy,fields => {fields[0].batchId=fields.find(field => field.sourceId !== fields[0].sourceId).batchId;}),
+    copy => mutateImported(copy,fields => {fields[0].key='status';}),
+    copy => mutateImported(copy,fields => {fields[0].value={html:'not a string'};}),
+    copy => mutateImported(copy,fields => {fields.find(field => field.key==='insuredValue').value='5500000';}),
+    copy => mutateImported(copy,fields => {fields.find(field => field.key==='expectedCollection').value=1.5;}),
+    copy => mutateImported(copy,fields => {fields.find(field => field.key==='insuredValue').value=-1;}),
+    copy => mutateImported(copy,fields => {fields.find(field => field.key==='expectedCollection').value=Number.MAX_SAFE_INTEGER;}),
+    copy => mutateImported(copy,fields => {fields.push({...fields[0]});}),
+    copy => mutateImported(copy,fields => {const base=fields[0];for(let index=0;index<201;index++)fields.push({...base,key:`additional:campo ${index}`,label:`Campo ${index}`,value:'Dato adicional'});}),
+    copy => mutateImported(copy,fields => {fields[0].sourceAsOf='2025-09-05';}),
+    copy => mutateImported(copy,fields => {fields[0].sourceAsOf='2025-09-06T04:59:59.999-00:00';}),
+    copy => mutateImported(copy,fields => {const field=fields[1],row=copy.business.import_rows.find(row=>row.batch_id===field.batchId && row.sheet===field.sheet && row.row_number===field.rowNumbers[0]);field.sheet='Hoja inexistente';copy.business.import_rows.push({...row,sheet:field.sheet});}),
+    copy => {const field=JSON.parse(copy.business.shipments.find(row=>JSON.parse(row.data).importedFields?.length).data).importedFields[0];mutateData(copy,'import_batches',data=>{data.workbook.sheets=[];},data=>data.workbook?.sheets?.some(sheet=>(typeof sheet==='string'?sheet:sheet.name)===field.sheet));},
+    copy => mutateImported(copy,fields => {fields[0].rowNumbers=[0];}),
+    copy => mutateImported(copy,fields => {fields[0].columnIndex=200;}),
+    copy => mutateImported(copy,fields => {fields[0].extra='not part of the contract';}),
+    copy => mutateImported(copy,fields => {fields.find(field => field.key==='additional:__proto__').key='__proto__';}),
+    copy => mutateImported(copy,fields => {fields.find(field => field.key==='additional:__proto__').value='x'.repeat(4001);}),
+    copy => mutateImported(copy,fields => {fields.find(field => field.key==='additional:centro de despacho').key='additional:Centro de despacho';}),
+    copy => mutateData(copy,'shipments',data => {data.importedFields=null;},data => data.importedFields?.length),
+    copy => mutateData(copy,'import_profiles',data => {configSheet(data).columns.find(column => column.destination==='additionalField').fieldName='';},data => configSheet(data).columns.some(column => column.destination === 'additionalField')),
+    copy => mutateData(copy,'import_profiles',data => {const additional=configSheet(data).columns.filter(column => column.destination==='additionalField');additional[1].fieldName=` ${additional[0].fieldName.toUpperCase()} `;},data => configSheet(data).columns.filter(column => column.destination === 'additionalField').length > 1),
+    copy => mutateData(copy,'import_profiles',data => {configSheet(data).columns[0].destination='not-a-destination';}),
+    copy => mutateData(copy,'import_profiles',data => {configSheet(data).columns[1].index=configSheet(data).columns[0].index;}),
+    copy => mutateFrozen(copy,fields => {fields[0].batchId='missing-batch';}),
+    copy => mutateFrozen(copy,fields => {const other=copy.business.import_batches.find(batch => batch.source_id !== fields[0].sourceId);fields[0].batchId=other.id;fields[0].sourceId=other.source_id;}),
+    copy => mutateFrozen(copy,fields => {fields[0].key='status';}),
+    copy => mutateFrozen(copy,fields => {fields.find(field => field.key==='insuredValue').value=0.5;}),
+    copy => mutateFrozen(copy,fields => {fields.push({...fields[0]});}),
+    copy => mutateData(copy,'import_rows',data => {shipmentAdditionalFields(data.normalized.values)[0].value={not:'text'};},data => shipmentAdditionalFields(data.normalized?.values)?.length),
   ];
   // The fixture need not contain a return for the other independent cases.
   if (!bundle.business.order_returns.length) invalid.splice(11,1);

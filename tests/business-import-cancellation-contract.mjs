@@ -74,8 +74,8 @@ export async function runImportCancellationContracts(t,factory) {
     try{
       await waitForHold(gate,work);await cancel(store,batch);gate.release();
       assert.equal((await work).state,'cancelled');
-      const stopped=await getImportBatch(store,batch.id);assert.equal(stopped.state,'cancelled');assert.equal(stopped.workbook,null);assert.equal(stopped.error,null);
-      assert.equal(await count(store,'job_runs'),0);assert.equal(await count(store,'orders'),0);
+      const stopped=await getImportBatch(store,batch.id);assert.equal(stopped.state,'cancelled');assert.equal(stopped.workbook,null);assert.equal(stopped.preview,null);assert.equal(stopped.error,null);assert.equal(stopped.fileDiscarded,true);
+      assert.equal(await count(store,'job_runs'),0);assert.equal(await count(store,'orders'),0);assert.equal(await count(store,'external_links'),0);
     }finally{gate.release();await work;gate.restore();}
   }));
   await t.test('cancelar durante la preparación no publica una revisión ni resucita el trabajo',()=>fixture(async(store,f)=>{

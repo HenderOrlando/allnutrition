@@ -1,23 +1,138 @@
 import test from 'node:test';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/db/index.mjs';
 import { runContracts } from './contract.mjs';
 import { testDatabaseEnv, resetPostgresStore } from './postgres-fixture.mjs';
-import { migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
 import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
+import { runWorkbookImportContracts } from './business-workbook-contract.mjs';
+import { createBusinessFixture, returnBusinessFixture, requestId } from './business-fixtures.mjs';
+import { confirmPayroll } from '../lib/business/payroll.mjs';
+
+async function migrationRows(store) {
+ const tables=['migrations','records','settings','users','sessions','attempts','orders','order_events','order_audit','counters','idempotency',...BUSINESS_TABLES];
+ const result={};
+ for(const table of tables)result[table]=(await store.db.all(`SELECT * FROM ${store.t(table)}`)).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+ return result;
+}
+
+async function expenseSchema(store) {
+ return {
+  relation:await store.db.get("SELECT oid,relowner,relacl,reloptions,relrowsecurity FROM pg_class WHERE oid='allnutrition.expenses'::regclass"),
+  indexes:await store.db.all("SELECT indexrelid,pg_get_indexdef(indexrelid) AS definition FROM pg_index WHERE indrelid='allnutrition.expenses'::regclass ORDER BY indexrelid"),
+  constraints:await store.db.all("SELECT oid,conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE (conrelid='allnutrition.expenses'::regclass OR confrelid='allnutrition.expenses'::regclass) AND conname<>'expenses_category_check' ORDER BY oid"),
+  category:await store.db.get("SELECT oid,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='allnutrition.expenses'::regclass AND conname='expenses_category_check'")
+ };
+}
+
+async function insertInsurance(store,fixture) {
+ await store.db.run(`INSERT INTO ${store.t('expenses')}(id,category,amount_minor,incurred_on,person_id,order_id,shipment_id,source_key,version,recorded_at,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  ['insurance-v6','shipping_insurance',100000,'2025-09-02',fixture.person.id,fixture.orderId,fixture.shipmentId,`${fixture.shipmentId}:shipping_insurance`,1,'2025-09-05T12:00:00.000Z',JSON.stringify({datePolicy:'charge_date',source:'manual'}),'2025-09-05T12:00:00.000Z','2025-09-05T12:00:00.000Z']);
+}
+
 const url=process.env.TEST_DATABASE_URL;
 test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},async t=>{
  const env=testDatabaseEnv();
- const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);}finally{await first.close();}
+ const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=7`));}finally{await first.close();}
  const factory=async()=>{
   const store=await openStore(env);
   try { await resetPostgresStore(store); return store; }
   catch (error) { await store.close(); throw error; }
  };
+ await t.test('seguro v6 migra el CHECK v5 real, revierte fallos y conserva ownership, permisos y relaciones',async()=>{
+  // The factory verifies the connected database is the explicitly authorized allnutrition_test.
+  const store=await factory();
+  try{
+   await store.transaction(async tx=>{
+    await tx.lockWrites();
+    await tx.db.exec("ALTER TABLE allnutrition.expenses DROP CONSTRAINT expenses_category_check; ALTER TABLE allnutrition.expenses ADD CONSTRAINT expenses_category_check CHECK(category IN ('shipping_out','shipping_return','platform_fee','commission','salary','bonus','other'));");
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version IN (6,7)`);
+   });
+   await assert.rejects(()=>openStore(env),/npm run db:migrate.*seguro de envíos v6/);
+   const fixture=await createBusinessFixture(store,{year:2025,pay:true});
+   await returnBusinessFixture(store,fixture,{refund:true});
+   await confirmPayroll(store,{requestId:requestId(),personId:fixture.person.id,startOn:'2025-10-01',endOnExclusive:'2025-11-01',bonusMinor:1000000,discountMinor:0,reason:'Aplicar crédito histórico antes de migrar'},fixture.actorId);
+   for(const table of ['expense_payments','settlement_receipts','payroll_allocations','payroll_offsets','commission_entries']){
+    assert.ok((await store.db.all(`SELECT id FROM ${store.t(table)}`)).length,`La fixture v5 debe contener ${table}`);
+   }
+   const payments=await store.db.all(`SELECT * FROM ${store.t('expense_payments')}`);
+   assert.ok(payments.some(row=>row.cash_entry_id));assert.ok(payments.some(row=>row.settlement_receipt_id));
+   await assert.rejects(()=>insertInsurance(store,fixture),{code:'23514'});
+   const before=await migrationRows(store),schema=await expenseSchema(store);
+   const failingStore={provider:store.provider,transaction:fn=>store.transaction(tx=>{
+    const run=tx.db.run;
+    tx.db={...tx.db,run:async(sql,params)=>{
+     if(sql.startsWith(`INSERT INTO ${tx.t('migrations')}(version,applied_at) VALUES(6,`))throw new Error('Fallo sintético al guardar marcador v6');
+     return run(sql,params);
+    }};
+    return fn(tx);
+   })};
+   await assert.rejects(()=>migrateShippingInsuranceV6(failingStore),/Fallo sintético al guardar marcador v6/);
+   assert.deepEqual(await migrationRows(store),before);assert.deepEqual(await expenseSchema(store),schema);
+   await assert.rejects(()=>insertInsurance(store,fixture),{code:'23514'});
+   await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('expenses')} WHERE id=?`,[fixture.shippingExpenseId]),{code:'23503'});
+   assert.deepEqual(await migrateShippingInsuranceV6(store),{migrated:true,version:6});
+   const after=await migrationRows(store),nextSchema=await expenseSchema(store);
+   assert.deepEqual(after.migrations.filter(row=>row.version!==6),before.migrations);
+   assert.equal(after.migrations.filter(row=>row.version===6).length,1);
+   delete after.migrations;delete before.migrations;assert.deepEqual(after,before);
+   assert.deepEqual(nextSchema.relation,schema.relation);assert.deepEqual(nextSchema.indexes,schema.indexes);assert.deepEqual(nextSchema.constraints,schema.constraints);
+   assert.match(nextSchema.category.definition,/shipping_insurance/);
+   await insertInsurance(store,fixture);
+   await assert.rejects(()=>store.db.run(`UPDATE ${store.t('expenses')} SET category='invalid' WHERE id='insurance-v6'`),{code:'23514'});
+   await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('expenses')} WHERE id=?`,[fixture.shippingExpenseId]),{code:'23503'});
+   const migrated=await migrationRows(store),migratedSchema=await expenseSchema(store);
+   assert.deepEqual(await migrateShippingInsuranceV6(store),{migrated:false,version:6});
+   assert.deepEqual(await migrationRows(store),migrated);assert.deepEqual(await expenseSchema(store),migratedSchema);
+  }finally{
+   try{await migrateShippingInsuranceV6(store);await migrateWorkbookImportV7(store);}finally{await store.close();}
+  }
+ });
  await runContracts(t,factory);await runBusinessContracts(t,factory);
  await runImportCancellationContracts(t,factory);
+ await runWorkbookImportContracts(t,factory);
+ await t.test('libro v7 conserva pagos, ownership, índices y FK y revierte el CHECK al fallar el marcador',async()=>{
+  const store=await factory();
+  try{
+   const fixture=await createBusinessFixture(store,{year:2025,pay:true});
+   await returnBusinessFixture(store,fixture,{refund:true});
+   await store.transaction(async tx=>{
+    await tx.lockWrites();
+    await tx.db.exec("ALTER TABLE allnutrition.expenses DROP CONSTRAINT expenses_category_check; ALTER TABLE allnutrition.expenses ADD CONSTRAINT expenses_category_check CHECK(category IN ('shipping_out','shipping_return','platform_fee','shipping_insurance','commission','salary','bonus','other'));");
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=7`);
+   });
+   const insert=category=>store.db.run(`INSERT INTO ${store.t('expenses')}(id,category,amount_minor,incurred_on,source_key,recorded_at,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,[`v7-${category}`,category,0,'2025-09-02',`excel-expense:${category}`,'2025-10-01T05:00:00.000Z','{}','2025-10-01T05:00:00.000Z','2025-10-01T05:00:00.000Z']);
+   for(const category of ['advertising','operating'])await assert.rejects(()=>insert(category),{code:'23514'});
+   const before=await migrationRows(store),schema=await expenseSchema(store);
+   const failingStore={provider:store.provider,transaction:fn=>store.transaction(tx=>{
+    const run=tx.db.run;
+    tx.db={...tx.db,run:async(sql,params)=>{
+     if(sql.startsWith(`INSERT INTO ${tx.t('migrations')}(version,applied_at) VALUES(7,`))throw new Error('Fallo sintético al guardar marcador v7');
+     return run(sql,params);
+    }};
+    return fn(tx);
+   })};
+   await assert.rejects(()=>migrateWorkbookImportV7(failingStore),/Fallo sintético al guardar marcador v7/);
+   assert.deepEqual(await migrationRows(store),before);assert.deepEqual(await expenseSchema(store),schema);
+   await assert.rejects(()=>insert('advertising'),{code:'23514'});
+   await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('expenses')} WHERE id=?`,[fixture.shippingExpenseId]),{code:'23503'});
+   assert.deepEqual(await migrateWorkbookImportV7(store),{migrated:true,version:7});
+   const after=await migrationRows(store),nextSchema=await expenseSchema(store);
+   assert.deepEqual(after.migrations.filter(row=>row.version!==7),before.migrations);
+   delete after.migrations;delete before.migrations;assert.deepEqual(after,before);
+   assert.deepEqual(nextSchema.relation,schema.relation);assert.deepEqual(nextSchema.indexes,schema.indexes);assert.deepEqual(nextSchema.constraints,schema.constraints);
+   assert.match(nextSchema.category.definition,/advertising/);assert.match(nextSchema.category.definition,/operating/);
+   for(const category of ['advertising','operating'])await insert(category);
+   await assert.rejects(()=>store.db.run(`UPDATE ${store.t('expenses')} SET category='invalid' WHERE id='v7-operating'`),{code:'23514'});
+   await assert.rejects(()=>store.db.run(`UPDATE ${store.t('expenses')} SET source_key='excel-expense:advertising' WHERE id='v7-operating'`),{code:'23505'});
+   const migrated=await migrationRows(store),migratedSchema=await expenseSchema(store);
+   assert.deepEqual(await migrateWorkbookImportV7(store),{migrated:false,version:7});
+   assert.deepEqual(await migrationRows(store),migrated);assert.deepEqual(await expenseSchema(store),migratedSchema);
+  }finally{try{await migrateWorkbookImportV7(store);}finally{await store.close();}}
+ });
  await t.test('restaura negocio SQLite en PostgreSQL y reanuda trabajo con el actor original',async()=>{
   const source=await openStore({DB_DRIVER:'sqlite',SQLITE_PATH:':memory:'});
   let target;

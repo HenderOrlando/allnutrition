@@ -5,12 +5,14 @@ import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../lib/store.mjs';
 import { schemas } from '../lib/schema.mjs';
-import { BUSINESS_TABLES, convertV2Bundle, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, convertV2Bundle, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7 } from '../lib/db/migrations.mjs';
 import { resolveOrderRecognition } from '../lib/business/orders.mjs';
 import { saveResource, listResources } from '../lib/business/settings.mjs';
 import { writeExcelSheets } from '../lib/business/excel.mjs';
 import { createImportBatch, uploadImportFile, getImportBatch, requestImportPreview, commitImport, processImportTurn, cancelImportBatch } from '../lib/business/imports.mjs';
-import { requestId } from './business-fixtures.mjs';
+import { requestId, createBusinessFixture, returnBusinessFixture } from './business-fixtures.mjs';
+import { confirmPayroll } from '../lib/business/payroll.mjs';
+import { openStore } from '../lib/db/index.mjs';
 
 const CREATED = '2026-09-01T04:59:59.000Z';
 const UPDATED = '2026-09-03T15:00:00.000Z';
@@ -57,7 +59,7 @@ function legacyBundle() {
 }
 
 /** A disposable real SQLite v2 database; bypasses openStore's automatic v3 upgrade intentionally. */
-async function v2Store({ failMarker = false, failInventoryMarker = false, failCancellationMarker = false } = {}) {
+async function v2Store({ failMarker = false, failInventoryMarker = false, failCancellationMarker = false, failInsuranceMarker = false, failWorkbookMarker = false, oldExpenseCheck = false } = {}) {
   const native = new DatabaseSync(':memory:');
   native.exec('PRAGMA foreign_keys=ON;');
   native.exec(await readFile(new URL('../db/sqlite.sql', import.meta.url), 'utf8'));
@@ -69,9 +71,11 @@ async function v2Store({ failMarker = false, failInventoryMarker = false, failCa
       if (failMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at)')) throw new Error('Fallo sintético al guardar marcador v3');
       if (failInventoryMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(4,')) throw new Error('Fallo sintético al guardar marcador v4');
       if (failCancellationMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(5,')) throw new Error('Fallo sintético al guardar marcador v5');
+      if (failInsuranceMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(6,')) throw new Error('Fallo sintético al guardar marcador v6');
+      if (failWorkbookMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(7,')) throw new Error('Fallo sintético al guardar marcador v7');
       return { changes: Number(native.prepare(sql).run(...params).changes) };
     },
-    exec: async sql => native.exec(sql)
+    exec: async sql => native.exec(oldExpenseCheck && sql.includes('CREATE TABLE IF NOT EXISTS expenses (') ? sql.replace(",'shipping_insurance'", '').replace(",'advertising'", '').replace(",'operating'", '') : sql)
   };
   const adapter = {
     ...direct, close: async () => native.close(),
@@ -449,4 +453,165 @@ test('un fallo del marcador v5 revierte también el reemplazo de tabla y sus rel
     await assert.rejects(()=>store.db.run(`UPDATE ${store.t('import_batches')} SET state='cancelled' WHERE id=?`,[batch.id]),/CHECK/);
     await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('import_batches')} WHERE id=?`,[batch.id]),/FOREIGN KEY/);
   }finally{await store.close();}
+});
+
+async function seedV5Expenses(store) {
+  await migrateBusinessV3(store);
+  await migrateInventoryV4(store);
+  await migrateImportCancellationV5(store);
+  const fixture = await createBusinessFixture(store, { year: 2025, pay: true });
+  await returnBusinessFixture(store, fixture, { refund: true });
+  await confirmPayroll(store, { requestId: requestId(), personId: fixture.person.id, startOn: '2025-10-01', endOnExclusive: '2025-11-01', bonusMinor: 1000000, discountMinor: 0, reason: 'Aplicar crédito histórico antes de migrar' }, fixture.actorId);
+  for (const table of ['expense_payments', 'settlement_receipts', 'payroll_allocations', 'payroll_offsets', 'commission_entries']) {
+    assert.ok((await rows(store, table)).length, `La fixture v5 debe contener ${table}`);
+  }
+  assert.ok((await rows(store, 'expense_payments')).some(row => row.cash_entry_id));
+  assert.ok((await rows(store, 'expense_payments')).some(row => row.settlement_receipt_id));
+  return fixture;
+}
+
+async function insertInsuranceRow(store, fixture) {
+  return store.db.run(`INSERT INTO ${store.t('expenses')}(id,category,amount_minor,incurred_on,person_id,order_id,shipment_id,source_key,version,recorded_at,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ['insurance-v6', 'shipping_insurance', 100000, '2025-09-02', fixture.person.id, fixture.orderId, fixture.shipmentId, `${fixture.shipmentId}:shipping_insurance`, 1, MIGRATED, JSON.stringify({ datePolicy: 'charge_date', source: 'manual' }), CREATED, UPDATED]);
+}
+
+async function expenseIndexes(store) {
+  const indexes = await store.db.all('SELECT name,"unique",origin,partial FROM pragma_index_list(?) ORDER BY name', ['expenses']);
+  return Promise.all(indexes.map(async index => ({
+    ...index, columns: await store.db.all('SELECT * FROM pragma_index_xinfo(?) ORDER BY seqno', [index.name])
+  })));
+}
+
+test('seguro v6 migra un CHECK v5 real conservando gastos, pagos, liquidaciones y créditos', async () => {
+  const store = await v2Store({ oldExpenseCheck: true });
+  try {
+    const fixture = await seedV5Expenses(store);
+    await assert.rejects(() => insertInsuranceRow(store, fixture), /CHECK/);
+    const tables = [...BASE_TABLES.filter(table => table !== 'migrations'), ...BUSINESS_TABLES];
+    const before = await snapshot(store, tables);
+    const columns = await store.db.all('PRAGMA table_info(expenses)');
+    const relations = await store.db.all('PRAGMA foreign_key_list(expenses)');
+    const indexes = await expenseIndexes(store);
+    assert.deepEqual(await migrateShippingInsuranceV6(store), { migrated: true, version: 6 });
+    assert.deepEqual(await snapshot(store, tables), before);
+    assert.deepEqual(await store.db.all('PRAGMA table_info(expenses)'), columns);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_list(expenses)'), relations);
+    assert.deepEqual(await expenseIndexes(store), indexes);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
+    assert.equal((await store.db.get('PRAGMA defer_foreign_keys')).defer_foreign_keys, 0);
+    await insertInsuranceRow(store, fixture);
+    assert.equal((await store.db.get(`SELECT category FROM ${store.t('expenses')} WHERE id='insurance-v6'`)).category, 'shipping_insurance');
+    for (const [column, value] of [['category', 'invalid'], ['amount_minor', 0.5], ['amount_minor', 10000000000001], ['version', 0], ['data', 'invalid-json'], ['shipment_id', 'missing-shipment']]) {
+      await assert.rejects(() => store.db.run(`UPDATE ${store.t('expenses')} SET ${column}=? WHERE id='insurance-v6'`, [value]), /CHECK|FOREIGN KEY/);
+    }
+    await assert.rejects(() => store.db.run(`UPDATE ${store.t('expenses')} SET source_key=NULL,amount_minor=-1 WHERE id='insurance-v6'`), /CHECK/);
+    await assert.rejects(() => store.db.run(`UPDATE ${store.t('expenses')} SET source_key=? WHERE id=?`, [`${fixture.shipmentId}:shipping_insurance`, fixture.shippingExpenseId]), /UNIQUE/);
+    await assert.rejects(() => store.db.run(`DELETE FROM ${store.t('expenses')} WHERE id=?`, [fixture.shippingExpenseId]), /FOREIGN KEY/);
+    const migrated = await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]);
+    assert.deepEqual(await migrateShippingInsuranceV6(store), { migrated: false, version: 6 });
+    assert.deepEqual(await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]), migrated);
+  } finally { await store.close(); }
+});
+
+test('un fallo del marcador v6 revierte CHECK, índices y relaciones del esquema v5', async () => {
+  const store = await v2Store({ oldExpenseCheck: true, failInsuranceMarker: true });
+  try {
+    const fixture = await seedV5Expenses(store);
+    const before = await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]);
+    const schema = await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name");
+    await assert.rejects(() => migrateShippingInsuranceV6(store), /Fallo sintético al guardar marcador v6/);
+    assert.deepEqual(await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]), before);
+    assert.deepEqual(await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"), schema);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
+    assert.equal((await store.db.get('PRAGMA foreign_keys')).foreign_keys, 1);
+    assert.equal((await store.db.get('PRAGMA defer_foreign_keys')).defer_foreign_keys, 0);
+    await assert.rejects(() => insertInsuranceRow(store, fixture), /CHECK/);
+    await assert.rejects(() => store.db.run(`DELETE FROM ${store.t('expenses')} WHERE id=?`, [fixture.shippingExpenseId]), /FOREIGN KEY/);
+  } finally { await store.close(); }
+});
+
+test('seguro v6 requiere el marcador v5 y una instalación nueva incluye v7', async () => {
+  const historical = await v2Store();
+  try {
+    await migrateBusinessV3(historical);
+    await migrateInventoryV4(historical);
+    const before = await snapshot(historical, [...BASE_TABLES, ...BUSINESS_TABLES]);
+    await assert.rejects(() => migrateShippingInsuranceV6(historical), /requiere.*v5/);
+    assert.deepEqual(await snapshot(historical, [...BASE_TABLES, ...BUSINESS_TABLES]), before);
+  } finally { await historical.close(); }
+  const fresh = await openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' });
+  try {
+    assert.deepEqual((await fresh.db.all(`SELECT version FROM ${fresh.t('migrations')} ORDER BY version`)).map(row => row.version), [2, 3, 4, 5, 6, 7]);
+    await fresh.db.run(`INSERT INTO ${fresh.t('expenses')}(id,category,amount_minor,recorded_at,created_at,updated_at) VALUES(?,?,?,?,?,?)`, ['fresh-insurance', 'shipping_insurance', 0, MIGRATED, MIGRATED, MIGRATED]);
+    assert.deepEqual(await migrateShippingInsuranceV6(fresh), { migrated: false, version: 6 });
+  } finally { await fresh.close(); }
+});
+
+async function seedV6Expenses(store) {
+  const fixture = await seedV5Expenses(store);
+  await migrateShippingInsuranceV6(store);
+  await insertInsuranceRow(store, fixture);
+  return fixture;
+}
+
+async function insertWorkbookExpense(store, category) {
+  return store.db.run(`INSERT INTO ${store.t('expenses')}(id,category,amount_minor,incurred_on,source_key,recorded_at,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+    [`workbook-${category}`, category, 0, '2025-09-02', `excel-expense:${category}`, MIGRATED, '{}', CREATED, UPDATED]);
+}
+
+test('libro v7 amplía solo categorías y conserva pagos, CHECK, FK e índices de v6', async () => {
+  const store = await v2Store({ oldExpenseCheck: true });
+  try {
+    const fixture = await seedV6Expenses(store);
+    for (const category of ['advertising', 'operating']) await assert.rejects(() => insertWorkbookExpense(store, category), /CHECK/);
+    const tables = [...BASE_TABLES.filter(table => table !== 'migrations'), ...BUSINESS_TABLES];
+    const before = await snapshot(store, tables);
+    const columns = await store.db.all('PRAGMA table_info(expenses)');
+    const relations = await store.db.all('PRAGMA foreign_key_list(expenses)');
+    const indexes = await expenseIndexes(store);
+    assert.deepEqual(await migrateWorkbookImportV7(store), { migrated: true, version: 7 });
+    assert.deepEqual(await snapshot(store, tables), before);
+    assert.deepEqual(await store.db.all('PRAGMA table_info(expenses)'), columns);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_list(expenses)'), relations);
+    assert.deepEqual(await expenseIndexes(store), indexes);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
+    for (const category of ['advertising', 'operating']) await insertWorkbookExpense(store, category);
+    for (const [column, value] of [['category', 'invalid'], ['amount_minor', 0.5], ['amount_minor', 10000000000001], ['version', 0], ['data', 'invalid-json'], ['shipment_id', 'missing-shipment']]) {
+      await assert.rejects(() => store.db.run(`UPDATE ${store.t('expenses')} SET ${column}=? WHERE id='workbook-advertising'`, [value]), /CHECK|FOREIGN KEY/);
+    }
+    await assert.rejects(() => store.db.run(`UPDATE ${store.t('expenses')} SET source_key=NULL,amount_minor=-1 WHERE id='workbook-advertising'`), /CHECK/);
+    await assert.rejects(() => store.db.run(`UPDATE ${store.t('expenses')} SET source_key='excel-expense:advertising' WHERE id='workbook-operating'`), /UNIQUE/);
+    await assert.rejects(() => store.db.run(`DELETE FROM ${store.t('expenses')} WHERE id=?`, [fixture.shippingExpenseId]), /FOREIGN KEY/);
+    const migrated = await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]);
+    assert.deepEqual(await migrateWorkbookImportV7(store), { migrated: false, version: 7 });
+    assert.deepEqual(await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]), migrated);
+  } finally { await store.close(); }
+});
+
+test('fallo del marcador v7 revierte DDL, pagos, índices y categorías en una sola transacción', async () => {
+  const store = await v2Store({ oldExpenseCheck: true, failWorkbookMarker: true });
+  try {
+    const fixture = await seedV6Expenses(store);
+    const before = await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]);
+    const schema = await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name");
+    await assert.rejects(() => migrateWorkbookImportV7(store), /Fallo sintético al guardar marcador v7/);
+    assert.deepEqual(await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]), before);
+    assert.deepEqual(await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"), schema);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
+    assert.equal((await store.db.get('PRAGMA foreign_keys')).foreign_keys, 1);
+    assert.equal((await store.db.get('PRAGMA defer_foreign_keys')).defer_foreign_keys, 0);
+    await assert.rejects(() => insertWorkbookExpense(store, 'advertising'), /CHECK/);
+    await assert.rejects(() => insertWorkbookExpense(store, 'operating'), /CHECK/);
+    await assert.rejects(() => store.db.run(`DELETE FROM ${store.t('expenses')} WHERE id=?`, [fixture.shippingExpenseId]), /FOREIGN KEY/);
+  } finally { await store.close(); }
+});
+
+test('libro v7 exige v6 y no cambia una base sin su prerrequisito', async () => {
+  const store = await v2Store({ oldExpenseCheck: true });
+  try {
+    await seedV5Expenses(store);
+    const before = await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]);
+    await assert.rejects(() => migrateWorkbookImportV7(store), /requiere.*v6/);
+    assert.deepEqual(await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]), before);
+  } finally { await store.close(); }
 });

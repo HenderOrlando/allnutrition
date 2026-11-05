@@ -6,7 +6,10 @@ import { Store } from '../lib/store.mjs';
 import { migrateBusinessV3 } from '../lib/db/migrations.mjs';
 import { loadOrderData, pageOrders } from '../lib/business/orders.mjs';
 import { createShipment, saveShipment, saveShipmentTx, getShipment, pageShipments, recordShipmentEvent, recordShipmentEventTx, effectiveShipmentEvents, effectiveShipmentState, linkShipmentTx } from '../lib/business/shipments.mjs';
+import { validateImportedFields, mergeImportedFields } from '../lib/business/imported-fields.mjs';
 import { getBusinessSettings, saveBusinessSettings } from '../lib/business/settings.mjs';
+import { importFields, normalizeImportFieldName } from '../lib/schema.mjs';
+import { MAX_MONEY_MINOR } from '../lib/business/money.mjs';
 
 const actor = 'shipping-admin';
 const at = '2026-09-01T12:00:00.000Z';
@@ -40,6 +43,145 @@ async function sourceFixture(store,suffix) {
 }
 const create = (store,orderId,extra = {}) => createShipment(store,{requestId:requestId(),orderId,...extra},actor);
 const event = (store,shipment,status,extra = {}) => recordShipmentEvent(store,shipment.id,{requestId:requestId(),version:shipment.version,status,occurredOn:'2026-09-02',...extra},actor);
+const importedObservation = (overrides = {}) => {
+  const key = overrides.key ?? 'rawShipmentStatus';
+  return {key,label:importFields.find(field => field.value === key)?.label || key.slice('additional:'.length),value:'PAGADA',sourceId:'source-a',sourceAsOf:at,batchId:'batch-a',sheet:'Sheet 1',columnIndex:2,header:'Estado',rowNumbers:[3],...overrides};
+};
+const invalidImportedField = error => error.status === 400;
+
+test('additional names use normalized identity without limiting expanded Unicode keys',()=>{
+  const label = '\ufdfa'.repeat(100), key = `additional:${normalizeImportFieldName(label)}`;
+  const field = importedObservation({key,label});
+  assert.deepEqual(validateImportedFields([field],'shipment'),[field]);
+});
+
+test('imported shipment fields preserve text and provenance without exposing business writes',()=>{
+  const observations = [
+    importedObservation({key:'additional:__proto__',label:'__proto__',value:'<b>0001</b>',header:' Extra ',columnIndex:199,rowNumbers:[10000,1]}),
+    importedObservation({key:'additional:status',label:'STATUS',value:'  true  '}),
+    importedObservation({key:'documentNumber',value:'000001'}),
+    importedObservation({key:'insuredValue',value:MAX_MONEY_MINOR}),
+    importedObservation({key:'expectedCollection',value:0}),
+  ];
+  for (const field of observations) {Object.freeze(field.rowNumbers);Object.freeze(field);}
+  Object.freeze(observations);
+  const validated = validateImportedFields(observations,'shipment');
+  assert.deepEqual(validated,observations);
+  assert.notEqual(validated,observations);
+  assert.notEqual(validated[0],observations[0]);
+  assert.notEqual(validated[0].rowNumbers,observations[0].rowNumbers);
+  assert.equal(Object.hasOwn({},'status'),false);
+  for (const key of ['rawStatus','status','carrier','insuranceCost','collectedAmount','orderNotes','deliveryMethod','__proto__']) {
+    assert.throws(()=>validateImportedFields([importedObservation({key})],'shipment'),invalidImportedField,key);
+  }
+});
+
+test('imported shipment fields reject invalid shape, money, catalog lengths and provenance',()=>{
+  for (const fields of [null,{},[null],[[]],new Array(1)]) assert.throws(()=>validateImportedFields(fields,'shipment'),invalidImportedField);
+  const missing = importedObservation(); delete missing.batchId;
+  const cases = [
+    missing,
+    {...importedObservation(),status:'delivered'},
+    Object.assign(Object.create(null),importedObservation()),
+    importedObservation({key:'additional:extra',label:'Other'}),
+    importedObservation({key:'additional:',label:' '}),
+    importedObservation({key:`additional:${'a'.repeat(101)}`,label:'a'.repeat(101)}),
+    importedObservation({key:'additional:extra',label:'Extra',value:'x'.repeat(4001)}),
+    importedObservation({value:null}), importedObservation({value:false}), importedObservation({value:0}),
+    ...[-1,0.5,MAX_MONEY_MINOR+1,Number.MAX_SAFE_INTEGER+1,'100',null].map(value=>importedObservation({key:'insuredValue',value})),
+    ...['',' source-a','source-a\n','x'.repeat(101),null].map(sourceId=>importedObservation({sourceId})),
+    ...['','batch-a ','batch\u0000a','x'.repeat(101),null].map(batchId=>importedObservation({batchId})),
+    ...['',' ','Sheet\n1','x'.repeat(101),null].map(sheet=>importedObservation({sheet})),
+    ...[null,1,'x'.repeat(501)].map(header=>importedObservation({header})),
+    ...[undefined,'2026-09-01','2026-09-01T12:00:00Z','2026-09-01T07:00:00.000-05:00','2026-02-30T12:00:00.000Z'].map(sourceAsOf=>importedObservation({sourceAsOf})),
+    ...[-1,200,1.5,'2',null].map(columnIndex=>importedObservation({columnIndex})),
+    ...[[],[0],[10002],[1,1],[1.5],['3'],null,new Array(1)].map(rowNumbers=>importedObservation({rowNumbers})),
+  ];
+  for (const field of cases) assert.throws(()=>validateImportedFields([field],'shipment'),invalidImportedField);
+  for (const definition of importFields.filter(field=>['rawShipmentStatus','shippingType','cancellationReason','shipmentReference','shipmentNotes','customerName','phone','department','city','address','addressNotes','email','documentType','documentNumber'].includes(field.value))) {
+    assert.equal(validateImportedFields([importedObservation({key:definition.value,value:'x'.repeat(definition.max)})],'shipment')[0].value.length,definition.max);
+    assert.throws(()=>validateImportedFields([importedObservation({key:definition.value,value:'x'.repeat(definition.max+1)})],'shipment'),invalidImportedField,definition.value);
+  }
+  const unicode = importedObservation({key:'additional:área bodega',label:'Ａ́rea　 Bodega',value:'0',sourceAsOf:null,header:''});
+  assert.deepEqual(validateImportedFields([unicode],'shipment'),[unicode]);
+  assert.deepEqual(validateImportedFields([importedObservation({rowNumbers:[10001],sheet:'SEPTIEMBRE '})],'shipment')[0].rowNumbers,[10001]);
+  assert.equal(validateImportedFields([importedObservation({sheet:'SEPTIEMBRE '})],'shipment')[0].sheet,'SEPTIEMBRE ');
+});
+
+test('imported shipment field limits apply per source and across the merged key set',()=>{
+  const fields = Array.from({length:200},(_,index)=>importedObservation({key:`additional:field ${index}`,label:`Field ${index}`}));
+  assert.equal(validateImportedFields(fields,'shipment').length,200);
+  const other = fields.map(field=>({...field,sourceId:'source-b'}));
+  assert.equal(mergeImportedFields(fields,other,{scope:'shipment'}).fields.length,400);
+  const extra = importedObservation({key:'additional:extra',label:'Extra'});
+  assert.throws(()=>validateImportedFields([...fields,extra],'shipment'),invalidImportedField);
+  assert.throws(()=>mergeImportedFields(fields,[extra],{scope:'shipment'}),invalidImportedField);
+  assert.throws(()=>validateImportedFields([fields[0],{...fields[0],batchId:'batch-b'}],'shipment'),invalidImportedField);
+  assert.throws(()=>mergeImportedFields([fields[0]],null,{scope:'shipment'}),invalidImportedField);
+  assert.throws(()=>mergeImportedFields(null,[fields[0]],{scope:'shipment'}),invalidImportedField);
+});
+
+test('imported metadata uses report cuts, preserves exact reimports and never mutates inputs',()=>{
+  const old = importedObservation(), nextCut = '2026-09-02T12:00:00.000Z';
+  const reimport = importedObservation({batchId:'batch-b',sheet:'Moved',columnIndex:4,header:'Otro Estado',rowNumbers:[9]});
+  Object.freeze(old.rowNumbers);Object.freeze(old);
+  Object.freeze(reimport.rowNumbers);Object.freeze(reimport);
+  const previous = Object.freeze([old]), incoming = Object.freeze([reimport]);
+  assert.deepEqual(mergeImportedFields(previous,incoming,{scope:'shipment'}),{fields:[old],changed:false,warnings:[],conflicts:[]});
+  const newer = {...reimport,sourceAsOf:nextCut};
+  assert.deepEqual(mergeImportedFields(previous,[newer],{scope:'shipment'}),{fields:[newer],changed:true,warnings:[],conflicts:[]});
+  const oldCut = {...reimport,sourceAsOf:'2026-08-31T12:00:00.000Z',value:'GENERADA'};
+  const ignored = mergeImportedFields(previous,[oldCut],{...{reviewConfirmed:true},scope:'shipment'});
+  assert.equal(ignored.changed,false);
+  assert.deepEqual(ignored.fields,[old]);
+  assert.deepEqual(ignored.conflicts,[]);
+  assert.deepEqual(ignored.warnings.map(({code,key,sourceId,rowNumbers})=>({code,key,sourceId,rowNumbers})),[{code:'IMPORT_METADATA_OLD_CUTOFF',key:old.key,sourceId:old.sourceId,rowNumbers:[9]}]);
+  assert.deepEqual(mergeImportedFields(previous,[{...newer,value:'FINALIZADA'}],{scope:'shipment'}).fields,[{...newer,value:'FINALIZADA'}]);
+});
+
+test('metadata authority conflicts require explicit review without borrowing authority from other sources',()=>{
+  const old = importedObservation(), previous = [old];
+  for (const sourceAsOf of [at,null]) {
+    const incoming = importedObservation({value:'ANULADA',sourceAsOf,batchId:'batch-b',rowNumbers:[8,9]});
+    const denied = mergeImportedFields(previous,[incoming],{...{reviewConfirmed:'true'},scope:'shipment'});
+    assert.equal(denied.changed,false);
+    assert.deepEqual(denied.fields,previous);
+    assert.deepEqual(denied.conflicts,[{code:'IMPORT_METADATA_AUTHORITY',message:denied.conflicts[0].message,key:old.key,sourceId:old.sourceId,rowNumbers:[8,9]}]);
+    const allowed = mergeImportedFields(previous,[incoming],{...{reviewConfirmed:true},scope:'shipment'});
+    assert.equal(allowed.changed,true);
+    assert.deepEqual(allowed.fields,[incoming]);
+    assert.deepEqual(allowed.conflicts,[]);
+  }
+  const independent = importedObservation({sourceId:'source-b',value:'GENERADA',sourceAsOf:null});
+  const result = mergeImportedFields(previous,[independent],{scope:'shipment'});
+  assert.deepEqual(result.fields,[old,independent]);
+  assert.equal(result.changed,true);
+  assert.deepEqual(result.conflicts,[]);
+  assert.deepEqual(result.warnings.map(({code,key,sourceId,rowNumbers})=>({code,key,sourceId,rowNumbers})),[{code:'IMPORT_METADATA_UNDATED',key:independent.key,sourceId:'source-b',rowNumbers:[3]}]);
+});
+
+test('cutless metadata and blank text never erase known observations or invent authority',()=>{
+  const cutless = importedObservation({sourceAsOf:null});
+  const first = mergeImportedFields([],[cutless],{scope:'shipment'});
+  assert.deepEqual(first.fields,[cutless]);
+  assert.equal(first.changed,true);
+  assert.equal(first.warnings[0].code,'IMPORT_METADATA_UNDATED');
+  const dated = importedObservation();
+  for (const [previous,incoming] of [[[cutless],[dated]],[[dated],[cutless]]]) {
+    const unchanged = mergeImportedFields(previous,incoming,{scope:'shipment'});
+    assert.equal(unchanged.changed,false);
+    assert.deepEqual(unchanged.fields,previous);
+    assert.deepEqual(unchanged.conflicts,[]);
+  }
+  const conflict = mergeImportedFields([cutless],[{...dated,value:'FINALIZADA'}],{scope:'shipment'});
+  assert.equal(conflict.conflicts[0].code,'IMPORT_METADATA_AUTHORITY');
+  const blank = importedObservation({value:' \n ',sourceAsOf:'2026-09-02T12:00:00.000Z'});
+  assert.deepEqual(mergeImportedFields([dated],[blank],{scope:'shipment'}),{fields:[dated],changed:false,warnings:[],conflicts:[]});
+  assert.deepEqual(mergeImportedFields([],[blank],{scope:'shipment'}),{fields:[],changed:false,warnings:[],conflicts:[]});
+  assert.deepEqual(mergeImportedFields([blank],[cutless],{scope:'shipment'}).fields,[cutless]);
+  const zero = importedObservation({key:'expectedCollection',value:0,sourceAsOf:null});
+  assert.deepEqual(mergeImportedFields([],[zero],{scope:'shipment'}).fields,[zero]);
+});
 
 test('first guide defaults all lines without inventing an occurrence; edits are versioned',async t => {
   const store = await fixture(t), order = await orderFixture(store,{extraLines:[{lineId:'line-b',kind:'products',itemId:'historical-b',productType:'product',title:'Segundo producto',presentation:'Unidad',quantity:1,unitPriceMinor:5000,discountMinor:0,unitCostMinor:null,components:[]}]});
@@ -345,4 +487,37 @@ test('known-order selector searches exact number or guide, never fuzzy customer 
   assert.ok(!Object.hasOwn(found.records[0],'phone'));
   assert.ok(!Object.hasOwn(found.records[0],'email'));
   assert.ok(!Object.hasOwn(found.records[0],'address'));
+});
+
+test('shared imported information preserves scope, declared origin and typed zero without granting writes',()=>{
+  const declaredOrigin = {sheet:'Archivo anterior',rowNumber:10001,columnIndex:199,header:'Observación'};
+  const additional = importedObservation({key:'additional:unidades observadas',label:'Unidades observadas',value:0,valueType:'integer',declaredOrigin});
+  for (const scope of ['shipment','order','expense']) {
+    const normalized = validateImportedFields([additional],scope);
+    assert.deepEqual(normalized,[additional]);
+    assert.notEqual(normalized[0].declaredOrigin,declaredOrigin);
+    assert.deepEqual(mergeImportedFields([],normalized,{scope}).fields,normalized);
+    assert.throws(()=>validateImportedFields([{...additional,declaredOrigin:{...declaredOrigin,batchId:'inventado'}}],scope),invalidImportedField);
+    assert.throws(()=>validateImportedFields([{...additional,key:'amountMinor'}],scope),invalidImportedField);
+  }
+  assert.throws(()=>validateImportedFields([additional],'cash'),invalidImportedField);
+  assert.throws(()=>validateImportedFields([{...additional,value:'0'}],'expense'),invalidImportedField);
+  assert.throws(()=>validateImportedFields([importedObservation({key:'rawShipmentStatus'})],'order'),invalidImportedField);
+  const campaign = importedObservation({key:'expenseCampaign',label:'Campaña',value:'CAMP-7'});
+  assert.equal(validateImportedFields([campaign],'expense')[0].value,'CAMP-7');
+  assert.throws(()=>validateImportedFields([campaign],'shipment'),invalidImportedField);
+  const commercial = [
+    importedObservation({key:'customerName',value:'Cliente sintético'}),
+    importedObservation({key:'marketingCampaign',value:'CAMP-7'}),
+    importedObservation({key:'placedOn',value:'2026-09-28'}),
+    importedObservation({key:'shippingCharge',value:0})
+  ];
+  assert.deepEqual(validateImportedFields(commercial,'order'),commercial);
+  assert.throws(()=>validateImportedFields([importedObservation({key:'placedOn',value:'2026-02-30'})],'order'),invalidImportedField);
+  assert.throws(()=>validateImportedFields([importedObservation({key:'expenseCategory',value:'salary'})],'expense'),invalidImportedField);
+  const boolean = {...additional,valueType:'boolean',value:false};
+  assert.equal(mergeImportedFields([],[boolean],{scope:'expense'}).fields[0].value,false);
+  const money = {...additional,valueType:'money_minor',value:125};
+  assert.equal(validateImportedFields([money],'order')[0].value,125);
+  assert.throws(()=>validateImportedFields([{...money,value:-1}],'order'),invalidImportedField);
 });

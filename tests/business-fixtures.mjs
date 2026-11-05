@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync,writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeExcelSheets } from '../lib/business/excel.mjs';
+import { IMPORT_TABLES, importTableConfig } from '../lib/business/import-templates.mjs';
 import { emptyRecord } from '../lib/schema.mjs';
 import { bogotaDate } from '../lib/business/dates.mjs';
 import { getBusinessSettings, saveBusinessSettings, saveResource, listResources } from '../lib/business/settings.mjs';
@@ -92,4 +93,107 @@ export function createBusinessWorkbooks(directory,{year=completedFixtureYear()}=
   writeFileSync(main,writeExcelSheets([{name:'Pedidos sintéticos',rows:[headers,...rows]}]),{mode:0o600});
   writeFileSync(reordered,writeExcelSheets([{name:'Pedidos sintéticos',rows:[headers,...rows.toReversed()]}]),{mode:0o600});
   return {main,reordered,profile:businessWorkbookProfile(),year};
+}
+
+/** Workbook onboarding deliberately starts without payroll, people or cash. */
+export async function createWorkbookBusiness(store, { year = 2025, actorId = fixtureActor } = {}) {
+  const settings = await getBusinessSettings(store);
+  await saveBusinessSettings(store, {
+    ...settings, requestId: requestId(), reportsStartOn: `${year}-09-01`,
+    rulesVersions: [{
+      id: 'workbook-delivered', effectiveOn: `${year}-09-01`, saleRecognition: 'delivered',
+      commission: { enabled: false, mode: 'percent', rateBps: 0, fixedMinor: 0, basis: 'net_products', earnWhen: 'business_received' },
+      shippingExpenseDate: 'charge_date', returnExpenseDate: 'charge_date', platformFeeExpenseDate: 'charge_date'
+    }]
+  }, actorId);
+  const a = await store.save('products', {
+    ...emptyRecord('products'), title: 'Producto de incorporación sintético', slug: 'workbook-product-a',
+    status: 'published', image: '/brand/creatina-vital-force.jpg', presentation: 'Unidad',
+    price: 55000, stockQuantity: 10, unitCostMinor: 2300000, costEffectiveOn: `${year}-08-01`
+  }, null, null, actorId);
+  const platform = await saveResource(store, 'platforms', { requestId: requestId(), name: 'Mis archivos sintéticos' }, actorId);
+  const source = (await listResources(store, 'sources', { platform: platform.id }))[0];
+  return { year, actorId, a, platform, source, openingOn: `${year}-10-01` };
+}
+
+const WORKBOOK_SHEET_FIELDS = {
+  VENTAS: ['externalOrderId','externalLineId','placedOn','customerName','phone','city','address','productExternalKey','quantity','unitPrice','orderUnitCost','marketingCampaign'],
+  ENVIOS: ['externalOrderId','externalShipmentId','carrier','tracking','rawStatus','eventAt','shippingOutCost','shippingOutCostDate','insuranceCost','insuranceCostDate'],
+  PUBLICIDAD: ['expenseExternalId','expenseDate','expenseQuantity','expenseUnitCost','expenseQuantity','expenseUnitCost','expenseControlTotal'],
+  OPERACION: ['expenseExternalId','expenseDate','expenseConcept','expenseAmount']
+};
+export function workbookOnboardingSheets({ year = 2025, pending = false, sales = null, shipments = null, advertising = null, operating = null } = {}) {
+  return [
+    { name: 'REVISION', rows: [] },
+    { name: 'VENTAS', rows: [WORKBOOK_SHEET_FIELDS.VENTAS, ...(sales ?? [
+      ['ORDER-A','LINE-A',`${year}-09-28`,'Cliente de prueba A','3001234567','Bogotá','Dirección sintética','SKU-A',2,55000,20000,'CAMP-7'],
+      ...(pending ? [['ORDER-B','LINE-B',`${year}-09-29`,'Cliente de prueba B','3007654321','Bogotá','Dirección sintética B','SKU-A',3,55000,20000,'CAMP-8']] : [])
+    ])] },
+    { name: 'ENVIOS', rows: [WORKBOOK_SHEET_FIELDS.ENVIOS, ...(shipments ?? [
+      ['ORDER-A','SHIP-A','Transportadora sintética','SYNTHETIC-A','Entregado',`${year}-09-30`,12000,`${year}-09-29`,1000,`${year}-09-29`],
+      ...(pending ? [['ORDER-B','SHIP-B','Transportadora sintética','SYNTHETIC-B','Pendiente',`${year}-09-29`,0,`${year}-09-29`,0,`${year}-09-29`]] : [])
+    ])] },
+    { name: 'PUBLICIDAD', rows: [WORKBOOK_SHEET_FIELDS.PUBLICIDAD, ...(advertising ?? [['AD-DAY',`${year}-09-29`,10,2000,5,1000,25000]])] },
+    { name: 'OPERACION', rows: [WORKBOOK_SHEET_FIELDS.OPERACION, ...(operating ?? [['OP-1',`${year}-09-29`,'Operación sintética',10000]])] }
+  ];
+}
+
+export function workbookOnboardingConfig({ year = 2025 } = {}) {
+  return {
+    formatVersion: 2,
+    sheets: [
+      { sheetName: 'REVISION', enabled: false, purpose: 'orders', layout: 'item_rows', columns: [] },
+      ...Object.entries(WORKBOOK_SHEET_FIELDS).map(([sheetName, fields]) => ({
+        sheetName, enabled: true, headerRow: 1, dateFormat: 'ISO', decimalSeparator: '.', groupSeparator: ',',
+        purpose: sheetName === 'VENTAS' ? 'orders' : sheetName === 'ENVIOS' ? 'tracking' : 'expenses',
+        layout: sheetName === 'PUBLICIDAD' ? 'expense_columns' : sheetName === 'OPERACION' ? 'expense_rows' : 'item_rows',
+        columns: fields.map((destination, index) => ({ index, header: destination.toLowerCase(), destination, group: sheetName === 'PUBLICIDAD' && [4,5].includes(index) ? 1 : 0 })),
+        statusMap: sheetName === 'ENVIOS' ? { Entregado: 'delivered', Pendiente: 'label_created' } : {},
+        oneOrderPerGuide: false, reportAsOf: `${year}-10-03`, identityMode: 'provided',
+        defaults: sheetName === 'PUBLICIDAD' ? { expenseCategory: 'advertising', expenseConcept: 'Publicidad sintética' } : sheetName === 'OPERACION' ? { expenseCategory: 'operating' } : {},
+        expenseGroupNames: sheetName === 'PUBLICIDAD' ? { '0': 'Campaña sintética A', '1': 'Campaña sintética B' } : {},
+        expenseCategoryMap: {}
+      }))
+    ]
+  };
+}
+
+export const workbookOnboardingBytes = options => writeExcelSheets(workbookOnboardingSheets(options));
+
+export async function createWorkbookRelations(store, fixture) {
+  const { year, a, actorId } = fixture;
+  const combo = await store.save('combos', {
+    ...emptyRecord('combos'), title: 'Combo sintético de incorporación', slug: 'workbook-combo',
+    status: 'published', price: 100000, items: [{ productId: a.id, quantity: 2 }]
+  }, null, null, actorId);
+  const tables = workbookOnboardingSheets({
+    year,
+    sales: [
+      ['ORDER-A','LINE-A',`${year}-09-28`,'Cliente de prueba A','3001234567','Bogotá','Dirección sintética','SKU-A',1,55000,20000,'CAMP-7'],
+      ['ORDER-A','LINE-B',`${year}-09-28`,'Cliente de prueba A','3001234567','Bogotá','Dirección sintética','SKU-A',1,54000,21000,'CAMP-7'],
+      ['ORDER-A','LINE-C',`${year}-09-28`,'Cliente de prueba A','3001234567','Bogotá','Dirección sintética','COMBO-X',1,100000,'','CAMP-7']
+    ],
+    shipments: [
+      ['ORDER-A','SHIP-A','Transportadora sintética','SYNTHETIC-A','Entregado',`${year}-09-30`,0,`${year}-09-29`,0,`${year}-09-29`],
+      ['ORDER-A','SHIP-B','Transportadora sintética','SYNTHETIC-B','Entregado',`${year}-09-30`,0,`${year}-09-29`,0,`${year}-09-29`]
+    ]
+  });
+  const auxiliary = [
+    [IMPORT_TABLES.allocations, [
+      ['ORDER-A','SHIP-A','LINE-A',1], ['ORDER-A','SHIP-B','LINE-B',1], ['ORDER-A','SHIP-B','LINE-C',1]
+    ]],
+    [IMPORT_TABLES.components, [['ORDER-A','LINE-C','SKU-A',19000]]],
+    [IMPORT_TABLES.observations, [
+      ['order','ORDER-A','additional:puntos','Puntos','integer',0,'Venta previa',8,2,'PUNTOS',`${year}-10-03`],
+      ['shipment','SHIP-A','additional:seguimiento','Seguimiento','text','Sin interpretar como pago','Envío previo',5,7,'NOTA',`${year}-10-03`],
+      ['expense','OP-1','additional:centavos','Centavos','money_minor',12345,'Gasto previo',3,4,'CONTROL',`${year}-10-03`]
+    ]],
+    [IMPORT_TABLES.expenses, [['OTHER-1',`${year}-09-29`,'other','Gasto adicional sintético',15,'','','','',`${year}-10-03`]]]
+  ];
+  const configuration = workbookOnboardingConfig({ year });
+  for (const [definition, rows] of auxiliary) {
+    tables.push({ name: definition.name, rows: [definition.columns.map(column => column.header), ...rows] });
+    configuration.sheets.push({ ...importTableConfig(definition.name), reportAsOf: `${year}-10-03` });
+  }
+  return { combo, tables, configuration, resolutions: [{ action: 'link_product', externalKey: 'COMBO-X', internalId: combo.id }] };
 }

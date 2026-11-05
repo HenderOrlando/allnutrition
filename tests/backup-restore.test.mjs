@@ -21,6 +21,25 @@ test('commercial v3 round trip keeps financial facts, retained Excel, revisions 
   } finally { await source.close(); await target.close(); }
 });
 
+test('accepted single-sheet legacy review retains its bytes, selection and hash while resuming after profile changes',async () => {
+  const source = await factory(), target = await factory();
+  try {
+    const scenario = await createCommercialBackupScenario(source);
+    const revision = scenario.bundle.business.import_revisions.find(row => row.batch_id === scenario.batchId);
+    const accepted = JSON.parse(revision.data);
+    const sheet = accepted.config.formatVersion === 2 ? accepted.config.sheets.find(value => value.enabled) : accepted.config;
+    accepted.config = Object.fromEntries(['sheetName','headerRow','dateFormat','decimalSeparator','groupSeparator','purpose','layout','columns','statusMap','oneOrderPerGuide','reportAsOf'].filter(key => Object.hasOwn(sheet,key)).map(key => [key,sheet[key]]));
+    delete accepted.formatVersion;
+    for (const group of accepted.groups) {
+      delete group.kind;
+      delete group.rowRefs;
+      for (const row of group.rows) delete row.config;
+    }
+    revision.data = JSON.stringify(accepted);
+    await restoreCommercialBackupScenario(target,scenario);
+  } finally { await source.close(); await target.close(); }
+});
+
 test('invalid commercial bundles leave contents, business settings, rules and counters untouched',async () => {
   const source = await factory(), target = await factory();
   try {
@@ -137,7 +156,7 @@ test('pre-inventory v3 backups receive a historical baseline without re-deductin
   const source = await factory(), target = await factory();
   try {
     const scenario = await createCommercialBackupScenario(source);
-    const bundle = structuredClone(scenario.bundle);
+    const bundle = structuredClone(scenario.baselineBundle);
     delete bundle.inventoryVersion;
     for (const product of bundle.products) delete product.stockReserved;
     for (const order of bundle.orders) delete order.inventory;
@@ -148,7 +167,7 @@ test('pre-inventory v3 backups receive a historical baseline without re-deductin
     const restored = await target.exportData();
     assert.equal(restored.inventoryVersion,1);
     for (const product of restored.products) assert.equal(product.stockQuantity,quantities.get(product.id));
-    assert.deepEqual(restored.orders.map(order => order.inventory),scenario.bundle.orders.map(order => order.inventory));
+    assert.deepEqual(restored.orders.map(order => order.inventory),scenario.baselineBundle.orders.map(order => order.inventory));
     assert.deepEqual(restored.business.cash_entries,bundle.business.cash_entries);
     assert.deepEqual(restored.business.shipment_events,bundle.business.shipment_events);
     assert.deepEqual(restored.order_audit,bundle.order_audit);

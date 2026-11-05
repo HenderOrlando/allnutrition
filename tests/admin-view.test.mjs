@@ -241,3 +241,14 @@ test('bounded opaque identifiers preserve identity and reject controls across co
  assert.equal(readAdminView({section:'cash',anchor:' 2026-10-01 '}).anchor,undefined);
  assert.equal(readAdminView({section:'orders',q:`normal${String.fromCharCode(10)}query${String.fromCharCode(0)}`}).q,'normalquery');
 });
+
+test('expense category links retain advertising and operating filters without leaking into other views',()=>{
+ for(const category of ['advertising','operating','other','shipping_insurance']) {
+  const view=readAdminView({section:'cash',tab:'expenses',category,record:'expense:opaque-1'});
+  assert.equal(view.category,category);
+  const href=adminHref(view);
+  assert.deepEqual(readAdminView(new URL(href,'https://example.test').searchParams),view);
+  assert.equal(adminReturnTo(href),href);
+ }
+ for(const view of [{section:'cash',tab:'expenses',category:'unknown'},{section:'cash',tab:'movements',category:'advertising'},{section:'orders',category:'operating'}])assert.equal(readAdminView(view).category,undefined);
+});

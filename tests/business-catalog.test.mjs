@@ -1,19 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openSQLite } from '../lib/db/sqlite.mjs';
-import { Store } from '../lib/store.mjs';
-import { migrateBusinessV3 } from '../lib/db/migrations.mjs';
+import { randomUUID } from 'node:crypto';
+import { openStore } from '../lib/db/index.mjs';
+import { importData } from '../lib/import.mjs';
+import { createShipment, recordShipmentEvent } from '../lib/business/shipments.mjs';
 import { snapshotCatalogItem, completeOrderCosts } from '../lib/business/catalog.mjs';
-import { validateRecord } from '../lib/validation.mjs';
+import { validateRecord, validateOrder } from '../lib/validation.mjs';
 import { emptyRecord } from '../lib/schema.mjs';
 
 const product = (slug,extra={}) => ({title:slug,slug,status:'draft',stockQuantity:10000,price:100,image:'',presentation:'Unidad',...extra});
 async function fixture(t) {
-  const store = new Store(await openSQLite(':memory:'));
+  const store = await openStore({DB_DRIVER:'sqlite',SQLITE_PATH:':memory:'});
   t.after(()=>store.close());
-  await store.initialize(); await migrateBusinessV3(store);
   return store;
 }
+const combo = (slug,items,extra={}) => ({title:slug,slug,status:'draft',price:250,image:'',items,...extra});
+const comboOrder = (item,quantity=1) => ({requestId:randomUUID(),placedOn:'2026-09-01',customerName:'Cliente sintético de combo',phone:'3001234567',city:'Bogotá',status:'new',deliveryMethod:'carrier',shippingChargeMinor:0,items:[{lineId:randomUUID(),kind:'combos',itemId:item.id,quantity,unitPriceMinor:item.price*100,discountMinor:0}]});
 test('optional minor cost preserves blank, unknown and explicit zero',()=>{
   assert.equal(validateRecord('products',product('a',{unitCostMinor:''})).unitCostMinor,null);
   assert.equal(emptyRecord('products').unitCostMinor,null);
@@ -54,6 +56,98 @@ test('SKU, component restrictions, unavailable components and public privacy',as
   await assert.rejects(snapshotCatalogItem(store,'products',gift.id,'2026-09-01'));
   assert.equal((await snapshotCatalogItem(store,'products',gift.id,'2026-09-01',{allowUnavailable:true})).unitCostMinor,0);
 });
+test('combo permission is independent of publication with legacy defaults and valid composition',()=>{
+  const items=[{productId:'component-a',quantity:2}];
+  assert.equal(validateRecord('combos',combo('draft',items)).orderable,false);
+  assert.equal(validateRecord('combos',combo('legacy',items,{status:'published'})).orderable,true);
+  assert.equal(validateRecord('combos',combo('disabled',items,{status:'published',orderable:false})).orderable,false);
+  const enabled=validateRecord('combos',combo('private',items,{orderable:true}));
+  assert.equal(enabled.status,'draft');assert.equal(enabled.image,'');assert.equal(enabled.orderable,true);
+  assert.throws(()=>validateRecord('combos',combo('empty',[],{orderable:true})));
+  assert.throws(()=>validateRecord('combos',combo('zero',items,{orderable:true,price:0})));
+  assert.throws(()=>validateRecord('combos',combo('duplicate',[...items,...items],{orderable:true})));
+  assert.throws(()=>validateRecord('combos',combo('fraction',[{productId:'component-a',quantity:1.5}],{orderable:true})));
+  assert.equal(validateRecord('combos',combo('incomplete',[],{price:0})).orderable,false);
+});
+test('private combo reserves and consumes private components, stays out of storefront and survives backup',async t=>{
+  const store=await fixture(t);
+  const a=await store.save('products',product('private-a',{orderable:true,stockQuantity:5,unitCostMinor:2000,costEffectiveOn:'2026-01-01'}));
+  const b=await store.save('products',product('private-b',{orderable:true,stockQuantity:2,unitCostMinor:500,costEffectiveOn:'2026-01-01'}));
+  const saved=await store.save('combos',combo('private-combo',[{productId:a.id,quantity:2},{productId:b.id,quantity:1}],{orderable:true}));
+  assert.equal(saved.status,'draft');assert.equal(saved.image,'');assert.equal(saved.orderable,true);assert.equal(saved.stockAvailable,2);
+  await assert.rejects(store.save('combos',{...saved,status:'published'},saved.id,saved.version),/Publica primero/);
+  await assert.rejects(store.saveOrder(comboOrder(saved,3),'admin'));
+  assert.equal((await store.orders()).length,0);
+  assert.equal((await store.get('products',a.id)).stockReserved,0);
+  assert.equal((await store.get('products',b.id)).stockReserved,0);
+  const order=await store.saveOrder(comboOrder(saved,2),'admin');
+  assert.equal(order.items[0].productType,'combo');assert.equal(order.items[0].unitCostMinor,4500);
+  assert.deepEqual(order.items[0].components.map(({productId,quantity})=>({productId,quantity})),saved.items);
+  assert.equal((await store.get('products',a.id)).stockReserved,4);
+  assert.equal((await store.get('products',b.id)).stockReserved,2);
+  let shipment=await createShipment(store,{requestId:randomUUID(),orderId:order.id},'admin');
+  shipment=await recordShipmentEvent(store,shipment.id,{requestId:randomUUID(),version:shipment.version,status:'collected',occurredOn:'2026-09-02'},'admin');
+  assert.equal(shipment.status,'collected');
+  for (const [reference,remaining] of [[a,1],[b,0]]) {
+    const current=await store.get('products',reference.id);
+    assert.equal(current.status,'draft');assert.equal(current.stockQuantity,remaining);assert.equal(current.stockReserved,0);
+  }
+  assert.equal((await store.publicData()).products.length,0);assert.equal((await store.publicData()).combos.length,0);
+  const restored=await fixture(t);
+  await importData(restored,await store.exportData());
+  const restoredCombo=await restored.get('combos',saved.id);
+  assert.equal(restoredCombo.status,'draft');assert.equal(restoredCombo.orderable,true);
+  assert.equal((await snapshotCatalogItem(restored,'combos',saved.id,'2026-09-01')).unitCostMinor,4500);
+  assert.deepEqual((await restored.order(order.id)).inventory,(await store.order(order.id)).inventory);
+  assert.equal((await restored.get('products',a.id)).stockQuantity,1);
+  assert.equal((await restored.get('products',b.id)).stockQuantity,0);
+  assert.equal((await restored.publicData()).combos.length,0);
+  await assert.rejects(restored.saveOrder(comboOrder(restoredCombo),'admin'));
+});
+test('disabled combo or component rejects new orders and quantity increases without losing historical agreement',async t=>{
+  const store=await fixture(t);
+  let a=await store.save('products',product('component',{orderable:true,stockQuantity:20}));
+  let saved=await store.save('combos',combo('combo',[{productId:a.id,quantity:2}],{orderable:true}));
+  let order=await store.saveOrder(comboOrder(saved),'admin');
+  const fallback=(kind,id)=>store.get(kind,id);
+  const fallbackOrder=await validateOrder(comboOrder(saved),fallback);
+  a=await store.get('products',a.id);
+  a=await store.save('products',{...a,orderable:false},a.id,a.version);
+  await assert.rejects(snapshotCatalogItem(store,'combos',saved.id,'2026-09-01'));
+  await assert.rejects(validateOrder(comboOrder(saved),fallback));
+  await assert.rejects(validateOrder({...fallbackOrder,items:[{...fallbackOrder.items[0],quantity:2}]},fallback,fallbackOrder));
+  await assert.rejects(store.saveOrder({...order,requestId:randomUUID(),items:[{...order.items[0],quantity:2}]},'admin',order.id,order.version));
+  order=await store.saveOrder({...order,requestId:randomUUID(),notes:'Conservar acuerdo histórico'},'admin',order.id,order.version);
+  assert.equal(order.items[0].quantity,1);assert.equal((await store.get('products',a.id)).stockReserved,2);
+  await assert.rejects(store.save('combos',combo('unavailable-component',[{productId:a.id,quantity:1}],{orderable:true})),/Habilita para pedidos/);
+  a=await store.save('products',{...a,orderable:true},a.id,a.version);
+  saved=await store.save('combos',{...saved,orderable:false},saved.id,saved.version);
+  await assert.rejects(snapshotCatalogItem(store,'combos',saved.id,'2026-09-01'));
+  await assert.rejects(validateOrder(comboOrder(saved),fallback));
+  await assert.rejects(validateOrder({...fallbackOrder,items:[{...fallbackOrder.items[0],quantity:2}]},fallback,fallbackOrder));
+  await assert.rejects(store.saveOrder(comboOrder(saved),'admin'));
+  await assert.rejects(store.saveOrder({...order,requestId:randomUUID(),items:[{...order.items[0],quantity:2}]},'admin',order.id,order.version));
+  assert.equal((await store.order(order.id)).items[0].quantity,1);assert.equal((await store.get('products',a.id)).stockReserved,2);
+  const restored=await fixture(t);await importData(restored,await store.exportData());
+  assert.equal((await restored.get('combos',saved.id)).orderable,false);
+  await assert.rejects(restored.saveOrder(comboOrder(saved),'admin'));
+});
+test('published legacy combos without a flag remain usable while explicit false wins',async t=>{
+  const store=await fixture(t);
+  const a=await store.save('products',product('published-component',{status:'published',image:'/brand/logo.jpg',stockQuantity:10}));
+  let saved=await store.save('combos',combo('published-combo',[{productId:a.id,quantity:1}],{status:'published'}));
+  const row=await store.db.get(`SELECT data FROM ${store.t('records')} WHERE id=?`,[saved.id]);
+  const legacy=JSON.parse(row.data);delete legacy.orderable;
+  await store.db.run(`UPDATE ${store.t('records')} SET data=? WHERE id=?`,[JSON.stringify(legacy),saved.id]);
+  saved=await store.get('combos',saved.id);assert.equal(Object.hasOwn(saved,'orderable'),false);
+  assert.equal((await snapshotCatalogItem(store,'combos',saved.id,'2026-09-01')).productType,'combo');
+  assert.equal((await validateOrder(comboOrder(saved),(kind,id)=>store.get(kind,id))).items[0].productType,'combo');
+  const order=await store.saveOrder(comboOrder(saved),'admin');assert.equal(order.items[0].itemId,saved.id);
+  const publicCombo=(await store.publicData()).combos[0];assert.equal(publicCombo.id,saved.id);assert.equal(Object.hasOwn(publicCombo,'orderable'),false);
+  saved=await store.save('combos',{...saved,orderable:false},saved.id,saved.version);
+  assert.equal(saved.orderable,false);
+  await assert.rejects(store.saveOrder(comboOrder(saved),'admin'));
+});
 
 test('cost completion preserves agreement and updates recoveries atomically and idempotently',async t=>{
   const store = await fixture(t), at = '2026-09-01T12:00:00.000Z';
@@ -68,4 +162,14 @@ test('cost completion preserves agreement and updates recoveries atomically and 
   assert.equal(JSON.parse((await store.db.get('SELECT data FROM order_returns WHERE id=?',['return-a'])).data).lines[0].recoveredCostMinor,2300);
   assert.deepEqual(await completeOrderCosts(store,input,'admin'),result);
   await assert.rejects(completeOrderCosts(store,{...input,requestId:'cost-fix-0002'},'admin'));
+});
+test('first publication enables combos like products, later explicit disablement remains independent',async t=>{
+  const store=await fixture(t);
+  const a=await store.save('products',product('published-a',{status:'published',image:'/brand/logo.jpg',stockQuantity:10}));
+  let saved=await store.save('combos',{...emptyRecord('combos'),title:'Combo publicado',slug:'combo-publicado',status:'published',price:300,items:[{productId:a.id,quantity:1}]});
+  assert.equal(saved.orderable,true);
+  saved=await store.save('combos',{...saved,orderable:false},saved.id,saved.version);
+  assert.equal(saved.status,'published');assert.equal(saved.orderable,false);
+  assert.equal((await store.publicData()).combos[0].availability,'soldout');
+  await assert.rejects(snapshotCatalogItem(store,'combos',saved.id,'2026-09-01'));
 });
