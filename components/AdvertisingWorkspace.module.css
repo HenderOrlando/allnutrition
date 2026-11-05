@@ -1,0 +1,66 @@
+.workspace, .workspace * { box-sizing: border-box; }
+.workspace { min-width: 0; max-width: 100%; display: grid; gap: 20px; }
+.heading, .toolbar, .actions, .dialogHeader, .pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.heading, .dialogHeader { justify-content: space-between; }
+.heading h1, .heading h2, .dialogHeader h2 { margin: 0; }
+.toolbar, .filterBar { align-items: end; }
+.actions > button, .pagination > button { min-height: 44px; }
+.grid, .summaryGrid, .metricGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 16px; min-width: 0; }
+.card, .panel, .detail { min-width: 0; max-width: 100%; border: 1px solid var(--admin-line); border-radius: 16px; padding: 20px; background: var(--admin-surface); }
+.panel, .detail, .stack { display: grid; gap: 16px; }
+.card > :first-child, .panel > :first-child, .detail > :first-child { margin-top: 0; }
+.card > :last-child, .panel > :last-child, .detail > :last-child { margin-bottom: 0; }
+.muted, .help { font-size: 14px; line-height: 1.5; opacity: .78; }
+small.help { display: block; margin-top: 4px; font-weight: 400; overflow-wrap: anywhere; }
+.eyebrow { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.error, .warning, .notice, .empty { min-width: 0; padding: 16px; border: 1px solid var(--admin-line); border-radius: 12px; overflow-wrap: anywhere; }
+.error, .danger { border-inline-start: 4px solid currentColor; }
+.warning { border-inline-start-width: 4px; }
+.notice { border-style: dashed; }
+.empty { text-align: start; padding-block: 28px; }
+.fieldGrid, .filterBar { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 16px; min-width: 0; }
+.fieldGrid > *, .filterBar > *, .fullWidth { min-width: 0; }
+.fullWidth { grid-column: 1 / -1; }
+.workspace input:not([type='checkbox']):not([type='radio']), .workspace select, .workspace textarea, .dialog input:not([type='checkbox']):not([type='radio']), .dialog select, .dialog textarea { max-width: 100%; min-width: 0; }
+.workspace textarea, .dialog textarea { resize: vertical; }
+.checkRow { display: flex; align-items: start; gap: 10px; line-height: 1.5; }
+.checkRow input { flex: 0 0 auto; margin-top: 5px; }
+.choiceList { display: grid; gap: 12px; padding: 0; list-style: none; }
+.choiceList > label, .choiceList > li, .choiceList > button { border: 1px solid var(--admin-control-border); border-radius: 12px; padding: 12px; min-width: 0; text-align: start; }
+.badge { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--admin-line); border-radius: 999px; padding: 4px 9px; font-size: 12px; max-width: 100%; overflow-wrap: anywhere; }
+.steps { display: flex; gap: 8px; flex-wrap: wrap; padding: 0; list-style: none; }
+.stepButton { display: flex; gap: 8px; align-items: center; min-height: 44px; text-align: start; border: 1px solid var(--admin-control-border); border-radius: 12px; background: var(--admin-surface); color: inherit; padding: 10px 12px; cursor: pointer; }
+.stepActive { outline: 2px solid currentColor; outline-offset: 2px; font-weight: 700; }
+.stepButton:disabled { cursor: not-allowed; opacity: .55; }
+.assetPreview { display: grid; gap: 10px; min-width: 0; }
+.previewImage, .previewVideo { display: block; max-width: 100%; max-height: 360px; width: auto; height: auto; object-fit: contain; border: 1px solid var(--admin-line); border-radius: 12px; }
+.tableWrap { max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; border: 1px solid var(--admin-line); border-radius: 12px; }
+.table { width: 100%; border-collapse: collapse; text-align: start; font-size: 14px; }
+.table caption { padding: 12px; text-align: start; font-weight: 600; }
+.table th, .table td { padding: 12px; border-bottom: 1px solid var(--admin-line); vertical-align: top; text-align: start; min-width: 100px; overflow-wrap: anywhere; }
+.table th { font-weight: 700; }
+.table tbody tr:last-child td { border-bottom: 0; }
+.metricValue { display: block; font-size: clamp(21px, 3vw, 29px); line-height: 1.25; font-weight: 700; font-variant-numeric: tabular-nums; }
+.evidence { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
+.evidence summary { min-height: 44px; padding-block: 10px; cursor: pointer; font-weight: 600; }
+.evidence pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dialog { width: min(720px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); padding: 0; border: 1px solid var(--admin-line); border-radius: 16px; color: inherit; background: var(--admin-surface); }
+.dialogHeader { padding: 20px; border-bottom: 1px solid var(--admin-line); }
+.dialogBody { padding: 20px; display: grid; gap: 16px; overflow-wrap: anywhere; }
+.browserDialog { width: min(1320px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow: auto; overflow-wrap: anywhere; }
+.browserViewport { width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--admin-line); border-radius: 8px; }
+.browserViewport canvas { display: block; width: 100%; height: auto; aspect-ratio: 8 / 5; touch-action: manipulation; }
+.browserViewport canvas:focus-visible { outline: 2px solid currentColor; outline-offset: -3px; }
+.visuallyHidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 600px) {
+  .workspace { gap: 16px; }
+  .card, .panel, .detail, .dialogHeader, .dialogBody { padding: 16px; }
+  .fieldGrid, .filterBar { grid-template-columns: minmax(0, 1fr); }
+  .steps { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .stepButton { width: 100%; }
+  .actions > button { flex: 1 1 160px; }
+  .table th, .table td { padding: 10px; }
+  .toolbar { align-items: stretch; }
+  .toolbar > label, .toolbar > input, .toolbar > select { flex: 1 1 100%; }
+  .previewImage, .previewVideo { max-height: 280px; }
+}

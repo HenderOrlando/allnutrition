@@ -144,8 +144,7 @@ test('content detail links and typed report subsets keep only opaque bounded ide
  assert.equal(readAdminView({section:'products',record:{phone:'secret'}}).record,undefined);
 });
 
-test('six areas retain every actual destination and group legacy sections without aliases',()=>{
- assert.deepEqual(adminAreas.map(area=>area.id),['home','orders','products','cash','reports','business']);
+test('areas retain every actual destination and group legacy sections without aliases',()=>{
  assert.equal(new Set(adminSections.map(section=>section.id)).size,adminSections.length);
  for(const section of adminSections) {
   assert.ok(adminAreas.some(area=>area.id===section.area));

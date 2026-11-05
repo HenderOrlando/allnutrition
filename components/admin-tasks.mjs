@@ -29,6 +29,13 @@ export const adminTaskGroups = [
     { id: 'payroll-report', label: 'Informe de sueldos', description: 'Devengos, pagos y saldos por persona.', view: { section: 'reports', tab: 'payroll' } },
     { id: 'cash-report', label: 'Informe de caja', description: 'Saldos y movimientos al corte del informe.', view: { section: 'reports', tab: 'cash' } },
   ] },
+  { id: 'advertising', label: 'Publicidad', icon: 'chart', description: 'Prepara publicaciones propias, autoriza pauta y consulta su evidencia.', tasks: [
+    { id: 'prepare-publication', label: 'Preparar publicación', description: 'Guardar un borrador con pieza, cuenta y objetivo, sin publicar ni invertir.', view: { section: 'advertising', tab: 'campaigns', record: 'new' } },
+    { id: 'advertising-campaigns', label: 'Revisar publicaciones y pauta', description: 'Consultar estados por destino, programación y operaciones pendientes.', view: { section: 'advertising', tab: 'campaigns' } },
+    { id: 'advertising-assets', label: 'Subir piezas', description: 'Cargar imágenes y videos propios en el almacenamiento privado.', view: { section: 'advertising', tab: 'assets' } },
+    { id: 'advertising-results', label: 'Analizar resultados', description: 'Contrastar estimaciones, métricas y vínculos comerciales declarados.', view: { section: 'advertising', tab: 'results' } },
+    { id: 'advertising-connections', label: 'Conectar redes', description: 'Elegir API oficial o navegador y comprobar sus requisitos independientes.', view: { section: 'advertising', tab: 'connections' } },
+  ] },
   { id: 'business', label: 'Negocio y acceso', icon: 'settings', description: 'Personas, plataformas y reglas de operación.', tasks: [
     { id: 'setup', label: 'Guía de inicio', action: 'Abrir guía de inicio', description: 'Preparar caja, primer producto y pedidos; práctica opcional sin cobro real.', view: { section: 'business', tab: 'setup' } },
     { id: 'people', label: 'Personas responsables', action: 'Gestionar personas y sueldos', description: 'Responsables, vendedores, sueldos y comisiones. No crea accesos al panel.', view: { section: 'business', tab: 'people' } },
@@ -51,10 +58,11 @@ export const adminTasks = [
   ...adminTaskGroups.flatMap(group => group.tasks.map(task => ({ ...task, icon: task.icon || group.icon, group: group.label }))),
 ];
 
-const defaultTabs = { orders: 'list', cash: 'overview', reports: 'overview', business: 'setup' };
+const defaultTabs = { orders: 'list', cash: 'overview', reports: 'overview', business: 'setup', advertising: 'campaigns' };
 export function isCurrentAdminTask(task, view) {
   return task.view.section === view.section
     && (!task.view.tab || task.view.tab === (view.tab || defaultTabs[view.section]))
+    && (task.view.section !== 'advertising' || (task.view.record === 'new') === (view.record === 'new'))
     && (task.view.productType || '') === (view.productType || '');
 }
 
