@@ -7,6 +7,20 @@ x-runtime-environment: &runtime-environment
   DB_POOL_MAX: "5"
   APP_URL: ${APP_URL:?}
   EXTRA_ALLOWED_ORIGINS: ""
+  META_APP_ID: ${META_APP_ID:-}
+  META_APP_SECRET: ${META_APP_SECRET:-}
+  META_LOGIN_CONFIG_ID: ${META_LOGIN_CONFIG_ID:-}
+  META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v26.0}
+  SOCIAL_TOKEN_ENCRYPTION_KEY: ${SOCIAL_TOKEN_ENCRYPTION_KEY:-}
+  SOCIAL_MEDIA_SIGNING_KEY: ${SOCIAL_MEDIA_SIGNING_KEY:-}
+  SOCIAL_PUBLISHING_ENABLED: ${SOCIAL_PUBLISHING_ENABLED:-false}
+  SOCIAL_BROWSER_ENABLED: ${SOCIAL_BROWSER_ENABLED:-false}
+  SOCIAL_BROWSER_URL: http://social-browser:3320
+  SOCIAL_BROWSER_CONTROL_KEY: ${SOCIAL_BROWSER_CONTROL_KEY:-}
+  SOCIAL_BROWSER_SESSION_KEY: ${SOCIAL_BROWSER_SESSION_KEY:-}
+  SOCIAL_BROWSER_MAX_CONTEXTS: ${SOCIAL_BROWSER_MAX_CONTEXTS:-2}
+  SOCIAL_MEDIA_DIR: /app/data/social-media
+  SOCIAL_MEDIA_QUOTA_BYTES: ${SOCIAL_MEDIA_QUOTA_BYTES:-10737418240}
 
 x-db-ca: &db-ca
   type: bind
@@ -60,7 +74,8 @@ services:
     volumes:
       - *db-ca
       - product_images:/app/data/product-images
-    networks: [backend, frontend]
+      - social_media:/app/data/social-media
+    networks: [backend, frontend, social_control]
     depends_on:
       db:
         condition: service_healthy
@@ -78,13 +93,71 @@ services:
   scheduler:
     image: ${APP_IMAGE:?}
     environment: *runtime-environment
-    volumes: [*db-ca]
-    networks: [backend]
+    volumes:
+      - *db-ca
+      - social_media:/app/data/social-media
+    networks: [backend, social_egress]
     depends_on:
       db:
         condition: service_healthy
     command: ["node", "scripts/business-jobs.mjs"]
     init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *logging
+
+  social-browser-worker:
+    profiles: [social-browser]
+    image: ${APP_IMAGE:?}
+    environment: *runtime-environment
+    volumes:
+      - *db-ca
+      - social_media:/app/data/social-media:ro
+    networks: [backend, social_control]
+    depends_on:
+      db:
+        condition: service_healthy
+      social-browser:
+        condition: service_healthy
+    command: ["node", "scripts/business-jobs.mjs", "--social-browser"]
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *logging
+
+  social-browser:
+    profiles: [social-browser]
+    image: ${SOCIAL_BROWSER_IMAGE:-allnutrition-social-browser:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.social-browser
+    environment:
+      NODE_ENV: production
+      SOCIAL_BROWSER_ENABLED: ${SOCIAL_BROWSER_ENABLED:-false}
+      SOCIAL_PUBLISHING_ENABLED: ${SOCIAL_PUBLISHING_ENABLED:-false}
+      SOCIAL_BROWSER_CONTROL_KEY: ${SOCIAL_BROWSER_CONTROL_KEY:-}
+      SOCIAL_BROWSER_MAX_CONTEXTS: ${SOCIAL_BROWSER_MAX_CONTEXTS:-2}
+      SOCIAL_MEDIA_DIR: /app/data/social-media
+    volumes:
+      - social_media:/app/data/social-media:ro
+    networks: [social_control, social_egress]
+    user: "1000:1000"
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./deploy/social-browser-seccomp.json
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=1073741824,mode=1777
+    shm_size: 512m
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3320/health').then(r=>r.json()).then(v=>process.exit(v.available===true?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     stop_grace_period: 30s
     restart: unless-stopped
     logging: *logging
@@ -165,8 +238,14 @@ services:
     image: allnutrition-checks:node24-local
     build:
       context: .
-      target: build
+      target: checks
     user: "${LOCAL_UID:?}:${LOCAL_GID:?}"
+    init: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./deploy/social-browser-seccomp.json
+    shm_size: 512m
     environment:
       <<: *runtime-environment
       HOME: /tmp
@@ -192,9 +271,13 @@ networks:
   backend:
     internal: true
   frontend:
+  social_control:
+    internal: true
+  social_egress:
 
 volumes:
   postgres_data:
   caddy_data:
   caddy_config:
   product_images:
+  social_media:

@@ -4,13 +4,22 @@ import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/db/index.mjs';
 import { runContracts } from './contract.mjs';
 import { testDatabaseEnv, resetPostgresStore } from './postgres-fixture.mjs';
-import { BUSINESS_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
-import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore } from './backup-contract.mjs';
+import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore,runSocialBackupContracts } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
 import { runWorkbookImportContracts } from './business-workbook-contract.mjs';
 import { createBusinessFixture, returnBusinessFixture, requestId } from './business-fixtures.mjs';
 import { confirmPayroll } from '../lib/business/payroll.mjs';
+import { runSocialContracts } from './social-contract.mjs';
+import { runSocialMediaContracts } from './social-media-contract.mjs';
+import { runSocialCampaignContracts } from './social-campaign-contract.mjs';
+import { runSocialApiJobContracts } from './social-api-jobs-contract.mjs';
+import { runSocialBrowserJobContracts } from './social-browser-jobs-contract.mjs';
+import { runSocialMetricsContracts } from './social-metrics-contract.mjs';
+import { runSocialAnalysisContracts } from './social-analysis-contract.mjs';
+import { runSocialLinkContracts } from './social-links-contract.mjs';
+import { runSocialImprovementContracts } from './social-improvements-contract.mjs';
 
 async function migrationRows(store) {
  const tables=['migrations','records','settings','users','sessions','attempts','orders','order_events','order_audit','counters','idempotency',...BUSINESS_TABLES];
@@ -36,12 +45,59 @@ async function insertInsurance(store,fixture) {
 const url=process.env.TEST_DATABASE_URL;
 test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},async t=>{
  const env=testDatabaseEnv();
- const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=7`));}finally{await first.close();}
+ const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);await migrateSocialV8(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=8`));}finally{await first.close();}
  const factory=async()=>{
   const store=await openStore(env);
   try { await resetPostgresStore(store); return store; }
   catch (error) { await store.close(); throw error; }
  };
+ await t.test('publicidad v8 conserva negocio v7, revierte DDL y exige migración al arrancar',async()=>{
+  const store=await factory();
+  try{
+   await createBusinessFixture(store,{year:2025,pay:true});
+   await store.transaction(async tx=>{
+    await tx.lockWrites();
+    for(const table of [...SOCIAL_INTERNAL_TABLES].reverse().concat([...SOCIAL_TABLES].reverse()))await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+    await tx.db.exec('DROP FUNCTION allnutrition.social_connection_method_guard()');
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=8`);
+   });
+   await assert.rejects(()=>openStore(env));
+   const before=await migrationRows(store);
+   const failingStore={provider:store.provider,transaction:fn=>store.transaction(tx=>{
+    const run=tx.db.run;
+    tx.db={...tx.db,run:async(sql,params)=>{
+     if(sql.startsWith(`INSERT INTO ${tx.t('migrations')}(version,applied_at) VALUES(8,`))throw new Error('synthetic social marker failure');
+     return run(sql,params);
+    }};
+    return fn(tx);
+   })};
+   await assert.rejects(()=>migrateSocialV8(failingStore));
+   assert.deepEqual(await migrationRows(store),before);
+   assert.equal((await store.db.get("SELECT to_regclass('allnutrition.social_connections') AS relation")).relation,null);
+   assert.deepEqual(await migrateSocialV8(store),{migrated:true,version:8});
+   const after=await migrationRows(store);
+   assert.deepEqual(after.migrations.filter(row=>row.version!==8),before.migrations);
+   delete after.migrations;delete before.migrations;assert.deepEqual(after,before);
+   const at='2026-10-01T00:00:00.000Z';
+   await store.db.run(`INSERT INTO ${store.t('social_connections')}(id,provider,integration_method,state,created_at,updated_at) VALUES('social-connection','meta','api','connected',?,?)`,[at,at]);
+   await assert.rejects(()=>store.db.run(`UPDATE ${store.t('social_connections')} SET integration_method='browser' WHERE id='social-connection'`),{code:'23514'});
+   await assert.rejects(()=>store.db.run(`UPDATE ${store.t('social_connections')} SET data='invalid' WHERE id='social-connection'`));
+   await store.db.run(`INSERT INTO ${store.t('social_campaigns')}(id,connection_id,name,mode,objective,state,created_at,updated_at) VALUES('social-campaign','social-connection','Campaña','organic','reach','draft',?,?)`,[at,at]);
+   await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('social_connections')} WHERE id='social-connection'`),{code:'23503'});
+   await assert.rejects(()=>store.db.run(`UPDATE ${store.t('social_campaigns')} SET data=? WHERE id='social-campaign'`,[JSON.stringify({budgetMinor:9007199254740992})]),{code:'23514'});
+   await store.db.run(`INSERT INTO ${store.t('social_revisions')}(campaign_id,revision,spec_hash,approved_at,actor_id) VALUES('social-campaign',1,?,?,'actor')`,['a'.repeat(64),at]);
+   const delivery=revision=>store.db.run(`INSERT INTO ${store.t('social_deliveries')}(id,campaign_id,revision,channel,state,created_at,updated_at) VALUES('social-delivery','social-campaign',?,'facebook','queued',?,?)`,[revision,at,at]);
+   await assert.rejects(()=>delivery(2),{code:'23503'});
+   await delivery(1);
+   await assert.rejects(()=>delivery(1),{code:'23505'});
+   await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('social_revisions')} WHERE campaign_id='social-campaign'`),{code:'23503'});
+   const migrated=await migrationRows(store);
+   const connection=await store.db.get(`SELECT * FROM ${store.t('social_connections')} WHERE id='social-connection'`);
+   assert.deepEqual(await migrateSocialV8(store),{migrated:false,version:8});
+   assert.deepEqual(await migrationRows(store),migrated);
+   assert.deepEqual(await store.db.get(`SELECT * FROM ${store.t('social_connections')} WHERE id='social-connection'`),connection);
+  }finally{try{await migrateSocialV8(store);}finally{await store.close();}}
+ });
  await t.test('seguro v6 migra el CHECK v5 real, revierte fallos y conserva ownership, permisos y relaciones',async()=>{
   // The factory verifies the connected database is the explicitly authorized allnutrition_test.
   const store=await factory();
@@ -94,6 +150,16 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
  await runContracts(t,factory);await runBusinessContracts(t,factory);
  await runImportCancellationContracts(t,factory);
  await runWorkbookImportContracts(t,factory);
+ await runSocialContracts(t,factory);
+ await runSocialMediaContracts(t,factory);
+ await runSocialCampaignContracts(t,factory);
+ await runSocialApiJobContracts(t,factory);
+ await runSocialBrowserJobContracts(t,factory);
+ await runSocialMetricsContracts(t,factory);
+ await runSocialAnalysisContracts(t,factory);
+ await runSocialLinkContracts(t,factory);
+ await runSocialImprovementContracts(t,factory);
+ await runSocialBackupContracts(t,factory);
  await t.test('libro v7 conserva pagos, ownership, índices y FK y revierte el CHECK al fallar el marcador',async()=>{
   const store=await factory();
   try{

@@ -143,6 +143,31 @@ export const businessJobsContracts = [
     assert.equal(businessJobsDelay({ hasMore: true }), 100);
     assert.equal(businessJobsDelay({ hasMore: false }), 60000);
   }],
+  ['business and browser worker health expires independently and rejects unknown worker identities without writes', async store => {
+    const readHeartbeat = key => store.db.get(`SELECT * FROM ${store.t('job_runs')} WHERE key=?`, [key]);
+    const businessKey = 'scheduler:heartbeat', browserKey = 'scheduler:social-browser:heartbeat';
+    const beforeRevision = await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`);
+    await touchSchedulerHeartbeat(store, { now });
+    assert.equal(schedulerHealth(await readHeartbeat(browserKey), now).status, 'never');
+    assert.equal(await touchSchedulerHeartbeat(store, { now, worker: 'social-browser' }), true);
+    assert.equal(await touchSchedulerHeartbeat(store, { now: '2026-10-16T12:00:29.000Z', worker: 'social-browser' }), false);
+    const browserFirst = await readHeartbeat(browserKey);
+    await touchSchedulerHeartbeat(store, { now: '2026-10-16T12:03:02.000Z', worker: 'business' });
+    assert.deepEqual(await readHeartbeat(browserKey), browserFirst);
+    assert.equal(schedulerHealth(browserFirst, '2026-10-16T12:03:03.000Z').status, 'stale');
+    assert.equal(schedulerHealth(await readHeartbeat(businessKey), '2026-10-16T12:03:03.000Z').status, 'running');
+    const businessRenewed = await readHeartbeat(businessKey);
+    await touchSchedulerHeartbeat(store, { now: '2026-10-16T12:06:04.000Z', worker: 'social-browser' });
+    assert.deepEqual(await readHeartbeat(businessKey), businessRenewed);
+    assert.equal(schedulerHealth(businessRenewed, '2026-10-16T12:06:05.000Z').status, 'stale');
+    assert.equal(schedulerHealth(await readHeartbeat(browserKey), '2026-10-16T12:06:05.000Z').status, 'running');
+    const jobsBeforeInvalid = await store.db.all(`SELECT * FROM ${store.t('job_runs')} ORDER BY key`);
+    for (const worker of ['browser', 'scheduler:heartbeat', '', null, 1]) {
+      await assert.rejects(touchSchedulerHeartbeat(store, { now, worker }), error => error.status === 400);
+    }
+    assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('job_runs')} ORDER BY key`), jobsBeforeInvalid);
+    assert.deepEqual(await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`), beforeRevision);
+  }],
   ['domain changes wake alert evaluation before its idle deadline and resolve the same cash episode', async store => {
     await settings(store, { reportsStartOn: '2026-10-16' });
     const responsible = await person(store, []);
