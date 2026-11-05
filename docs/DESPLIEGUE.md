@@ -57,6 +57,8 @@ El target `checks` incorpora FFmpeg/ffprobe y el Chromium fijado durante su buil
 
 Playwright es una dependencia de runtime del cliente/runner social; no es una autorización para instalar Chromium en web. La aceptación comprueba por separado ausencia de herramientas de desarrollo y de directorios de binarios Chromium en la aplicación. El plazo agregado del E2E completo es de tres horas: los escenarios seriales de recuperación esperan el worker real y el subconjunto libro/diálogos ya superó una hora, sin omitir casos ni repetir escrituras.
 
+La construcción nativa de runtime/checks tiene un límite de 30 minutos. El primer candidato integral del 5 de noviembre agotó el límite anterior de 10 minutos durante la instalación de paquetes FFmpeg, antes de las pruebas, y quedó rechazado. Ampliar ese límite no aprueba una imagen: el sucesor debe completar de nuevo construcción, contratos, auditoría, E2E y recuperación antes del corte.
+
 Para el corte comercial v3 ejecutar `npm run verify:docker -- --interactive`. Mantiene la aceptación automatizada y añade el recorrido de importación, caja, sueldo, devolución, snapshot sin paneles, alerta y reinicio de lote. La pausa imprime las rutas/órdenes exactas de su proyecto descartable; no reemplazarlas por configuración de staging o producción. EOF/SIGINT cancela.
 
 `artifacts/result.json` registra ID, plataforma, release, pruebas y exit code. Los reportes Playwright quedan en las rutas indicadas allí. `operational.json`, dumps, env y claves son privados: contienen datos/sesiones o secretos; no adjuntarlos a CI, incidencias ni soporte. El workflow utiliza el mismo verificador; una ejecución local no demuestra que CI remoto haya pasado.
