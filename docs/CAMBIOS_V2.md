@@ -1,5 +1,12 @@
 # Cambios — administración v3 y antecedentes
 
+## Correcciones detectadas antes de la entrega integral · 5 de noviembre de 2026
+
+- El healthcheck espera el PostgreSQL definitivo por TCP; no confunde el servidor temporal del entrypoint con disponibilidad para migrar. Se conserva la verificación TLS del consumidor y no se añaden reintentos de escritura.
+- El respaldo respeta autorizaciones de fórmulas con alcance de hoja/campo, sin exigir una fila que ese alcance no contiene. Las resoluciones con fila siguen exigiendo número válido y procedencia; una corrección de celda no se convierte en autorización de toda la hoja.
+- Regresión sintética reproducida antes de corregir: la restauración rechazaba la autorización de una sola hoja. Después, 43 contratos del libro aprobados en SQLite: rechazo atómico de referencias corruptas, restauración en revisión y tras aceptación, alcance conservado entre dos hojas y caché ausente todavía bloqueada.
+- Las incidencias se detectaron con candidatos y clon de recuperación, sin corte ni importación del libro real. Aceptación integral y publicación del sucesor aún pendientes; detalle en [VERIFICACION.md](VERIFICACION.md).
+
 ## Importaciones claras y completas · verificación local · 4 de noviembre de 2026
 
 - Historial separado del alta, con origen/estado/página en la URL y recursos de lista/catálogos independientes. Los fallos conservan la última lectura, identifican datos anteriores y permiten reintentar sin inventar un vacío.

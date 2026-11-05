@@ -637,7 +637,9 @@ export async function runWorkbookImportContracts(t,factory){
     assert.deepEqual((await expenses(store))[0],original);await noInventedMoney(store);
   }));
 
-  await t.test('fórmulas usadas se aceptan por hoja y campo; errores excluidos no bloquean y caché ausente no se autoriza',()=>fixture(async(store,f)=>{
+  await t.test('fórmulas usadas conservan autorización por hoja al restaurar y una caché ausente no se autoriza',context=>fixture(async(store,f)=>{
+    const restoredStores=[];context.after(async()=>{for(const restored of restoredStores)await restored.close();});
+    const restoreFresh=async bundle=>{const restored=await factory();restoredStores.push(restored);await importData(restored,bundle);return restored;};
     const XLSX=createRequire(import.meta.url)('xlsx'),headers=expenseHeaders;
     const configuration={formatVersion:2,sheets:['Fórmulas A','Fórmulas B'].map(name=>expenseConfig(name,headers).sheets[0])};
     const workbook=XLSX.utils.book_new();
@@ -653,7 +655,20 @@ export async function runWorkbookImportContracts(t,factory){
     batch=await resolve(store,batch,[{action:'accept_formulas',sheet:'Fórmulas A',externalKey:'expenseAmount',value:true}]);
     assert.ok(batch.preview.groups.find(group=>group.rowRefs[0].sheet==='Fórmulas B').errors.some(error=>error.code==='IMPORT_FORMULA_ACCEPTANCE'));
     assert.equal(batch.preview.groups.find(group=>group.rowRefs[0].sheet==='Fórmulas A').errors.length,0);
+    const bundle=await store.exportData(),restored=await factory();restoredStores.push(restored);
+    for(const patch of [{sheet:''},{sheet:{}},{rowNumber:0},{rowNumber:10002},{rowNumber:3}]){
+      const invalid=structuredClone(bundle),row=invalid.business.import_batches.find(row=>row.id===batch.id),data=JSON.parse(row.data);
+      Object.assign(data.resolutions.find(resolution=>resolution.action==='accept_formulas'),patch);row.data=JSON.stringify(data);
+      await assert.rejects(()=>importData(restored,invalid),{status:400});
+    }
+    await importData(restored,bundle);store=restored;
+    batch=await preview(store,await imports.getImportBatch(store,batch.id));
+    assert.equal(batch.preview.groups.find(group=>group.rowRefs[0].sheet==='Fórmulas A').errors.length,0);
+    assert.ok(batch.preview.groups.find(group=>group.rowRefs[0].sheet==='Fórmulas B').errors.some(error=>error.code==='IMPORT_FORMULA_ACCEPTANCE'));
+    await assert.rejects(()=>accept(store,batch),{status:409});await noInventedMoney(store);
     batch=await resolve(store,batch,[{action:'accept_formulas',sheet:'Fórmulas B',externalKey:'expenseAmount',value:true}]);await apply(store,batch);
+    assert.deepEqual((await expenses(store)).map(row=>Number(row.amount_minor)).sort((a,b)=>a-b),[1000,2000]);await noInventedMoney(store);
+    store=await restoreFresh(await store.exportData());
     assert.deepEqual((await expenses(store)).map(row=>Number(row.amount_minor)).sort((a,b)=>a-b),[1000,2000]);await noInventedMoney(store);
     workbook.Sheets['Fórmulas B'].D2={t:'z',f:'10*2'};
     const missing=await preview(store,await uploaded(store,f,{tables,bytes:XLSX.write(workbook,{type:'buffer',bookType:'xlsx',compression:true}),configuration,opening:false,resolutions:[{action:'accept_formulas',value:true}]}));
