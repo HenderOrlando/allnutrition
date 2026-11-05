@@ -220,7 +220,7 @@ try {
   result.imageId = image.Id;
   result.architecture = image.Architecture;
   result.os = image.Os;
-  const probe = compose(['run', '--rm', '--no-deps', 'web', 'node', '-e', 'const fs=require("node:fs");if(["@playwright/test","playwright","playwright-core","typescript"].some(n=>fs.existsSync("node_modules/"+n))||process.getuid()!==1000||process.versions.node.split(".")[0]!=="24")process.exit(1);console.log(JSON.stringify({node:process.version,uid:process.getuid()}))'], 'Identidad del runtime y ausencia de devDependencies');
+  const probe = compose(['run', '--rm', '--no-deps', 'web', 'node', '-e', 'const fs=require("node:fs");if(["@playwright/test","typescript"].some(n=>fs.existsSync("node_modules/"+n))||["/ms-playwright","/root/.cache/ms-playwright","/home/node/.cache/ms-playwright","node_modules/playwright-core/.local-browsers"].some(p=>fs.existsSync(p))||process.getuid()!==1000||process.versions.node.split(".")[0]!=="24")process.exit(1);console.log(JSON.stringify({node:process.version,uid:process.getuid()}))'], 'Identidad del runtime y ausencia de Chromium/devDependencies');
   result.runtime = JSON.parse(probe.stdout.trim());
   passed('runtime Node24 sin herramientas de desarrollo');
 
@@ -249,9 +249,9 @@ try {
   ensure(runningImage === result.imageId, 'El contenedor ejecutado no coincide con el imageId construido.');
   await startWorker();
   passed('scheduler real: misma imagen limitada, sin puertos y heartbeat persistido');
-  // Import E2E observes the real worker's 60-second idle before parse/preview in both serial projects.
+  // Full serial recovery scenarios wait for the real worker; the verified workbook/dialog subset alone exceeded one hour.
   run('npm', ['run', 'test:e2e'], 'E2E escritorio/móvil y fronteras HTTP', {
-    timeout: 3600000,
+    timeout: 10800000,
     env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright, PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json') },
   });
   passed('Playwright desktop/mobile: upload local, render público, límites HTTP, autenticación y CSRF');

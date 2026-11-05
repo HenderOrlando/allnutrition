@@ -2,7 +2,12 @@
 const config = {
   poweredByHeader: false,
   serverExternalPackages: ['pg'],
-  outputFileTracingIncludes: { '/*': ['./db/sqlite.sql'] },
+  outputFileTracingIncludes: { '/*': ['./db/*.sql'] },
+  outputFileTracingExcludes: { '/*': ['./data/**/*', './.env*'] },
+  logging: {
+    incomingRequests: { ignore: [/\/api\/admin\/social\/oauth\/callback(?:\?|$)/, /\/api\/social\/media\//] },
+    browserToTerminal: false,
+  },
   async headers() {
     return [{ source: '/:path*', headers: [
       { key: 'X-Content-Type-Options', value: 'nosniff' },
