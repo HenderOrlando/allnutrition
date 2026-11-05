@@ -1,5 +1,64 @@
 # Cambios — administración v3 y antecedentes
 
+## Combos privados, obsequios y validación de respaldo · publicada · 30 de octubre de 2026
+
+- Desde Excel se pueden crear o vincular combos privados y obsequios de catálogo sin publicar la vitrina; cantidad del obsequio explícita, precio cero y costos/inventario de componentes reales. El permiso de pedidos del combo es independiente de su publicación.
+- El respaldo admite alias de combos y procedencias históricas combinadas. Su validación reutiliza un índice de hojas por lote en vez de parsear el lote completo por cada observación/fila; no omite comprobaciones de autoridad o ubicación. Smoke sobre respaldo real restaurado aislado: validación completa y hash comercial conservado, sin escribir producción.
+- Publicada en web y scheduler con `allnutrition:release-4d054869563c`, sin rebuild ni migración. Aceptación final: 682 contratos SQLite/PostgreSQL sin fallos/omisiones, 44 E2E y auditoría/caída/reinicio/restore aprobados. La imagen final validó también el respaldo real restaurado aislado; corte respaldado, tablas/esquema/medios conservados y PostgreSQL no reiniciado. UI productiva escritorio/móvil comprobada sin guardar ni aplicar el libro real. Detalle en [VERIFICACION.md](VERIFICACION.md).
+
+## Pendientes al vincular productos · publicada · 30 de octubre de 2026
+
+- Guardar un vínculo invalidaba la revisión y ocultaba los demás productos por resolver. La lista **Productos por vincular** ahora se obtiene de los diagnósticos durables del lote, descontando únicamente los vínculos guardados con alcance coincidente; no depende del preview ni de la página de filas visible.
+- Permite vincular productos consecutivamente y retomar tras recargar, sin regenerar la revisión después de cada vínculo. La revisión anterior sigue inválida: se exige revisar de nuevo antes de importar. No crea productos ni aplica pedidos como efecto del guardado.
+- Publicada en web y scheduler con `allnutrition:release-54dffbbf173d`, sin rebuild ni migración. Aceptación nativa completa: 672 contratos SQLite/PostgreSQL sin fallos/omisiones y 44 E2E; auditoría y caída/reinicio/dump/restore aprobados. Respaldo final y comparación de tablas/esquema/medios; PostgreSQL no reiniciado. UI productiva: 43 pendientes y 6 vínculos visibles en escritorio/móvil, sin guardar ni aplicar el libro real. Verificaciones e incidencia recuperada del helper de corte en [VERIFICACION.md](VERIFICACION.md).
+
+## Vínculo de producto existente en Excel · 30 de octubre de 2026
+
+- Separadas las acciones: **Guardar vínculo** persiste el producto seleccionado en el lote; **Guardar lote y crear producto** queda deshabilitada con una selección existente. No crea otro producto ni aplica pedidos.
+- Los vínculos guardados muestran referencia y producto fuera de la revisión, sobreviven a la recarga y permiten editar la selección. Filtrar la búsqueda no borra el producto seleccionado; **Revisar datos guardados** valida el lote tras el guardado.
+- Cancelar el alta separada devuelve al diálogo con referencia, motivo y búsqueda conservados, sin borrar vínculos previos. No requiere migración.
+- Publicada en web y scheduler como `allnutrition:release-58b701b9dd7a`, sin rebuild ni migración. Aceptación nativa completa: 670 contratos SQLite/PostgreSQL sin fallos ni omisiones, 44 E2E escritorio/móvil y auditoría sin vulnerabilidades conocidas, además de caída/reinicio/dump/restore. Respaldo final, tablas/esquema y medios conservados; PostgreSQL no reiniciado. El libro real no se aplicó. Evidencia y límite de captura productiva en [VERIFICACION.md](VERIFICACION.md).
+- La aceptación nativa completa conserva contratos y auditoría; su plazo agregado de contratos pasa de 30 a 45 minutos tras un timeout con PostgreSQL terminado. El pase anterior ya había consumido 29 min 27 s; no se omiten pruebas ni se modifica su resultado esperado.
+
+## Subida Excel por Nginx · corrección productiva · 30 de octubre de 2026
+
+- El proxy del dominio rechazaba libros mayores de 1 MiB con HTTP 413, antes del endpoint que admite 10 MiB; el borrador afectado permanecía sin archivo. Se agregó `client_max_body_size 10m` únicamente al vhost de All Nutrition.
+- Verificado con libro sintético de 2.330.727 bytes detrás de Nginx: subida 202, lectura real de dos hojas y estado de revisión en escritorio/móvil. En producción, cuerpos de 1.520.289 y 10.485.760 bytes alcanzan autenticación; 10.485.761 mantiene 413. Recarga graceful validada, health 200 y otro dominio intacto; sin rebuild, migración ni importación del libro real. Detalle en [VERIFICACION.md](VERIFICACION.md).
+
+## Next.js corregido e incorporación Excel publicados · 30 de octubre de 2026
+
+- Next.js `16.4.3` exacto en manifiesto/lock, manteniendo React/React DOM `19.3.0` y Node 24; auditoría de dependencias productivas sin vulnerabilidades conocidas en ambas aceptaciones finales. No se rebajó el umbral ni se añadieron overrides.
+- Aceptaciones completas local arm64 y nativa Linux/amd64: 670 contratos SQLite/PostgreSQL sin fallos ni omisiones y 42 E2E de escritorio/móvil, además de caída/recuperación, sesiones, reinicio, medios y dump/restore.
+- Promoción conjunta de los ajustes recientes y Next, sin rebuild: web y scheduler usan `allnutrition:release-decc826bb156`. Migración v5→v7 con escritores detenidos, respaldo final privado y comparación congelada de las 41 tablas no-migrations; usuarios, sesiones, configuración, importaciones y medios conservados. PostgreSQL no se recreó.
+- Vitrina e importador verificados en el dominio real, plantilla autenticada vacía y sesión previa conservada; se cerró solo la sesión propia de comprobación. **No se aplicó el libro real ni se crearon hechos comerciales.** Evidencia, versiones rechazadas y límites en [VERIFICACION.md](VERIFICACION.md).
+
+## Verificador Docker: transporte HTTPS aislado · 29 de octubre de 2026
+
+- Las peticiones HTTPS del controlador usan una conexión independiente (`agent:false`): los comandos Docker síncronos pueden impedir procesar el cierre de un socket inactivo y hacer que el pool predeterminado de Node 24 lo reutilice. Se conserva la validación de CA/hostname, los plazos y los errores; no se añaden reintentos ni se relajan comprobaciones autenticadas.
+- Prueba de mecanismo aislada en Linux/amd64 y Node 24: el pool reutilizó un socket cerrado durante el bloqueo síncrono y devolvió `ECONNRESET`; sin pool, ambas peticiones devolvieron 200 con CA explícita. Esta prueba no sustituye la aceptación integral ni autoriza una imagen de producción.
+- El E2E de pedido conserva hasta el cierre de página su interceptor ya liberado: retirarlo al recibir el guardado podía dejar sin respuesta las lecturas de catálogo iniciadas en segundo plano. El escenario aislado reprodujo el bloqueo al retirar la ruta y completó 40 recorridos manteniéndola; no cambian la aplicación, los plazos ni las expectativas del recorrido comercial.
+
+## Incorporación del negocio desde libros Excel · implementación local · 28 de octubre de 2026
+
+- Un solo importador para varias hojas, con catálogo inicial independiente del primer encabezado, errores localizados y perfiles v2 por hoja. Límites actuales y recorrido de uso en [README](../README.md#excel-e-informes). Propuestas, variantes, exclusiones, fórmulas y corte del nuevo archivo requieren confirmación; reutilizar perfil no reutiliza resoluciones, saldos ni autorizaciones de otra carga.
+- Gastos reales de **Publicidad** y **Operación**, separados de **Otros**: filas ordinarias o campañas con cantidad × costo unitario exactos y total de comprobación. Registrar no crea pagos, cobros ni caja. La campaña comercial del pedido no es un gasto; el costo histórico de línea no cambia el catálogo. Informes separan publicidad/operación del margen de contribución.
+- Apertura por conteo físico confirmado para pedidos nuevos, proyección de inventario v2 y decisiones auditables para hechos del día del conteo o sin fecha. Historia incluida no descuenta otra vez; pendientes reservan y movimientos posteriores afectan stock. Correcciones, reimportaciones y respaldos conservan apertura y clasificaciones sin fabricar existencias.
+- Resoluciones de celdas, identidad independiente, vínculo de gastos, costos de líneas/componentes y observaciones de apertura; referencias canónicas por hoja/fila. Revisión inmutable y aplicación durable por operación, no por libro completo. Resultados parciales distinguen pendientes y omisiones; cancelar preserva lo ya aplicado.
+- Descargas administrativas de original, copia XLSX ampliada sin reexportar hojas existentes, plantilla vacía y preparado con IDs/correcciones. El preparado admite asignaciones, componentes y observaciones; `declaredOrigin` es origen declarado, no autoridad de otro archivo. Los pendientes permanecen fuera de las tablas activas; no se truncan datos para ajustar límites.
+- Migración transaccional **v7 después de v6** para categorías, con prerrequisito, idempotencia, rollback conjunto y conservación de relaciones/índices. El rollout requiere respaldo recuperable, migración con escritores antiguos detenidos y web/scheduler de la misma versión. **No se ejecutó migración de producción, deploy ni push en este pase**.
+- Suite integrada actual SQLite/PostgreSQL, build Docker y E2E completo de escritorio/móvil aprobados. Regresiones de inspección/preview, asignaciones y autoridad informativa del preparado corregidas y verificadas sin relajar expectativas financieras. Evidencia y ejecuciones rechazadas en [VERIFICACION.md](VERIFICACION.md). **Sin aceptación de release ni actualización de producción**; bloqueo crítico de auditoría vigente.
+
+## Asignación completa de columnas y seguro opcional · verificación local · 27 de octubre de 2026
+
+- Catálogo compartido de destinos con tipo, efecto y ayuda. Asignación por posición con búsqueda, filtros, muestras completas y resumen; un solo diálogo accesible en escritorio/móvil, grupos de producto 1–50 y descarte explícito de columnas pendientes.
+- Estados administrativo y de entrega separados: `PAGADA` no confirma entrega ni cobro. Tipo, referencia, anulación, notas, valores declarados/solicitados y campos adicionales llegan a revisión y consulta de solo lectura por fuente, con procedencia y autoridad por corte.
+- Campos comerciales completos en pedidos nuevos y resolución autorizada con motivo para pedidos existentes, sin saltarse las restricciones posteriores al despacho. El destinatario observado en una guía no modifica por sí solo el pedido.
+- `shipping_insurance` como gasto logístico opcional, migración transaccional **6** SQLite/PostgreSQL y fecha explícita del cargo. Ausente, desconocido, cero e importe sin fecha conservan significados diferentes; los valores declarado y a recaudar no se convierten en prima ni dinero recibido.
+- Seguro integrado en contribución, **Transporte y seguros**, cobertura, declaraciones y deducciones por guía; sin pagos automáticos ni doble conteo. Respaldos v3 conservan observaciones, procedencia y primas/pagos reales.
+- Perfiles heredados con destinos repetidos recuperables como borrador, sin perder columnas ni permitir guardarlos/revisarlos todavía inválidos. Los respaldos conservan ese estado pendiente sin admitir destinos desconocidos, posiciones repetidas ni nombres adicionales inválidos.
+- Corregidos Escape sobre búsqueda no vacía y los límites Tab/Shift+Tab del selector; regresiones dentro del E2E existente. Smoke real a 1440×900 y 390×844, incluida reimportación idempotente, perfil heredado y 200 columnas.
+- `Historial Guías.xlsx` revisado solo en SQLite privado: columnas inciertas conservadas como adicionales, sin inferir corte ni gastos; perfil reabierto y lote descartado antes de aplicar. **Sin publicación, push ni migración de la base real**. Evidencia y bloqueos de aceptación en [VERIFICACION.md](VERIFICACION.md).
+
 ## Cancelación de importaciones publicada · 19 de octubre de 2026
 
 - Descarte del archivo local o guardado y cancelación durante carga, preparación, resolución, cola y aplicación. El control sigue disponible durante las peticiones; la creación aún sin respuesta se resuelve antes de cancelar su lote.

@@ -44,7 +44,7 @@ Administrador inicia sesión → crea/selecciona catálogo → completa el produ
 
 La validación del servidor comprueba los campos y la referencia de imagen. Las cargas de producto verifican formato, tamaño de entrada y cuota antes de guardar el binario optimizado; se aceptan referencias locales únicamente en Productos. Publicar un producto exige nombre, dirección corta, foto/enlace, presentación y precio positivo. No se exige completar redes o todos los productos para empezar a diseñar. Al editar una referencia, si otro administrador cambió su versión, se informa el conflicto en lugar de sobrescribir.
 
-Un combo publicado requiere referencias publicadas. Si después se archiva una de ellas, el combo deja de aparecer públicamente. Su disponibilidad y la de los obsequios dependen de las unidades libres de cada componente y de la cantidad requerida; ninguno tiene existencias físicas propias. El combo conserva precio manual.
+Un combo puede habilitarse para pedidos privados como borrador, sin imagen ni publicación de sus componentes: requiere precio positivo y una composición válida de productos normales habilitados para pedidos. El permiso «Disponible para pedidos» es independiente de la visibilidad; en combos antiguos sin ese permiso explícito se conserva la disponibilidad de los publicados. Publicarlo requiere referencias publicadas; si después se archiva una de ellas, el combo deja de aparecer públicamente. Su disponibilidad y la de los obsequios dependen de las unidades libres de cada componente y de la cantidad requerida; ninguno tiene existencias físicas propias. El combo conserva precio manual.
 
 ### Consulta y pedido
 
@@ -73,6 +73,10 @@ La inspección obtiene las dimensiones reales de la hoja seleccionada aunque el 
 Los errores de lectura, configuración, celdas y procesamiento se presentan dentro del importador, sin interpolar objetos de diagnóstico como hijos de React. Se conserva código/mensaje y se añade categoría, acción, fase y ubicación comprobada cuando existan. Un problema ambiguo de fecha o importe se mantiene como causa no determinada, con indicación de revisar tanto la celda como el formato. Los fallos internos no se presentan como archivo dañado ni se reencolan indefinidamente como indisponibilidad; las caídas de base de datos conocidas sí conservan su reanudación. No se publica el detalle interno de excepciones.
 
 Solicitar la vista previa mantiene el paso de columnas con progreso hasta que exista una revisión real sin error de lote. Cambiar extracción o resoluciones invalida la revisión anterior; no se acepta una selección vacía, encabezados inexistentes ni asignaciones que confluyan ambiguamente en una columna. Generar la revisión no depende del saldo de caja ni autoriza crear productos o ventas incompletos a partir de un historial de guías.
+
+Desde «Vincular producto» se puede seleccionar una referencia existente o guardar el lote y crear producto, combo u obsequio. Las nuevas referencias quedan como borradores privados habilitados para pedidos; crear no publica y vincular una existente no cambia su visibilidad. Combos y obsequios requieren productos normales y cantidades explícitas; sus componentes conservan costos y demanda de inventario. Los alias de importación y el respaldo admiten tanto productos como combos.
+
+La columna «Referencia del obsequio» crea una línea independiente con precio de venta cero, no costo cero. Su cantidad se toma de «Cantidad de obsequios» o de una cantidad fija confirmada para esa hoja, entre 1 y 999; nunca de la cantidad vendida ni del nombre. Incluso una unidad requiere confirmación. Una referencia vacía no crea línea y una cantidad mapeada vacía sigue pendiente. El preparado reutilizable exporta estas líneas con IDs estables para reimportar sin duplicar pedidos, líneas ni reservas.
 
 
 ### Existencias conectadas a pedidos
