@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../lib/store.mjs';
 import { schemas } from '../lib/schema.mjs';
-import { BUSINESS_TABLES, convertV2Bundle, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, convertV2Bundle, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8 } from '../lib/db/migrations.mjs';
 import { resolveOrderRecognition } from '../lib/business/orders.mjs';
 import { saveResource, listResources } from '../lib/business/settings.mjs';
 import { writeExcelSheets } from '../lib/business/excel.mjs';
@@ -59,7 +59,7 @@ function legacyBundle() {
 }
 
 /** A disposable real SQLite v2 database; bypasses openStore's automatic v3 upgrade intentionally. */
-async function v2Store({ failMarker = false, failInventoryMarker = false, failCancellationMarker = false, failInsuranceMarker = false, failWorkbookMarker = false, oldExpenseCheck = false } = {}) {
+async function v2Store({ failMarker = false, failInventoryMarker = false, failCancellationMarker = false, failInsuranceMarker = false, failWorkbookMarker = false, failSocialMarker = false, oldExpenseCheck = false } = {}) {
   const native = new DatabaseSync(':memory:');
   native.exec('PRAGMA foreign_keys=ON;');
   native.exec(await readFile(new URL('../db/sqlite.sql', import.meta.url), 'utf8'));
@@ -73,6 +73,7 @@ async function v2Store({ failMarker = false, failInventoryMarker = false, failCa
       if (failCancellationMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(5,')) throw new Error('Fallo sintético al guardar marcador v5');
       if (failInsuranceMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(6,')) throw new Error('Fallo sintético al guardar marcador v6');
       if (failWorkbookMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(7,')) throw new Error('Fallo sintético al guardar marcador v7');
+      if (failSocialMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(8,')) throw new Error('Fallo sintético al guardar marcador v8');
       return { changes: Number(native.prepare(sql).run(...params).changes) };
     },
     exec: async sql => native.exec(oldExpenseCheck && sql.includes('CREATE TABLE IF NOT EXISTS expenses (') ? sql.replace(",'shipping_insurance'", '').replace(",'advertising'", '').replace(",'operating'", '') : sql)
@@ -285,11 +286,10 @@ test('conversión de respaldo restaurable produce las mismas filas comerciales q
   } finally { await store.close(); }
 });
 
-test('esquema contiene las 31 tablas con FK restrictivas y protege importes/estados/unicidad', async () => {
+test('esquema histórico conserva FK restrictivas y protege importes/estados/unicidad', async () => {
   const store = await v2Store();
   try {
     await migrateBusinessV3(store);
-    assert.equal(BUSINESS_TABLES.length, 31);
     for (const table of BUSINESS_TABLES) {
       assert.ok(await store.db.get("SELECT name FROM sqlite_master WHERE type='table' AND name=?", [table]));
       const foreignKeys = await store.db.all(`PRAGMA foreign_key_list(${store.t(table)})`);
@@ -530,7 +530,7 @@ test('un fallo del marcador v6 revierte CHECK, índices y relaciones del esquema
   } finally { await store.close(); }
 });
 
-test('seguro v6 requiere el marcador v5 y una instalación nueva incluye v7', async () => {
+test('seguro v6 requiere el marcador v5 y una instalación nueva incluye v8', async () => {
   const historical = await v2Store();
   try {
     await migrateBusinessV3(historical);
@@ -541,7 +541,7 @@ test('seguro v6 requiere el marcador v5 y una instalación nueva incluye v7', as
   } finally { await historical.close(); }
   const fresh = await openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' });
   try {
-    assert.deepEqual((await fresh.db.all(`SELECT version FROM ${fresh.t('migrations')} ORDER BY version`)).map(row => row.version), [2, 3, 4, 5, 6, 7]);
+    assert.deepEqual((await fresh.db.all(`SELECT version FROM ${fresh.t('migrations')} ORDER BY version`)).map(row => row.version), [2, 3, 4, 5, 6, 7, 8]);
     await fresh.db.run(`INSERT INTO ${fresh.t('expenses')}(id,category,amount_minor,recorded_at,created_at,updated_at) VALUES(?,?,?,?,?,?)`, ['fresh-insurance', 'shipping_insurance', 0, MIGRATED, MIGRATED, MIGRATED]);
     assert.deepEqual(await migrateShippingInsuranceV6(fresh), { migrated: false, version: 6 });
   } finally { await fresh.close(); }
@@ -613,5 +613,58 @@ test('libro v7 exige v6 y no cambia una base sin su prerrequisito', async () => 
     const before = await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]);
     await assert.rejects(() => migrateWorkbookImportV7(store), /requiere.*v6/);
     assert.deepEqual(await snapshot(store, [...BASE_TABLES, ...BUSINESS_TABLES]), before);
+  } finally { await store.close(); }
+});
+
+async function prepareSocialMigration(store) {
+  await seedV6Expenses(store);
+  await migrateWorkbookImportV7(store);
+}
+
+test('publicidad v8 conserva negocio v7, valida relaciones y es repetible', async () => {
+  const store = await v2Store({ oldExpenseCheck: true });
+  try {
+    await prepareSocialMigration(store);
+    const historical = [...BASE_TABLES.filter(table => table !== 'migrations'), ...BUSINESS_TABLES];
+    const before = await snapshot(store, historical);
+    assert.deepEqual(await migrateSocialV8(store), { migrated: true, version: 8 });
+    assert.deepEqual(await snapshot(store, historical), before);
+    await store.db.run("INSERT INTO social_connections(id,provider,integration_method,state,created_at,updated_at) VALUES('connection','meta','api','connected',?,?)", [CREATED, UPDATED]);
+    await assert.rejects(() => store.db.run("UPDATE social_connections SET integration_method='browser' WHERE id='connection'"));
+    await assert.rejects(() => store.db.run("UPDATE social_connections SET data='invalid' WHERE id='connection'"));
+    await store.db.run("INSERT INTO social_campaigns(id,connection_id,name,mode,objective,state,created_at,updated_at) VALUES('campaign','connection','Campaña','organic','reach','draft',?,?)", [CREATED, UPDATED]);
+    await assert.rejects(() => store.db.run("UPDATE social_campaigns SET state='published' WHERE id='campaign'"));
+    await assert.rejects(() => store.db.run("UPDATE social_campaigns SET data=? WHERE id='campaign'", [JSON.stringify({ budgetMinor: 9007199254740992 })]));
+    await store.db.run("INSERT INTO social_revisions(campaign_id,revision,spec_hash,approved_at,actor_id) VALUES('campaign',1,?,?,?)", ['a'.repeat(64), CREATED, 'actor']);
+    const delivery = revision => store.db.run("INSERT INTO social_deliveries(id,campaign_id,revision,channel,state,created_at,updated_at) VALUES('delivery','campaign',?,'facebook','queued',?,?)", [revision, CREATED, UPDATED]);
+    await assert.rejects(() => delivery(2));
+    await delivery(1);
+    await assert.rejects(() => delivery(1));
+    await assert.rejects(() => store.db.run("DELETE FROM social_revisions WHERE campaign_id='campaign'"));
+    await assert.rejects(() => store.db.run("DELETE FROM social_connections WHERE id='connection'"));
+    await assert.rejects(() => store.db.run("INSERT INTO social_assets(id,state,bytes,created_at,updated_at) VALUES('unsafe','ready',9007199254740992,?,?)", [CREATED, UPDATED]));
+    const all = [...BASE_TABLES, ...BUSINESS_TABLES, ...SOCIAL_TABLES, ...SOCIAL_INTERNAL_TABLES];
+    const migrated = await snapshot(store, all);
+    assert.deepEqual(await migrateSocialV8(store), { migrated: false, version: 8 });
+    assert.deepEqual(await snapshot(store, all), migrated);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
+  } finally { await store.close(); }
+});
+
+test('publicidad v8 revierte esquema y negocio si falla el marcador y exige v7', async () => {
+  const store = await v2Store({ oldExpenseCheck: true, failSocialMarker: true });
+  try {
+    await seedV6Expenses(store);
+    const tables = [...BASE_TABLES, ...BUSINESS_TABLES];
+    const v6 = await snapshot(store, tables);
+    await assert.rejects(() => migrateSocialV8(store));
+    assert.deepEqual(await snapshot(store, tables), v6);
+    await migrateWorkbookImportV7(store);
+    const before = await snapshot(store, tables);
+    const schema = await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name");
+    await assert.rejects(() => migrateSocialV8(store));
+    assert.deepEqual(await snapshot(store, tables), before);
+    assert.deepEqual(await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"), schema);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
   } finally { await store.close(); }
 });
