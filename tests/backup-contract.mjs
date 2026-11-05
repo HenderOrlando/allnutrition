@@ -8,15 +8,19 @@ import { saveResource } from '../lib/business/settings.mjs';
 import { writeExcelSheets } from '../lib/business/excel.mjs';
 import { createImportBatch, uploadImportFile, getImportBatch, updateImportBatch, requestImportPreview, commitImport, processImportTurn } from '../lib/business/imports.mjs';
 import { generateReportSnapshot, saveReportSnapshot, processReportTurn } from '../lib/business/reports.mjs';
-import { claimJob } from '../lib/business/job-leases.mjs';
+import { claimJob, queueJobTx } from '../lib/business/job-leases.mjs';
 import { saveAccount, recordAdvance, transferMoney, closeCash } from '../lib/business/cash.mjs';
 import { confirmPayroll } from '../lib/business/payroll.mjs';
 import { saveSettlement } from '../lib/business/settlements.mjs';
 import { createShipment, getShipment, saveShipment } from '../lib/business/shipments.mjs';
 import { recordExpense, payExpense } from '../lib/business/expenses.mjs';
-import { entity, hash } from '../lib/business/commands.mjs';
+import { entity, hash, insertRow } from '../lib/business/commands.mjs';
 import { inventoryState } from '../lib/business/inventory.mjs';
 import { COMMERCIAL_TABLES, CORE_BACKUP_TABLES } from '../lib/backup-schema.mjs';
+import { SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
+import { socialMeasurementQueryKey } from '../lib/social/evidence.mjs';
+import { prepareSocialApiJobs } from '../lib/business/social-api-jobs.mjs';
+import { prepareSocialBrowserJobs } from '../lib/business/social-jobs.mjs';
 
 const stable = bundle => {
   const copy = structuredClone(bundle);
@@ -361,4 +365,166 @@ export async function assertLegacyPartialRestore(store) {
   assert.equal(restored.inventoryVersion,1);
   assert.equal(restored.products[0].stockQuantity,null);
   assert.equal(restored.products[0].stockReserved,1);
+}
+
+/** Sequential source/destination factories also work with the reset-only PG fixture. */
+export async function runSocialBackupContracts(t, factory) {
+  await t.test('social evidence survives restoration without credentials, runnable work or publishable media',async () => {
+    const source = await factory();
+    let scenario;
+    try { scenario = await createSocialBackupScenario(source); }
+    finally { await source.close(); }
+    const target = await factory();
+    try {
+      const {bundle,ids} = scenario, original = structuredClone(bundle);
+      assert.equal(bundle.socialVersion,1);
+      assert.ok(!JSON.stringify(bundle).includes('social-private-canary'));
+      for (const table of SOCIAL_INTERNAL_TABLES) assert.equal(Object.hasOwn(bundle.business,table),false);
+      assert.ok(!bundle.pendingJobs.some(job => job.key.startsWith('social:')));
+      assert.ok(!bundle.business.business_requests.some(row => row.scope.startsWith('social:')));
+      assert.equal(JSON.parse(bundle.business.business_audit.find(row => row.entity_type === 'social_connection').data).action,'validate');
+      const before = stable(await target.exportData());
+      const mutate = (copy,table,fn) => { const row = copy.business[table][0], data = JSON.parse(row.data); fn(data); row.data=JSON.stringify(data); };
+      const corruptions = [
+        copy => {delete copy.socialVersion;},
+        copy => {delete copy.business.social_measurements;},
+        copy => {copy.socialVersion=2;},
+        copy => {copy.business.social_credentials=[];},
+        copy => {copy.business.social_deliveries[0].revision=99;},
+        copy => {const row=copy.business.social_operations[0];row.delivery_id=ids.deliveries.find(id => id !== row.delivery_id);},
+        copy => {copy.business.social_order_links[0].campaign_id=randomUUID();},
+        copy => {copy.business.social_forecasts[0].spec_hash='invalid';},
+        copy => mutate(copy,'social_forecasts',data => {data.specHash='a'.repeat(64);}),
+        copy => mutate(copy,'social_revisions',data => {data.spec.budgetMinor++;}),
+        copy => mutate(copy,'social_revisions',data => {data.spec.integrationMethod=data.spec.integrationMethod === 'api' ? 'browser' : 'api';}),
+        copy => mutate(copy,'social_measurements',data => {data.integrationMethod=data.integrationMethod === 'api' ? 'browser' : 'api';}),
+        copy => mutate(copy,'social_operations',data => {data.integrationMethod=data.integrationMethod === 'api' ? 'browser' : 'api';}),
+        copy => mutate(copy,'social_campaigns',data => {data.budgetMinor=0.5;}),
+        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.value=-1;}),
+        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.value=1.5;}),
+        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.unit='count';}),
+        copy => mutate(copy,'social_connections',data => {data.accessToken='social-private-canary';}),
+        copy => mutate(copy,'social_connections',data => {data.disconnectPending={state:'waiting_for_pause',action:'disconnect',actorId:'backup-admin',deliveryIds:[ids.deliveries[0]]};}),
+        copy => mutate(copy,'social_assets',data => {data.derivativeKey='../outside.jpg';}),
+        copy => mutate(copy,'social_assets',data => {data.derivativeKey=`${randomUUID()}/derivative.jpg`;}),
+        copy => mutate(copy,'social_assets',data => {data.originalKey=`${ids.asset}/original.mp4`;}),
+        copy => mutate(copy,'social_assets',data => {data.originalBytes++;}),
+        copy => mutate(copy,'social_assets',data => {data.reservedBytes=-1;}),
+        copy => mutate(copy,'social_assets',data => {data.kind='video';}),
+        copy => {copy.business.social_assets[0].bytes++;},
+        copy => mutate(copy,'social_assets',data => {data.diagnostic={code:'RAW-OAUTH-CODE-CANARY',message:'No debe entrar en el respaldo'};}),
+        copy => mutate(copy,'social_assets',data => {data.processingFence='private-runtime-lease-canary';}),
+        copy => {copy.pendingJobs.push({kind:'social',key:`social:delivery:${ids.deliveries[0]}`});},
+        copy => {const row=copy.business.business_audit.find(value => value.entity_type === 'social_connection');row.data=JSON.stringify({cookies:['social-private-canary']});},
+        copy => {copy.business.business_requests.push({scope:'social:oauth:start',request_id:'private-restored-request',actor_id:'backup-admin',payload_hash:hash('unsafe'),result_json:JSON.stringify({accessToken:'social-private-canary'}),created_at:'2026-11-02T12:00:00.000Z'});},
+        copy => {copy.business.social_measurements[0].payload_hash='a'.repeat(64);},
+        copy => {copy.business.social_measurements[0].query_key='a'.repeat(64);},
+      ];
+      for (const corrupt of corruptions) {
+        const copy = structuredClone(bundle); corrupt(copy);
+        await assert.rejects(() => importData(target,copy));
+        assert.deepEqual(stable(await target.exportData()),before);
+      }
+      await importData(target,bundle);
+      assert.deepEqual(bundle,original);
+      const restored = await target.exportData();
+      for (const table of ['social_revisions','social_operations','social_measurements','social_forecasts','social_recommendations','social_order_links','social_expense_links']) assert.deepEqual(restored.business[table],bundle.business[table]);
+      const deliveryEvidence = rows => rows.map(row => Object.fromEntries(['id','campaign_id','revision','channel','state','remote_id','data'].map(key => [key,row[key]])));
+      assert.deepEqual(deliveryEvidence(restored.business.social_deliveries),deliveryEvidence(bundle.business.social_deliveries));
+      const readOnlyEnv = {SOCIAL_API_ENABLED:'true',SOCIAL_BROWSER_ENABLED:'true',SOCIAL_PUBLISHING_ENABLED:'false'};
+      await prepareSocialApiJobs(target,{env:readOnlyEnv}); await prepareSocialBrowserJobs(target,{env:readOnlyEnv});
+      for (const row of restored.business.social_connections) {
+        const old = bundle.business.social_connections.find(value => value.id === row.id);
+        assert.equal(row.state,'reconnect_required');
+        assert.equal(row.integration_method,old.integration_method);
+        assert.equal(JSON.parse(row.data).sessionEpoch,JSON.parse(old.data).sessionEpoch+1);
+      }
+      for (const row of restored.business.social_campaigns) assert.equal(JSON.parse(row.data).restore_hold,true);
+      for (const row of restored.business.social_campaigns) {
+        const spend = JSON.parse(row.data).analysis.comparisons[0].spendMinor;
+        assert.equal(spend.value,5000000); assert.equal(spend.unit,'minor_currency'); assert.equal(spend.precision,'exact');
+      }
+      for (const row of restored.business.social_assets) {
+        assert.equal(row.state,'missing_file');
+        assert.equal(JSON.parse(row.data).restoreState,'ready');
+        assert.equal(row.sha256,bundle.business.social_assets.find(value => value.id === row.id).sha256);
+        assert.equal(row.bytes,0);
+        assert.equal(JSON.parse(row.data).reservedBytes,0);
+      }
+      for (const table of SOCIAL_INTERNAL_TABLES) assert.equal(Number((await target.db.get(`SELECT COUNT(*) AS n FROM ${target.t(table)}`)).n),0);
+      assert.equal(Number((await target.db.get(`SELECT COUNT(*) AS n FROM ${target.t('job_runs')} WHERE key LIKE 'social:%'`)).n),0);
+      assert.deepEqual(restored.orders,bundle.orders);
+      assert.deepEqual(restored.business.expenses,bundle.business.expenses);
+      assert.deepEqual(restored.business.cash_entries,bundle.business.cash_entries);
+      assert.deepEqual(restored.counters,bundle.counters);
+    } finally { await target.close(); }
+  });
+  await t.test('old v3 bundles initialize only absent social collections and internal-only destinations are occupied',async () => {
+    const source = await factory();
+    let old;
+    try { old = await source.exportData(); delete old.socialVersion; for (const table of SOCIAL_TABLES) delete old.business[table]; }
+    finally { await source.close(); }
+    const target = await factory();
+    try {
+      const before = stable(await target.exportData());
+      for (const invalid of [null,{},'not-a-collection']) {
+        const copy = structuredClone(old);
+        copy.business.social_assets=invalid;
+        await assert.rejects(() => importData(target,copy));
+        assert.deepEqual(stable(await target.exportData()),before);
+      }
+      await importData(target,old);
+      const restored = await target.exportData();
+      assert.equal(restored.socialVersion,1);
+      for (const table of SOCIAL_TABLES) assert.deepEqual(restored.business[table],[]);
+    } finally { await target.close(); }
+    const occupied = await factory();
+    try {
+      await insertRow(occupied,'social_oauth_states',{state_hash:hash('pending-oauth'),actor_id:'backup-admin',csrf_hash:hash('social-private-canary'),connection_id:null,expires_at:'2026-11-02T12:10:00.000Z',consumed_at:null});
+      const before = await occupied.db.all(`SELECT * FROM ${occupied.t('social_oauth_states')}`);
+      await assert.rejects(() => importData(occupied,old));
+      assert.deepEqual(await occupied.db.all(`SELECT * FROM ${occupied.t('social_oauth_states')}`),before);
+    } finally { await occupied.close(); }
+  });
+}
+
+async function createSocialBackupScenario(store) {
+  await importData(store,legacyPartialBackup());
+  const at = '2026-11-02T12:00:00.000Z', actor = 'backup-admin';
+  const editable = {version:1,created_at:at,updated_at:at};
+  const expense = await recordExpense(store,{requestId:requestId(),category:'advertising',amountMinor:5000000,incurredOn:'2026-11-02',concept:'Publicidad declarada, sin pago implícito'},actor);
+  const ids = {connections:[randomUUID(),randomUUID()],asset:randomUUID(),campaigns:[randomUUID(),randomUUID()],deliveries:[randomUUID(),randomUUID()]};
+  await store.transaction(async tx => {
+    await tx.lockWrites();
+    await insertRow(tx,'social_assets',{id:ids.asset,state:'ready',sha256:hash('derived-jpeg'),bytes:300,data:JSON.stringify({kind:'image',name:'Pieza privada',contentType:'image/png',expectedBytes:100,originalKey:`${ids.asset}/original.png`,originalSha256:hash('original-png'),originalBytes:100,derivativeKey:`${ids.asset}/derivative.jpg`,derivativeSha256:hash('derived-jpeg'),derivativeBytes:200,derivativeContentType:'image/jpeg',reservedBytes:0}),...editable});
+    for (const [index,integrationMethod] of ['api','browser'].entries()) {
+      const connectionId=ids.connections[index], campaignId=ids.campaigns[index], deliveryId=ids.deliveries[index];
+      await insertRow(tx,'social_connections',{id:connectionId,provider:'meta',integration_method:integrationMethod,state:'connected',data:JSON.stringify({sessionEpoch:4,identities:{pageId:'verified-page'},capabilities:{adsPublish:true,insights:true},...(index ? {disconnectPending:{state:'waiting_for_pause',action:'delete-platform-data',actorId:actor,requestId:'social-private-canary-disconnect',deliveryIds:[deliveryId]}} : {})}),...editable});
+      await insertRow(tx,'social_credentials',{connection_id:connectionId,ciphertext:'social-private-canary-ciphertext',iv:'social-private-canary-iv',auth_tag:'social-private-canary-tag',version:1,updated_at:at});
+      const spec = {name:`Campaña ${integrationMethod}`,integrationMethod,connectionId,assetId:ids.asset,assetHash:hash('derived-jpeg'),identities:{pageId:'verified-page'},mode:'paid',objective:'traffic',caption:'Pieza aportada',budgetMinor:5000000,currency:'COP',startAt:at,endAt:'2026-11-09T12:00:00.000Z',observationDays:7};
+      const specHash=hash(spec), forecastId=randomUUID();
+      const forecast={algorithmVersion:'social-history-v1',source:'insufficient',specHash,metricRanges:{},sampleIds:[],sampleCount:0,budgetMinor:5000000,currency:'COP',horizon:7,assumptions:[],generatedAt:at,unavailableReasons:['Sin historial comparable']};
+      await insertRow(tx,'social_campaigns',{id:campaignId,connection_id:connectionId,asset_id:ids.asset,name:spec.name,mode:'paid',objective:'traffic',state:index ? 'ready' : 'active',data:JSON.stringify({...spec,forecastId}),...editable});
+      await insertRow(tx,'social_revisions',{campaign_id:campaignId,revision:1,spec_hash:specHash,approved_at:at,actor_id:actor,data:JSON.stringify({spec,forecastId,forecast,acceptedWarnings:[]})});
+      await insertRow(tx,'social_deliveries',{id:deliveryId,campaign_id:campaignId,revision:1,channel:'meta_ads',state:index ? 'ready' : 'active',remote_id:`remote-campaign-${index}`,next_sync_at:at,data:JSON.stringify({integrationMethod,remoteRefs:{campaignId:`remote-campaign-${index}`}}),...editable});
+      await insertRow(tx,'social_operations',{id:randomUUID(),campaign_id:campaignId,delivery_id:deliveryId,operation_key:`delivery:${deliveryId}:create_campaign`,step:'create_campaign',state:'confirmed',next_attempt_at:null,data:JSON.stringify({integrationMethod,payloadHash:hash(spec),evidence:{remoteId:`remote-campaign-${index}`}}),...editable});
+      const query={since:'2026-11-02',until:'2026-11-02',dimension:'aggregate'};
+      const measurement={integrationMethod,adapterVersion:index ? 'meta-ui-v1' : 'meta-api-v1',apiVersion:index ? null : 'v26.0',query,periodStart:at,periodEnd:'2026-11-02T13:00:00.000Z',timeZone:'America/Bogota',scope:'paid',attributionSetting:'7d_click',actionReportTime:'impression',dimension:'aggregate',values:{impressions:{value:4000,unit:'count',sourceMetric:'impressions',status:'reported',precision:'exact',displayValue:'4000',reason:null},spendMinor:{value:5000000,unit:'minor_currency',sourceMetric:'spend',status:'reported',precision:'exact',displayValue:'5000000',reason:null}},coverage:{complete:true}};
+      const measurementId=randomUUID();
+      await insertRow(tx,'social_measurements',{id:measurementId,delivery_id:deliveryId,query_key:socialMeasurementQueryKey(measurement),fetched_at:at,payload_hash:hash(measurement),data:JSON.stringify(measurement)});
+      await insertRow(tx,'social_forecasts',{id:forecastId,campaign_id:campaignId,spec_hash:specHash,generated_at:at,data:JSON.stringify(forecast)});
+      const analysis={algorithmVersion:'social-history-v1',specHash,forecastId,asOf:at,comparisons:[{metric:'linkClicks',spendMinor:measurement.values.spendMinor,measurementIds:[measurementId]}]};
+      await tx.db.run(`UPDATE ${tx.t('social_campaigns')} SET data=? WHERE id=?`,[JSON.stringify({...spec,forecastId,analysis}),campaignId]);
+      await insertRow(tx,'social_recommendations',{id:randomUUID(),campaign_id:campaignId,evidence_hash:hash(measurement),rule_key:'measurement_gap',state:'suggested',data:JSON.stringify({metricIds:[measurementId],sampleIds:[],observation:'Evidencia conservada',proposedChange:'Completar observación'}),...editable});
+      await queueJobTx(tx,`social:${integrationMethod === 'browser' ? 'browser:' : ''}delivery:${deliveryId}`,{deliveryId,requestedBy:actor});
+    }
+    const order = (await tx.orders())[0];
+    await insertRow(tx,'social_order_links',{order_id:order.id,campaign_id:ids.campaigns[0],actor_id:actor,reason:'Origen declarado por el administrador',data:'{}',...editable});
+    await insertRow(tx,'social_expense_links',{expense_id:expense.id,campaign_id:ids.campaigns[0],actor_id:actor,reason:'Gasto completo declarado',data:'{}',...editable});
+    await insertRow(tx,'social_oauth_states',{state_hash:hash('social-private-canary-state'),actor_id:actor,csrf_hash:hash('social-private-canary-csrf'),connection_id:ids.connections[0],expires_at:'2026-11-02T12:10:00.000Z',consumed_at:null});
+    await insertRow(tx,'social_browser_controls',{id:randomUUID(),connection_id:ids.connections[1],actor_id:actor,session_binding:'social-private-canary-binding',lease_key:`social:browser-lock:${ids.connections[1]}`,lease_token:'social-private-canary-lease',state:'active',expires_at:'2026-11-02T12:10:00.000Z',last_seen_at:at,created_at:at,updated_at:at});
+    await insertRow(tx,'business_requests',{scope:'social:oauth:start',request_id:'private-oauth-request',actor_id:actor,payload_hash:hash('oauth'),result_json:JSON.stringify({url:'https://example.test/?code=social-private-canary-code',accessToken:'social-private-canary-token'}),created_at:at});
+    await insertRow(tx,'business_audit',{id:randomUUID(),entity_type:'social_connection',entity_id:ids.connections[0],actor_id:actor,recorded_at:at,data:JSON.stringify({action:'validate',accessToken:'social-private-canary-token',details:{cookies:['social-private-canary-cookie']}})});
+  });
+  return {bundle:await store.exportData(),ids};
 }

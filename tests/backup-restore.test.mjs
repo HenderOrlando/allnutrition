@@ -8,10 +8,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../lib/db/index.mjs';
 import { exportReadonlySQLite } from '../lib/sqlite-restore.mjs';
 import { importData } from '../lib/import.mjs';
-import { createCommercialBackupScenario, restoreCommercialBackupScenario, assertInvalidBackupsAtomic, assertLegacyPartialRestore, legacyPartialBackup } from './backup-contract.mjs';
+import { createCommercialBackupScenario, restoreCommercialBackupScenario, assertInvalidBackupsAtomic, assertLegacyPartialRestore, legacyPartialBackup, runSocialBackupContracts } from './backup-contract.mjs';
 
 const factory = () => openStore({DB_DRIVER:'sqlite',SQLITE_PATH:':memory:'});
 const checksum = async filename => createHash('sha256').update(await readFile(filename)).digest('hex');
+
+test('social commercial backup contracts',async t => runSocialBackupContracts(t,factory));
 
 test('commercial v3 round trip keeps financial facts, retained Excel, revisions and queued actors without auth or leases',async () => {
   const source = await factory(), target = await factory();
