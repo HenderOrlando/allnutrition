@@ -12,6 +12,29 @@ Antecedente del corte v5→v7 con Next `16.4.3`, imagen `allnutrition:release-de
 
 **Corte de inventario (migración 4):** respaldar primero y detener web y scheduler de la versión anterior antes de ejecutar la migración con la nueva imagen. Reiniciar ambos con esa misma imagen después; no mezclar escritores anteriores y nuevos. La migración no descuenta despachos históricos ni asigna stock inicial: toma reservas pendientes y deja desconocidos los conteos no aportados. Registrar después el conteo físico real, incluidas las unidades reservadas. PostgreSQL rechaza el arranque de la nueva versión si falta la migración; SQLite la aplica al abrir una conexión nueva. Reiniciar también los servidores de desarrollo ya abiertos. La aceptación local de este cambio no promueve una imagen ni actualiza producción.
 
+## Publicidad: habilitación y custodia
+
+La nueva versión requiere la migración **social v8 después de v7**. Detener los escritores antiguos y respaldar antes de migrar; PostgreSQL rechaza el arranque sin v8 y SQLite migra al abrir. Esta documentación no indica que producción haya migrado ni autoriza activar anuncios.
+
+`SOCIAL_PUBLISHING_ENABLED=false` y `SOCIAL_BROWSER_ENABLED=false` son los valores iniciales y obligatorios durante una restauración. Las variables de API pueden quedar ausentes sin inutilizar navegador/vitrina/contabilidad. La API requiere `META_APP_ID`, `META_APP_SECRET`, `META_LOGIN_CONFIG_ID`, versión `v26.0`, callback HTTPS exacto `APP_URL/api/admin/social/oauth/callback` y permisos/nivel de acceso revisados en el dashboard de Meta. `APP_URL` debe ser accesible por Meta para los medios firmados; localhost no lo acredita. El propietario debe aprobar sus URLs legales; las instrucciones locales de eliminación están en `/social-data-deletion`.
+
+Las cuatro claves `SOCIAL_TOKEN_ENCRYPTION_KEY`, `SOCIAL_MEDIA_SIGNING_KEY`, `SOCIAL_BROWSER_CONTROL_KEY` y `SOCIAL_BROWSER_SESSION_KEY` son **independientes**, cada una base64 canónico de 32 bytes aleatorios, sólo servidor. Custodiarlas fuera del repositorio, logs, respaldo comercial y volumen de medios. Perder/rotar la clave de sesión exige nuevo login; no usar la clave API para descifrar cookies. No usar `NEXT_PUBLIC_*`.
+
+El archivo base generado por `deploy:env` tiene un formato y conjunto de variables estrictos: no añadirle las variables sociales. Suministrarlas por un entorno/gestor de secretos de Compose separado, conservando el mismo proyecto y overrides; no copiar valores del ensayo. El `.env` local de los comandos CLI es un archivo distinto. Habilitar publicación en web no la habilita en el runner: web, consumidor y runner necesitan sus flags coherentes; el acceso asistido puede mantenerse habilitado con publicación deshabilitada. Una negativa o respuesta incierta no acredita ausencia remota ni autoriza reenviar.
+
+El perfil `social-browser` instala Chromium durante el build de `Dockerfile.social-browser`, nunca al atender una solicitud. El runner no publica puertos, sólo comparte `social_control` con web/consumidores sociales y usa `social_egress` para la red del proveedor. No recibe DB, secretos API, cookies administrativas, clave de cifrado de sesión ni socket Docker; el volumen privado de piezas es de solo lectura. Requiere usuario no root, sandbox habilitado, capacidades eliminadas, raíz de solo lectura, tmpfs, 512 MiB de shm y límite inicial 2 GiB.
+
+El perfil también inicia `social-browser-worker` con la imagen de aplicación y `node scripts/business-jobs.mjs --social-browser`; no instala Chromium ni necesita salida directa a Meta. El scheduler contable y este consumidor mantienen claves de salud distintas: `scheduler:heartbeat` y `scheduler:social-browser:heartbeat`. Para una vuelta manual usar `node scripts/business-jobs.mjs --social-browser --once`; la salida es `{browser:{processed,errorCode},hasMore}`. No interpretar un scheduler contable sano como prueba de que el consumidor navegador está funcionando ni una sesión Meta válida como salud del runner.
+
+Cuando el perfil esté activo, detener también `social-browser-worker`, además de web y scheduler, antes de migrar o restaurar; cerrar el runner para invalidar contextos anteriores. Conservar el diario de intenciones y reconciliar lo incierto, no borrar jobs para volver a publicar. Recrear los tres escritores con la misma `APP_IMAGE` y un `SOCIAL_BROWSER_IMAGE` fijado y aceptado en la arquitectura del host. Iniciar explícitamente los servicios del perfil con el mismo proyecto, entorno y overrides del despliegue; no mezclar un consumidor anterior con la nueva aplicación. Tras restaurar, ambos flags permanecen `false` hasta la revisión y recuperación expresas.
+
+`deploy/social-browser-seccomp.json` se basa en el [perfil oficial de Playwright](https://github.com/microsoft/playwright/blob/main/utils/docker/seccomp_profile.json). Permite crear namespaces y ejecutar `chroot` dentro del namespace no privilegiado de Chromium, sin conceder `CAP_SYS_CHROOT` al contenedor exterior. No usar privilegios, `--no-sandbox`, stealth ni puertos CDP/VNC. Si el host no puede ejecutar este aislamiento, mantener la vía indisponible hasta corregir el despliegue. El ensayo arm64 no sustituye la aceptación nativa amd64 de la VM productiva.
+
+La habilitación del scraper requiere permiso previo de Meta para automatización fuera de API y una cuenta autorizada para verificar controles/exports actuales. CAPTCHA, 2FA, checkpoints, expiración y cambios de interfaz exigen intervención; nunca evasión ni fallback desde API. Conservar el último estado confirmado y reconciliar cualquier envío incierto antes de reintentar.
+
+La exportación comercial conserva `allnutrition-export-v3` y añade `socialVersion:1`, sin credenciales ni controles. Restaurar deja conexiones por reconectar, campañas en `restore_hold` y medios por verificar separadamente mediante SHA-256. Una copia física debe invalidar controles/estado del navegador antes de habilitar consumidores. **Restaurar o borrar datos locales no detiene anuncios ya activos en Meta**; comprobar o detenerlos en la cuenta remota.
+
+
 ## 1. Prerrequisitos y aceptación de una imagen
 
 Ejecutar desde la raíz del repositorio, con Node 24 (`.nvmrc`), npm, OpenSSL CLI, Docker Engine/Desktop activo y Docker Compose. En este Mac se puede iniciar Docker Desktop con `open -a Docker`; esperar a que `docker info` responda, con un límite de 120 segundos. En Linux instalar previamente Engine/Compose. No continuar sin daemon ni sustituir PostgreSQL por SQLite.
@@ -29,6 +52,10 @@ npm run verify:docker
 ```
 
 El verificador exige Node major 24 y el puerto local 9443 libre. Construye runtime y checks, verifica el contenedor compilado y PostgreSQL real; no arranca `next dev`. Cada ejecución usa `allnutrition-test-ID` y `.test-data/docker/ID/`. Elimina únicamente sus contenedores/volúmenes efímeros al terminar, preservando evidencia. Solo tras aprobar etiqueta el ID comprobado como `allnutrition:release-<12 hex>`; no reconstruir bajo ese tag ni sustituirlo por otra imagen.
+
+El target `checks` incorpora FFmpeg/ffprobe y el Chromium fijado durante su build para los contratos nativos; no descarga herramientas al ejecutar solicitudes ni instala Chromium en la imagen de aplicación. Checks usa un UID no root, `init`, capacidades eliminadas, el perfil seccomp del navegador y 512 MiB de shm. Para ejecutar directamente `npm test` fuera de Docker se requieren también FFmpeg/ffprobe en PATH y el Chromium de Playwright; nunca desactivar el sandbox para hacer pasar las pruebas.
+
+Playwright es una dependencia de runtime del cliente/runner social; no es una autorización para instalar Chromium en web. La aceptación comprueba por separado ausencia de herramientas de desarrollo y de directorios de binarios Chromium en la aplicación. El plazo agregado del E2E completo es de tres horas: los escenarios seriales de recuperación esperan el worker real y el subconjunto libro/diálogos ya superó una hora, sin omitir casos ni repetir escrituras.
 
 Para el corte comercial v3 ejecutar `npm run verify:docker -- --interactive`. Mantiene la aceptación automatizada y añade el recorrido de importación, caja, sueldo, devolución, snapshot sin paneles, alerta y reinicio de lote. La pausa imprime las rutas/órdenes exactas de su proyecto descartable; no reemplazarlas por configuración de staging o producción. EOF/SIGINT cancela.
 
@@ -299,7 +326,7 @@ sc run --rm --pull never backup
 pc run --rm --pull never backup
 ```
 
-El servicio usa `pg_dump --format=custom`, conexión TLS `verify-full`, CA explícita y `umask 077`. Los dumps `allnutrition-<UTC>.dump` son `0600` en `backups/staging` o `backups/production`, propiedad del UID/GID del operador. Contienen autenticación, negocio v3 y Excel retenidos: tratarlos como secretos. El JSON comercial v3 omite autenticación/leases, conserva finanzas, relaciones, originales, revisiones, snapshots e idempotencia y reconstruye intenciones pendientes. Ambos excluyen los binarios de `product_images`; las imágenes externas conservan solo su URL.
+El servicio usa `pg_dump --format=custom`, conexión TLS `verify-full`, CA explícita y `umask 077`. Los dumps `allnutrition-<UTC>.dump` son `0600` en `backups/staging` o `backups/production`, propiedad del UID/GID del operador. Contienen autenticación, negocio v3 y Excel retenidos: tratarlos como secretos. El JSON comercial v3 omite autenticación/leases, conserva finanzas, relaciones, originales, revisiones, snapshots e idempotencia y reconstruye intenciones pendientes. Ambos excluyen los binarios de `product_images` y `social_media`; las imágenes externas conservan solo su URL.
 
 El scheduler de negocio **no programa backups**. El volumen `product_images` sigue requiriendo copia/restore por separado, junto con política explícita de frecuencia, retención, cifrado fuera del host y responsables. Los dumps manuales no constituyen esa política ni un SLA.
 
@@ -325,6 +352,39 @@ try {
 Esa salud es solo comprobación básica, no aceptación integral. Antes de utilizar una recuperación, comprobar con acceso limitado cuentas, sesiones, productos, totales, numeración, historial y replay/idempotencia contra evidencia privada tomada del origen, en una instancia aislada sin tráfico real. Confirmar también que el runtime no puede crear tablas. No ejecutar seed ni fixtures sobre el dump.
 
 El verificador comprueba el pedido de control **119000**, cuenta, sesión, historial, replay y privilegios, además de comparar la exportación comercial v3 completa antes/después de restart y pg_dump/restore. `tests/docker/operations.mjs` requiere guardas y snapshot privado; `prepare`/reset solo permiten `allnutrition_test` y `assert` también `allnutrition_restore`. **No es un procedimiento de reset ni un validador genérico de producción**. No ejecutar la suite contra staging/producción para probar un backup.
+
+### Piezas sociales privadas: copia y recuperación separadas
+
+`SOCIAL_MEDIA_DIR` predetermina `data/social-media`; Compose lo fija a `/app/data/social-media` en el volumen independiente `social_media`. `SOCIAL_MEDIA_QUOTA_BYTES` predetermina **10 GiB (10737418240 bytes)** e incluye originales, derivados, archivos archivados y reservas concurrentes, sin compartir cuota con productos. Ajustarla al espacio utilizable antes de admitir cargas. El runtime instala FFmpeg/ffprobe y crea el directorio con dueño `node`. Web y scheduler escriben este volumen; runner y consumidor navegador sólo lo leen. Scheduler añade `social_egress` para HTTPS al proveedor y conserva `backend` interna; el consumidor navegador continúa sin salida directa a Meta ni puertos publicados.
+
+El vhost Nginx conserva **10 MiB** para GET/HEAD de preview, Excel y cualquier otra carga. Sólo `PUT /api/admin/social/assets/<UUID>/content` se reescribe internamente para admitir **250 MiB**, streaming sin buffering del request y timeouts de **300 s**, reenviando la URI original al upstream fijo. Antes de instalarlo, comprobar sintaxis y HTTP: PUT válido alcanza autenticación hasta 250 MiB; 250 MiB + 1 byte devuelve 413; GET en esa misma URL y otros métodos/rutas conservan 10 MiB. No ampliar el límite global. Estos comandos de aceptación deben ejecutarse por release; esta sección no afirma haberlos ejecutado.
+
+Los comandos definitivos son:
+
+```sh
+# Mismo entorno privado DB/CA y SOCIAL_MEDIA_DIR que la aplicación.
+# El destino de backup debe ser NUEVO, fuera del volumen y con padre existente.
+node scripts/social-media-backup.mjs backup /RUTA_PRIVADA/copia-social-nueva
+node scripts/social-media-backup.mjs restore /RUTA_PRIVADA/copia-social-nueva
+node scripts/social-media-backup.mjs verify
+node scripts/social-media-backup.mjs reset-after-physical-restore
+```
+
+`backup` crea un directorio `0700`, archivos `0600` y `manifest.json` versión 1 con UUID, clave canónica, tamaño y SHA-256 real de cada original/derivado registrado. Copia por streams, sin empaquetar credenciales, temporales ni archivos ajenos a los assets. La ausencia de un archivo registrado hace fallar la copia: un directorio sin manifest final no es un backup aceptado. No reutilizar una carpeta de copia anterior. Proteger también esta copia con cifrado, retención y traslado fuera del host; conservarla junto al identificador/hash del respaldo de BD correspondiente, sin guardar claves de cifrado de sesión en ninguno.
+
+El directorio de copia y todos sus padres deben ser rutas absolutas canónicas sin enlaces simbólicos. Resolver previamente los alias del sistema en el host operador; una ruta como `/tmp` puede ser un enlace en macOS. La separación respecto al volumen se comprueba por identidad canónica, no sólo comparando el texto de sus rutas.
+
+Secuencia de operador:
+
+1. Elegir una ventana sin escrituras. Fijar **ambos flags explícitamente a `false`** en el entorno privado y detener web, scheduler, consumidor y runner navegador, incluidas instancias externas. Con la función Compose del entorno, por ejemplo: `sc --profile social-browser stop web scheduler social-browser-worker social-browser`. No basta cerrar el panel ni que el heartbeat parezca antiguo.
+2. Tomar la copia de BD mediante el procedimiento anterior y, mientras todo sigue detenido, ejecutar `backup` contra esa misma BD/volumen. En Compose puede usarse un contenedor efímero del scheduler, sin iniciar el loop: `sc run --rm --no-deps --pull never -e SOCIAL_PUBLISHING_ENABLED=false -e SOCIAL_BROWSER_ENABLED=false -v \"$MEDIA_BACKUP_DIR:/backups\" scheduler node scripts/social-media-backup.mjs backup /backups/social-copy`. `MEDIA_BACKUP_DIR` debe ser una ruta absoluta privada existente, accesible al UID 1000 de `node`; `/backups/social-copy` no debe existir. No cambiar permisos del volumen ni ejecutarlo como root para saltar errores.
+3. Ensayar **primero en un destino descartable y aislado**, sin tráfico ni acceso a Meta, con BD y volumen nuevos, release compatible y los flags `false`. Restaurar la BD según su formato, sin arrancar servicios de aplicación. Una restauración física (`pg_dump`/SQLite completa) exige ejecutar `reset-after-physical-restore` contra la **BD restaurada**, nunca contra el origen activo. El JSON comercial ya aplica holds/epochs al importarse; no requiere reset físico adicional.
+4. El reset físico elimina sólo jobs sociales (incluidos locks), controles, estados OAuth y credenciales cifradas del navegador. Incrementa epochs, exige reconexión de todas las conexiones, pone `restore_hold` en todas las campañas y marca piezas por verificar, sin tocar pedidos/gastos/caja/inventario, IDs remotos, revisiones, mediciones ni operaciones `sent`/`uncertain`. El actor de sistema y conteos quedan auditados sin invalidar indicadores contables. Mantener el runner apagado: borrar controles locales no cierra por sí solo un proceso remoto antiguo.
+5. Ejecutar `restore <directorio>` y luego `verify` con el entorno de la BD/volumen **de destino**. En Compose usar el equivalente de la orden efímera anterior en el proyecto de recuperación y montar la copia con `:ro`; sólo el volumen destino debe ser escribible. Restore exige flags `false`, valida claves, manifest y hashes **contra la BD**, no acepta symlinks/traversal y no sobrescribe archivos diferentes. Archivos ya idénticos se conservan. Prevalida todos los conflictos antes de copiar; una interrupción se resuelve repitiendo el comando, nunca borrando el volumen. El resultado JSON informa archivos restaurados/idénticos y verificación. Conservar las salidas privadas para comparar conteos.
+6. La verificación usa SHA-256 streaming de originales/derivados y no encola publicaciones. Un archivo ausente o distinto permanece bloqueado con diagnóstico; un original recuperado sin derivado requiere procesamiento explícito. Sólo una pieza íntegra puede recuperar `ready`/`archived`. Ningún manifest puede reemplazar el hash aprobado en BD. Comprobar preview de imagen/video y que las campañas conservan holds antes de aceptar la recuperación. Repetir el procedimiento ensayado en el destino autorizado, manteniendo flags `false` durante el arranque inicial.
+
+Reconectar no levanta `restore_hold`: se requiere reconciliación y reanudación explícita posterior, sin recrear una publicación de envío incierto. **Restaurar la BD/volumen no pausa anuncios ya activos en Meta**. Verificar y, si procede, detener la entrega en Meta con acceso autorizado; nunca presentar el reset local como confirmación de pausa. Mantener la copia de productos separada; estos comandos no la restauran.
+
 
 ## 7. Actualizaciones, rollback y fallos
 
