@@ -40,6 +40,33 @@ function compose(args, label, options = {}) {
   createdProject = true;
   return run('docker', [...composeArgs, ...args], label, { ...options, env: { ...dockerEnv, ...options.env } });
 }
+function cleanupProject() {
+  const filter = `label=com.docker.compose.project=${project}`;
+  const options = { env: dockerEnv, quiet: true, cleanup: true };
+  const listed = run('docker', ['ps', '--all', '--quiet', '--no-trunc', '--filter', filter], 'Contenedores del proyecto descartable', options);
+  const ids = listed.stdout.trim().split(/\s+/).filter(Boolean);
+  for (const containerId of ids) {
+    ensure(/^[a-f0-9]{64}$/.test(containerId), 'Identificador de contenedor descartable inválido.');
+    const inspected = run('docker', ['container', 'inspect', containerId], 'Propiedad del contenedor descartable', { ...options, allowFailure: true, logOutput: false });
+    if (inspected.status !== 0) {
+      ensure(!inspected.error && /No such (?:object|container)/i.test(inspected.stderr || ''), 'No se pudo verificar la propiedad del contenedor.');
+      continue;
+    }
+    const [container] = JSON.parse(inspected.stdout);
+    ensure(container.Id === containerId && container.Config.Labels?.['com.docker.compose.project'] === project, 'La limpieza rechazó un contenedor ajeno.');
+    // Compose down may leave a timed-out run --rm attached to its networks.
+    const removed = run('docker', ['container', 'rm', '--force', containerId], 'Retiro del contenedor descartable', { ...options, allowFailure: true });
+    ensure(!removed.error && (removed.status === 0 || /No such container/i.test(removed.stderr || '')), 'No se pudo retirar un contenedor descartable.');
+  }
+  compose(['down', '--volumes', '--remove-orphans'], 'Eliminación exclusiva del proyecto descartable', { cleanup: true });
+  const remaining = {};
+  for (const [kind, command] of [['containers', ['ps', '--all', '--quiet']], ['volumes', ['volume', 'ls', '--quiet']], ['networks', ['network', 'ls', '--quiet']]]) {
+    const output = run('docker', [...command, '--filter', filter], 'Comprobación de limpieza ' + kind, options).stdout.trim();
+    remaining[kind] = output ? output.split(/\s+/) : [];
+    ensure(remaining[kind].length === 0, 'La limpieza dejó recursos del proyecto: ' + kind);
+  }
+  writeFileSync(join(artifacts, 'cleanup.json'), JSON.stringify({ project, remaining }, null, 2) + '\n', { mode: 0o600 });
+}
 async function availablePort() {
   const server = createServer();
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(9443, '127.0.0.1', resolve); });
@@ -364,13 +391,13 @@ try {
       }
     } catch (error) {
       result.exitCode = 1;
-      result.error = `No se pudo conservar la evidencia: ${sanitize(error.message)}`;
+      result.captureError = `No se pudo conservar la evidencia: ${sanitize(error.message)}`;
+      result.error ||= result.captureError;
     } finally {
       // project is generated above, never read from user input or an environment file.
       try {
-        const cleanup = compose(['down', '--volumes', '--remove-orphans'], 'Eliminación exclusiva del proyecto descartable', { allowFailure: true, cleanup: true });
-        ensure(cleanup.status === 0 && !cleanup.error, 'No se pudo completar la limpieza del proyecto descartable.');
-      } catch (error) { result.exitCode = 1; result.error = sanitize(error.message); }
+        cleanupProject();
+      } catch (error) { result.exitCode = 1; result.cleanupError = sanitize(error.message); result.error ||= result.cleanupError; }
     }
   }
 }
