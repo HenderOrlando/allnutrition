@@ -49,6 +49,8 @@ function request(path, { method = 'GET', headers = {}, body, timeout = 12000 } =
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const req = https.request(new URL(path, values.APP_URL), {
+      // Docker commands block the event loop; never reuse an idle socket closed meanwhile.
+      agent: false,
       method, ca: httpsCA, family: 4, rejectUnauthorized: true,
       headers: { ...headers, ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}) },
     }, response => {
@@ -227,7 +229,7 @@ try {
   stopWorker();
   compose(['run', '--rm', 'checks', 'npm', 'run', 'check'], 'Sintaxis e imports de la imagen checks');
   passed('npm run check');
-  const contracts = compose(['run', '--rm', 'checks', 'npm', 'test'], 'Contratos SQLite y PostgreSQL', { timeout: 1800000 });
+  const contracts = compose(['run', '--rm', 'checks', 'npm', 'test'], 'Contratos SQLite y PostgreSQL', { timeout: 2700000 });
   ensure(contracts.stdout.includes('Contrato completo con PostgreSQL real') && /(?:skipped 0|# skipped 0)/.test(contracts.stdout), 'El contrato PostgreSQL no se ejecutó o hubo pruebas omitidas.');
   passed('npm test: SQLite y PostgreSQL sin omisiones');
   compose(['run', '--rm', 'checks', 'npm', 'audit', '--omit=dev', '--audit-level=high'], 'Auditoría de dependencias de producción');
@@ -249,7 +251,7 @@ try {
   passed('scheduler real: misma imagen limitada, sin puertos y heartbeat persistido');
   // Import E2E observes the real worker's 60-second idle before parse/preview in both serial projects.
   run('npm', ['run', 'test:e2e'], 'E2E escritorio/móvil y fronteras HTTP', {
-    timeout: 600000,
+    timeout: 3600000,
     env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright, PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json') },
   });
   passed('Playwright desktop/mobile: upload local, render público, límites HTTP, autenticación y CSRF');

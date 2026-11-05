@@ -11,3 +11,8 @@ backups
 .git
 test-results
 playwright-report
+# Private business workbooks enter through authenticated uploads, never through the image.
+**/*.xls
+**/*.xlsx
+**/*.xlsm
+**/*.xlsb

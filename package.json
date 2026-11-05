@@ -27,8 +27,9 @@
     "verify:docker": "node scripts/verify-docker.mjs"
   },
   "dependencies": {
+    "@xmldom/xmldom": "0.9.12",
     "fflate": "0.8.3",
-    "next": "16.3.8",
+    "next": "16.4.3",
     "pg": "^8.16.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
