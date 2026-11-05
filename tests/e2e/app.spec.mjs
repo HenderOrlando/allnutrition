@@ -15,7 +15,7 @@ test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',a
  expect((await request.get('/api/admin/settings')).status()).toBe(401);
  expect((await request.get('/api/admin/upload')).status()).toBe(401);
  expect((await request.post('/api/admin/upload',{data:'not-an-image'})).status()).toBe(401);
- for(const path of ['/api/admin/business/settings','/api/admin/business/people','/api/admin/finance/overview','/api/admin/imports','/api/admin/imports/unknown/file','/api/admin/imports/unknown/errors'])expect((await request.get(path)).status()).toBe(401);
+ for(const path of ['/api/admin/business/settings','/api/admin/business/people','/api/admin/finance/overview','/api/admin/imports','/api/admin/imports/template','/api/admin/imports/unknown/file','/api/admin/imports/unknown/errors','/api/admin/imports/unknown/expanded','/api/admin/imports/unknown/prepared'])expect((await request.get(path)).status()).toBe(401);
  expect((await request.put('/api/admin/imports/unknown/file',{data:'not-an-excel'})).status()).toBe(401);
  expect((await request.get('/productos/creatina-vital-force-70-servicios')).status()).toBe(404);
  await page.goto('/admin/login');
@@ -192,7 +192,8 @@ test('pedido manual: acuerdo, guía, despacho y conservación del historial',asy
   await expect(page).toHaveURL(draftURL);
   expect((await (await page.request.get('/api/admin/orders/'+created.id)).json()).notes).toBe(saved.notes);
  }finally{releaseSave();}
- expect((await savingNote).status()).toBe(200);await page.unroute(orderPath,hold);
+ expect((await savingNote).status()).toBe(200);
+ // Keep the released pass-through route until page teardown; unroute races the save's background catalog reads.
  await expect(drawer).toHaveCount(0);await open.click();
  expect((await (await page.request.get('/api/admin/orders/'+created.id)).json()).notes).toBe('Nota posterior al despacho');
  const headers={Origin:new URL(page.url()).origin,'x-csrf-token':csrf};
@@ -590,13 +591,30 @@ test('importación conserva archivo y resolver: Cancelar y Esc confirman el mism
  await page.getByRole('button',{name:'Guardar archivo y continuar'}).click();
  await expect(page.getByRole('combobox',{name:'Hoja',exact:true})).toBeVisible({timeout:75000});
  await page.getByRole('combobox',{name:'Hoja',exact:true}).selectOption('Seguimiento');
- await page.getByRole('combobox',{name:'Qué contiene el archivo',exact:true}).selectOption('tracking');
+ await page.getByRole('combobox',{name:'Qué contiene esta hoja',exact:true}).selectOption('tracking');
  await page.getByLabel('Fecha de corte del reporte, si no existe columna').fill('2026-01-01');
  const samples=page.getByRole('button',{name:'Leer muestras de esta hoja y encabezado',exact:true});
  if(await samples.isEnabled()){
   await samples.click();await expect(samples).toBeDisabled();
  }
- for(const [index,destination] of ['externalShipmentId','tracking','carrier','rawStatus'].entries())await page.getByRole('combobox',{name:`Destino de columna ${index+1}`,exact:true}).selectOption(destination);
+ for(const [index,label] of ['ID externo del envío','Guía','Transportadora','Estado de la entrega / seguimiento'].entries()){
+  const column=page.getByRole('button',{name:`Destino de columna ${index+1}`,exact:true});
+  await column.click();
+  const mapping=page.getByRole('dialog',{name:/^Asignar columna /});
+  if(index===0){
+   await mapping.getByLabel('Buscar destino',{exact:true}).fill('seguro');
+   const closeMapping=mapping.getByRole('button',{name:'Cerrar selector de destino',exact:true});
+   await page.keyboard.press('Shift+Tab');await expect(closeMapping).toBeFocused();
+   await page.keyboard.press('Shift+Tab');await expect(mapping.getByRole('button',{name:'Descartar archivo',exact:true})).toBeFocused();
+   await page.keyboard.press('Tab');await expect(closeMapping).toBeFocused();
+   await page.keyboard.press('Tab');await expect(mapping.getByLabel('Buscar destino',{exact:true})).toBeFocused();
+   await page.keyboard.press('Escape');await expect(mapping).toHaveCount(0);await expect(column).toBeFocused();
+   await column.click();
+  }
+  await mapping.getByLabel('Buscar destino',{exact:true}).fill(label);
+  await mapping.getByRole('button',{name:label,exact:true}).click();
+  await expect(mapping).toHaveCount(0);await expect(column).toBeFocused();
+ }
  await page.getByRole('button',{name:'Guardar columnas y revisar',exact:true}).click();
  const opener=page.getByRole('button',{name:'Aceptar valores guardados de fórmulas',exact:true});
  await expect(opener).toBeVisible({timeout:75000});await opener.click();

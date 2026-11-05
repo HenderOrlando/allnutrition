@@ -16,7 +16,7 @@ const TAB_METRICS = {
   sales: ['netProductSales', 'shippingRevenue', 'grossMargin', 'contribution', 'recognizedOrders', 'soldUnits', 'giftUnits'],
   shipping: ['shipmentCount', 'shippedOrders', 'onTimeDeliveries', 'shipmentReturnRate', 'transitDays', 'shippingCosts', 'platformFees'],
   returns: ['returnedUnits', 'cancelledUnits', 'shipmentReturnRate'],
-  costs: ['costOfGoods', 'giftCost', 'shippingCosts', 'platformFees', 'commissions', 'fixedSalary', 'bonuses', 'otherExpenses', 'operatingResult'],
+  costs: ['costOfGoods', 'giftCost', 'shippingCosts', 'platformFees', 'commissions', 'fixedSalary', 'bonuses', 'advertisingExpenses', 'operatingExpenses', 'otherExpenses', 'operatingResult'],
   payroll: ['payrollEarned', 'payrollPaid', 'payrollOutstanding', 'commissions', 'fixedSalary', 'bonuses'],
   cash: ['cashAvailable', 'customerCollections', 'platformPending', 'cashClosingDifference'],
 };
@@ -25,7 +25,7 @@ const METRICS = new Set(Object.values(TAB_METRICS).flat());
 const FILTER_KEYS = ['seller', 'product', 'platform', 'carrier', 'status', 'account'];
 const STATUSES = Object.fromEntries([...orderStates, ...shipmentStates].map(({ value, label }) => [value, label]));
 const SNAPSHOT_STATES = { current: 'Vigente', superseded: 'Reemplazado por una revisión posterior', stale: 'Hay información nueva' };
-const CATEGORIES = { shipping_out: 'Transporte de ida', shipping_return: 'Transporte de retorno', platform_fee: 'Cargo de plataforma', commission: 'Comisión', salary: 'Sueldo fijo', bonus: 'Bonificación', other: 'Otros gastos' };
+const CATEGORIES = { shipping_out: 'Transporte de ida', shipping_return: 'Transporte de retorno', shipping_insurance: 'Seguro de envío', platform_fee: 'Cargo de plataforma', commission: 'Comisión', salary: 'Sueldo fijo', bonus: 'Bonificación', advertising:'Publicidad', operating:'Operación', other: 'Otros gastos' };
 const number = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 });
 const dateTime = new Intl.DateTimeFormat('es-CO', { timeZone: 'America/Bogota', dateStyle: 'medium', timeStyle: 'short' });
 const records = data => Array.isArray(data) ? data : data?.records || [];
@@ -204,6 +204,7 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
       <details className="report-sources"><summary>Cortes y últimas importaciones por plataforma</summary>{report.lastImportAt?.length ? <ul>{report.lastImportAt.map(source => <li key={source.sourceId || source.platformId}><strong>{source.platformName} · {source.sourceName}</strong><br/>Corte del origen: {source.precision === 'instant' ? timestamp(source.sourceAsOf) : source.sourceAsOf ? `${reportDateLabel(source.sourceDate || bogotaDate(source.sourceAsOf))} · sin hora confirmada` : 'Sin dato'}<br/>Importado: {timestamp(source.importedAt)} (Bogotá)</li>)}</ul> : <p className="muted">No hay importaciones de plataforma registradas. Las operaciones manuales no tienen un corte de archivo ficticio.</p>}</details>
       <details className="report-definitions"><summary>Definiciones, criterios y reglas del informe</summary>
         <p>{TAB_GUIDANCE[tab]}</p>
+        {!snapshotId&&activeMode!=='saved'&&tab==='costs'&&<p>Resultado operativo = contribución − sueldo fijo − bonificaciones − publicidad − operación − otros gastos. Publicidad y operación se reconocen por fecha del gasto; no se descuentan otra vez de la contribución ni se confunden con pagos de caja.</p>}
         <p>{snapshotId?'Informe guardado: cifras, hechos y filtros históricos de solo lectura.':activeMode==='saved'?'Revisiones inmutables del período. Guardar informe solicita una revisión sin modificar los hechos.':'Informe en vivo: hechos registrados para este período y filtros, sin guardar una revisión.'} Exportar XLSX incluye el informe completo, detalle y definiciones.</p>
         <div className="report-dates"><span>{report.closed ? 'Período cerrado' : 'Período abierto'}</span><span>Corte de datos: {timestamp(report.dataAsOf)} · Bogotá</span></div>
         <p className="small muted">Calculado: {timestamp(report.generatedAt)} · Fechas comerciales America/Bogota, inicio incluido y fin excluido. La exportación incluye Resumen, Detalle y Definiciones. Sin dato no equivale a cero.</p>

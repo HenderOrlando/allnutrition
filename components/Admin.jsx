@@ -1,7 +1,7 @@
 'use client';
 import { useState,useEffect,useCallback,useRef,useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { schemas,settingsFields,emptyRecord,contentStates } from '@/lib/schema.mjs';
+import { schemas,settingsFields,emptyRecord,contentStates,slugify } from '@/lib/schema.mjs';
 import { adminSections,readAdminView,adminHref,adminReturnTo } from '@/lib/admin-view.mjs';
 import { Field } from './Fields';
 import RecordEditor from './RecordEditor';
@@ -191,7 +191,7 @@ export default function Admin({csrf,user}) {
  function setQuery(value){setQueryInput(value);cancelSearch();const generation=searchGeneration.current;searchTimer.current=setTimeout(()=>{if(searchGeneration.current===generation)acceptView({...accepted.current,q:value,page:1},{replace:true,check:false});},200);}
  function changeView(patch){
   if(Object.keys(patch).length===1&&Object.hasOwn(patch,'q')){setQuery(patch.q);return;}
-  const resetsPage=query!==accepted.current.q||['q','status','paymentStatus','period','anchor','issue','tab','seller','platform','source','carrier','account','product','productType'].some(key=>Object.hasOwn(patch,key));
+  const resetsPage=query!==accepted.current.q||['q','status','paymentStatus','period','anchor','issue','tab','seller','platform','source','carrier','account','product','productType','category'].some(key=>Object.hasOwn(patch,key));
   acceptView({...accepted.current,q:query,...patch,...(resetsPage?{page:1}:{})});
  }
  async function openEditor(kind,record){
@@ -205,7 +205,7 @@ export default function Admin({csrf,user}) {
     if(kind!=='orders'&&resourcesRef.current[key].records!==null&&!resourcesRef.current[key].error)return;
     try{await (inFlight.current[key]||loadContent(key));}catch(cause){throw new Error('No pudimos cargar '+schemas[key].label.toLowerCase()+'. '+cause.message);}
    }));
-   const detail=record?.id?await api('/api/admin/'+kind+'/'+encodeURIComponent(record.id)):record;
+   const detail=record?.id?await api('/api/admin/'+kind+'/'+encodeURIComponent(record.id)):kind==='orders'?record:{...emptyRecord(kind),...record};
    if(sequence!==openingSequence.current||origin!==accepted.current.section)return false;
    if(!allowExit()){setOpening(null);return false;}
    setOpening(null);setEditing({kind,record:detail||(kind==='orders'?null:emptyRecord(kind)),revision:0});
@@ -220,14 +220,15 @@ export default function Admin({csrf,user}) {
  useEffect(()=>{
   if(view.record&&(schemas[section]||section==='orders'&&(!view.tab||view.tab==='list')))void openEditor(section,{id:view.record});
  },[section,view.tab,view.record]);
- async function createProductForImport(){
-  if(!await openEditor('products',null))return null;
-  return new Promise(resolve=>{auxiliaryProduct.current=resolve;});
+ async function createProductForImport({productId,kind='products',productType='product',externalKey=''}={}){
+  const title=String(externalKey).trim(),prefill=productId?{id:productId}:{title,slug:slugify(title),status:'draft',orderable:true,...(kind==='products'?{productType}:{})};
+  if(!await openEditor(kind,prefill))return null;
+  return new Promise(resolve=>{auxiliaryProduct.current={kind,resolve};});
  }
  async function saved({kind,record,operation,keepOpen=false}){
   if(!keepOpen){setEditing(null);reportInteraction({dirty:false,busy:false});}
   if(!keepOpen&&accepted.current.section===kind&&accepted.current.record)acceptView({...accepted.current,record:''},{replace:true,check:false});
-  if(kind==='products'&&auxiliaryProduct.current){auxiliaryProduct.current(record);auxiliaryProduct.current=null;}
+  if(kind===auxiliaryProduct.current?.kind){const {resolve}=auxiliaryProduct.current;auxiliaryProduct.current=null;resolve(operation==='delete'?null:{...record,kind});}
   businessChanged();
   if(kind==='orders'){
    setNotice('Pedido AN-'+String(record.number).padStart(6,'0')+' guardado');
@@ -242,7 +243,7 @@ export default function Admin({csrf,user}) {
  async function saveSettings(event){event.preventDefault();setBusy(true);setError('');try{const current=await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(settings)});setSettings(current);settingsSnapshot.current=JSON.stringify(current);setNotice('Configuración guardada.');}catch(cause){setError(cause.message);}finally{setBusy(false);}}
  function retry(key){if(key==='settings')void loadSettings();else void loadContent(key).catch(()=>{});}
  async function signOut(){if(!allowExit())return;setBusy(true);try{await api('/api/auth/logout',{method:'POST'});setBusy(false);guardState.current={dirty:false,busy:false};window.location.assign('/admin/login');}catch(cause){setError(cause.message);setBusy(false);}}
- const closeEditor=()=>{openingSequence.current++;setEditing(null);reportInteraction({dirty:false,busy:false});if(accepted.current.record&&(schemas[accepted.current.section]||accepted.current.section==='orders'&&(!accepted.current.tab||accepted.current.tab==='list')))acceptView({...accepted.current,record:''},{replace:true,check:false});if(auxiliaryProduct.current){auxiliaryProduct.current(null);auxiliaryProduct.current=null;}};
+ const closeEditor=()=>{openingSequence.current++;setEditing(null);reportInteraction({dirty:false,busy:false});if(accepted.current.record&&(schemas[accepted.current.section]||accepted.current.section==='orders'&&(!accepted.current.tab||accepted.current.tab==='list')))acceptView({...accepted.current,record:''},{replace:true,check:false});if(auxiliaryProduct.current){const {resolve}=auxiliaryProduct.current;auxiliaryProduct.current=null;resolve(null);}};
  async function reloadEditor(){
   if(!editing?.record?.id||guardState.current.busy)return false;
   if(guardState.current.dirty&&!window.confirm('Hay cambios sin guardar. ¿Descartarlos y cargar la versión guardada?'))return false;
@@ -264,7 +265,7 @@ export default function Admin({csrf,user}) {
    {section==='home'&&<AdminOverview api={api} view={view} onViewChange={changeView} onCreateOrder={()=>openEditor('orders',null)} onImport={()=>navigate({section:'orders',tab:'imports'})} onCreateProduct={()=>openEditor('products',null)} onConfigureCash={configureCash} onNavigate={navigate} onOpenOrder={id=>openEditor('orders',{id})} revision={businessRevision}/>}
    {section==='settings'&&<div aria-busy={settingsResource.loading}>{settingsResource.loading&&<p role="status">{settings?'Actualizando…':'Cargando configuración…'}</p>}{!settings&&settingsResource.loading&&<div className="static-skeleton" aria-hidden="true"/>}{settingsResource.error&&<div className="error" role="alert">{settingsResource.error}<button type="button" className="text-button" onClick={()=>retry('settings')}>Reintentar</button></div>}</div>}
    {schemas[section]&&<ContentList kind={section} resource={resources[section]} view={{...view,q:query}} onViewChange={changeView} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>retry(section)}/>}
-   {section==='orders'&&<OrdersWorkspace key={'orders:'+workspaceEpoch} api={api} resource={ordersResource} view={{...view,q:query}} onViewChange={changeView} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>loadOrders(accepted.current)} onInteractionStateChange={reportWorkspaceInteraction} onCreateProduct={createProductForImport} onMutation={businessChanged}/>}
+   {section==='orders'&&<OrdersWorkspace key={'orders:'+workspaceEpoch} api={api} resource={ordersResource} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>loadOrders(accepted.current)} onInteractionStateChange={reportWorkspaceInteraction} onCreateProduct={createProductForImport} onMutation={businessChanged}/>}
    {section==='reports'&&<ReportsWorkspace key={'reports:'+workspaceEpoch} api={api} view={view} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
    {section==='cash'&&<CashWorkspace key={'cash:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
    {section==='business'&&<BusinessSettings key={'business:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onCreateOrder={()=>openEditor('orders',null)} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}

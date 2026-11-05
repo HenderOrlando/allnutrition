@@ -1,0 +1,27 @@
+'use client';
+import { useMemo } from 'react';
+import styles from './OrderExperience.module.css';
+
+const SHEET_PURPOSE_LABELS={orders:'Pedidos y sus envíos',tracking:'Solo seguimiento',settlements:'Liquidaciones declaradas',expenses:'Gastos',allocations:'Información que acompaña: reparto entre envíos',component_costs:'Información que acompaña: costos de componentes',observations:'Información que acompaña: datos informativos'};
+
+export default function ImportSheetCards({sheets,config,suggestions,preview,activeSheet,disabled,onChoose,onProposal,onExclude,onEnable,onApplySimilar,onApplyPreset,onExcludeMissing}){
+ const missing=config.sheets.filter(sheet=>sheet.enabled&&!sheets.some(item=>item.name===sheet.sheetName));
+ const counts=useMemo(()=>{const result=new Map();for(const group of preview?.groups||[])for(const name of new Set((group.rowRefs||[]).map(ref=>ref.sheet))){const count=result.get(name)||{commercial:0,expenses:0};if(group.kind==='expenses')count.expenses+=group.expenses?.length||0;else count.commercial++;result.set(name,count);}return result;},[preview]);
+ return <section aria-label="Hojas del libro" className={styles.sheetCatalog}>
+  <div><h3>Elige qué importar de cada hoja</h3><p>Primero confirma las propuestas. Las muestras no son un conteo de pedidos: los totales de operaciones aparecen después de la revisión. Una hoja vacía, resumen o listado no se importa por accidente.</p></div>
+  {!!suggestions?.sheets?.some(sheet=>sheet.config.columns.some(column=>column.destination))&&<div className={styles.importProposal}><h4>Ventas mensuales y publicidad por campañas</h4><p>Reconoce las tablas compatibles y conserva variantes por encabezados y tipos. PAUTA en ventas es la campaña de origen; no crea un gasto. Las propuestas necesitan tu confirmación.</p><button type="button" className="button subtle" disabled={disabled} onClick={onApplyPreset}>Aplicar propuesta del libro</button></div>}
+  {!!missing.length&&<div className="error" role="alert"><h4>El perfil tiene hojas que no están en este archivo</h4><p>{missing.map(sheet=>sheet.sheetName).join(' · ')}</p><button type="button" className="button subtle" disabled={disabled} onClick={onExcludeMissing}>Excluir hojas ausentes de este archivo</button></div>}
+  <div className={styles.sheetGrid}>{sheets.map(sheet=>{
+   const selected=config.sheets.find(item=>item.sheetName===sheet.name),proposal=suggestions?.sheets?.find(item=>item.sheetName===sheet.name),candidate=sheet.headerCandidates?.find(item=>item.rowNumber===(selected?.headerRow||proposal?.config.headerRow))||sheet.headerCandidates?.[0],{commercial=0,expenses=0}=counts.get(sheet.name)||{},reviewed=preview?.sheets?.some(item=>item.sheetName===sheet.name),similar=suggestions?.sheets?.filter(item=>item.sheetName!==sheet.name&&item.variantKey===proposal?.variantKey&&!item.possibleDuplicateOf)||[];
+   const status=selected?.enabled?'Elegida':selected?'No importar':sheet.empty?'Vacía · confirma exclusión':proposal?.possibleDuplicateOf?'Posible duplicada · por confirmar':'Por confirmar';
+   return <article key={sheet.name} data-import-sheet={sheet.name} data-active={activeSheet===sheet.name} className={styles.sheetCard}>
+    <header><h4>{sheet.name}</h4><span className="badge">{status}</span></header>
+    <dl><dt>Qué contiene</dt><dd>{SHEET_PURPOSE_LABELS[(selected||proposal?.config)?.purpose]||'Por confirmar'}</dd><dt>Encabezado propuesto</dt><dd>{candidate?`Fila ${selected?.headerRow||proposal?.config.headerRow||candidate.rowNumber}`:'Elegir manualmente'}</dd><dt>Operaciones</dt><dd>{reviewed?`${commercial} grupos de pedidos/envíos · ${expenses} gastos`:'Por contar'}</dd></dl>
+    {!!proposal?.reasons?.length&&<ul className="small muted">{proposal.reasons.map(reason=><li key={reason}>{reason}</li>)}</ul>}
+    {proposal?.possibleDuplicateOf&&<p className="error">Mismo contenido y fórmulas de {proposal.possibleDuplicateOf.sheetName} en {proposal.possibleDuplicateOf.range}. Se propone excluir esta copia, no sumar dos veces.</p>}
+    {!!candidate?.columns?.length&&<details><summary>Muestras y tipos de {sheet.name}</summary>{candidate.columns.slice(0,3).map(column=><div key={column.columnIndex} className={styles.sheetSample}><strong>{column.header||`Columna ${column.columnIndex+1}`}</strong>{column.samples?.slice(0,3).map((sample,index)=><p key={index}><span className="badge">{sample.type==='n'?'Número':sample.type==='s'?'Texto':sample.type}</span> <span>{sample.text??String(sample.value??'')}</span>{sample.formula&&<small> · Fórmula: se usa solo su valor guardado tras revisión.</small>}</p>)}</div>)}</details>}
+    <div className="admin-actions">{!sheet.empty&&<><button type="button" className="button subtle" disabled={disabled} onClick={()=>onChoose(sheet.name)}>Configurar {sheet.name}</button>{proposal?.config.columns.some(column=>column.destination)&&<button type="button" className="button subtle" disabled={disabled} onClick={()=>onProposal(sheet.name)}>Usar propuesta de {sheet.name}</button>}{selected&&!selected.enabled&&<button type="button" className="button subtle" disabled={disabled} onClick={()=>onEnable(sheet.name)}>Importar {sheet.name}</button>}</>}<button type="button" className="button subtle" disabled={disabled} onClick={()=>onExclude(sheet.name)}>No importar {sheet.name}</button>{selected?.enabled&&!!similar.length&&<button type="button" className="button subtle" disabled={disabled} onClick={()=>onApplySimilar(sheet.name)}>Aplicar a hojas similares a {sheet.name}</button>}</div>
+   </article>;
+  })}</div>
+ </section>;
+}

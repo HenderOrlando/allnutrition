@@ -1,23 +1,54 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { shipmentStates } from '@/lib/schema.mjs';
+import { formatMoneyMinor } from '@/lib/business/money.mjs';
 import useDialog from './useDialog';
 import Icon from './Icons';
 import { BusinessActionForm } from './BusinessActionDialog';
+import ImportedData from './ImportedData';
 import styles from './OrderExperience.module.css';
 
 const stateLabel=value=>shipmentStates.find(state=>state.value===value)?.label||value;
 const orderNumber=value=>value==null?'Sin pedido vinculado':`AN-${String(value).padStart(6,'0')}`;
-const dateLabel=(value,showTime=true)=>value?new Intl.DateTimeFormat('es-CO',{dateStyle:'medium',...(showTime?{timeStyle:'short'}:{}),timeZone:'America/Bogota'}).format(new Date(value)):'Sin corte conocido';
+const dayFormatter=new Intl.DateTimeFormat('es-CO',{dateStyle:'medium',timeZone:'UTC'});
+const bogotaDayFormatter=new Intl.DateTimeFormat('es-CO',{dateStyle:'medium',timeZone:'America/Bogota'});
+const instantFormatter=new Intl.DateTimeFormat('es-CO',{dateStyle:'medium',timeStyle:'short',timeZone:'America/Bogota'});
+const dateLabel=(value,showTime=true)=>value?(/^\d{4}-\d{2}-\d{2}$/.test(value)?dayFormatter:showTime?instantFormatter:bogotaDayFormatter).format(new Date(value)):'Sin corte conocido';
 const localInstant=value=>value?new Date(Date.parse(value)-5*60*60*1000).toISOString().slice(0,16):'';
 const fromLocal=value=>value?new Date(value+'-05:00').toISOString():null;
 const dispatched=new Set(['collected','in_transit','out_for_delivery','delivered','return_in_transit','returned']);
 const rows=data=>data?.records||[];
 const metadataDraft=shipment=>({carrier:shipment.carrier||'',tracking:shipment.tracking||'',estimatedDeliveryOn:shipment.estimatedDeliveryOn||'',notes:shipment.notes||'',replacesShipmentId:shipment.replacesShipmentId||'',assignments:Object.fromEntries((shipment.assignments||[]).map(line=>[line.lineId,line.quantity])),reason:''});
 const eventDraft=shipment=>({status:shipment.status,precision:'day',occurredOn:'',occurredAt:'',sourceAsOf:localInstant(new Date().toISOString()),reason:'',detail:'',correctionOf:''});
+const sourceLabel=(shipment,sourceId)=>sourceId?(sourceId===shipment.sourceId&&shipment.sourceName?`${shipment.sourceName} · ${sourceId}`:`Fuente ${sourceId}`):'Sin fuente identificada';
+
+function ImportedShipmentData({shipment}){
+  const insurance=shipment.costObservations?.shipping_insurance;
+  const insuranceStatus=shipment.costStatuses?.shipping_insurance;
+  const insuranceObserved=insurance!=null||insuranceStatus!=null;
+  const insuranceKnown=insurance?.amountMinor!=null;
+  const insuranceComplete=insuranceStatus==='known'&&insuranceKnown&&!!insurance.chargeOn;
+  return <section className="form-section">
+    <h3>Datos importados del envío</h3>
+    <p><strong>Estado logístico en All Nutrition:</strong> {stateLabel(shipment.status)}</p>
+    <p className="hint">Información de solo lectura, conservada por fuente. El estado del envío en la plataforma es administrativo: no sustituye el seguimiento ni confirma una entrega o un cobro. Los datos de destinatario observados no modifican por sí solos el pedido.</p>
+    <ImportedData record={shipment} title="Observaciones conservadas por fuente"/>
+    <section>
+      <h4>Seguro de envío</h4>
+      <p className="hint">El valor asegurado / declarado es información; no es el costo del seguro ni un recaudo.</p>
+      <dl>
+        <dt>Costo del seguro</dt><dd>{!insuranceObserved?'Sin observación de costo (opcional)':insuranceKnown?`${formatMoneyMinor(insurance.amountMinor)} COP${insurance.amountMinor===0?' · Sin cargo de seguro':''}`:'Costo no informado'}</dd>
+        <dt>Fecha del cargo del seguro</dt><dd>{insurance?.chargeOn?dateLabel(insurance.chargeOn,false):insuranceObserved?'Fecha no informada':'No informada · costo opcional sin observar'}</dd>
+        <dt>Cobertura del costo</dt><dd>{!insuranceObserved?'No requerido: el costo del seguro no se ha informado.':insuranceComplete?'Completa: importe y fecha conocidos.':insuranceKnown&&!insurance?.chargeOn?'Incompleta: importe conocido, fecha del cargo pendiente.':'Incompleta: costo no informado o pendiente de confirmar.'}</dd>
+      </dl>
+      {insurance&&<p className="muted">Fuente del costo: {sourceLabel(shipment,insurance.sourceId)} · Origen: {insurance.source||'No informado'} · Corte (Bogotá): {dateLabel(insurance.sourceAsOf)}</p>}
+      <p className="hint">Vacío: costo no informado. 0: sin cargo de seguro. Importar el costo no registra un pago. Los pagos y saldos se consultan y gestionan en el flujo financiero.</p>
+    </section>
+  </section>;
+}
 
 // Shared inline controls: a shipment never opens another dialog inside an order.
-export function ShipmentControls({shipment,orderLines=[],siblings=[],onMutate,busy,onInteractionStateChange}){
+export function ShipmentControls({shipment,inventoryOpening=shipment.inventoryOpening,orderLines=[],siblings=[],onMutate,busy,onInteractionStateChange}){
   const [metadata,setMetadata]=useState(()=>metadataDraft(shipment));
   const [event,setEvent]=useState(()=>eventDraft(shipment));
   const [changes,setChanges]=useState({metadata:false,event:false});
@@ -26,17 +57,21 @@ export function ShipmentControls({shipment,orderLines=[],siblings=[],onMutate,bu
   const superseded=new Set((shipment.events||[]).map(item=>item.correctionOf).filter(Boolean));
   useEffect(()=>{onInteractionStateChange?.({dirty:changed,busy:false});},[changed,onInteractionStateChange]);
   useEffect(()=>()=>onInteractionStateChange?.({dirty:false,busy:false}),[onInteractionStateChange]);
+  const eventDay=event.precision==='day'?event.occurredOn:event.precision==='instant'?event.occurredAt.slice(0,10):'';
+  const needsOpeningClassification=!!inventoryOpening&&(!eventDay||eventDay===inventoryOpening.on);
   const setMeta=(key,value)=>{setChanges(old=>({...old,metadata:true}));setMetadata(old=>({...old,[key]:value}));};
   const setFact=(key,value)=>{setChanges(old=>({...old,event:true}));setEvent(old=>({...old,[key]:value}));};
   return <div className={`shipment-controls ${styles.shipmentControls}`}>
+    <ImportedShipmentData shipment={shipment}/>
     <section className="form-section"><h3>Registrar estado y fecha</h3><p className="hint">Un evento registra lo observado; no crea ventas ni cobros. Una fecha desconocida sigue siendo desconocida.</p>
-      <form onSubmit={async e=>{e.preventDefault();if(changes.metadata&&!window.confirm('Hay cambios de guía sin guardar. ¿Descartarlos al guardar el evento?'))return;const saved=await onMutate(`/api/admin/business/shipments/${encodeURIComponent(shipment.id)}/events`,{version:shipment.version,status:event.status,occurredOn:event.precision==='day'?event.occurredOn||null:null,occurredAt:event.precision==='instant'?fromLocal(event.occurredAt):null,sourceAsOf:fromLocal(event.sourceAsOf),reason:event.reason,detail:event.detail,correctionOf:event.correctionOf||null,source:'manual'});if(saved){setChanges({metadata:false,event:false});setMetadata(metadataDraft(shipment));}}}>
+      <form onSubmit={async e=>{e.preventDefault();if(changes.metadata&&!window.confirm('Hay cambios de guía sin guardar. ¿Descartarlos al guardar el evento?'))return;const saved=await onMutate(`/api/admin/business/shipments/${encodeURIComponent(shipment.id)}/events`,{version:shipment.version,status:event.status,occurredOn:event.precision==='day'?event.occurredOn||null:null,occurredAt:event.precision==='instant'?fromLocal(event.occurredAt):null,sourceAsOf:fromLocal(event.sourceAsOf),reason:event.reason,detail:event.detail,correctionOf:event.correctionOf||null,source:'manual',...(needsOpeningClassification&&event.inventoryOpeningIncluded?{inventoryOpeningIncluded:event.inventoryOpeningIncluded==='true'}:{})});if(saved){setChanges({metadata:false,event:false});setMetadata(metadataDraft(shipment));setEvent(eventDraft(shipment));}}}>
         <fieldset className="editor-fieldset" disabled={busy}><div className="product-form-grid">
           <label className="field">Estado observado<select value={event.status} onChange={e=>setFact('status',e.target.value)}>{shipmentStates.map(({value,label})=><option key={value} value={value}>{label}</option>)}</select></label>
           <label className="field">Precisión de la fecha<select value={event.precision} onChange={e=>setFact('precision',e.target.value)}><option value="day">Conozco el día</option><option value="instant">Conozco día y hora</option><option value="unknown">Fecha desconocida</option></select></label>
           {event.precision==='day'&&<label className="field">Fecha real del evento<input required type="date" value={event.occurredOn} onChange={e=>setFact('occurredOn',e.target.value)}/></label>}
           {event.precision==='instant'&&<label className="field">Fecha y hora real (Bogotá)<input required type="datetime-local" value={event.occurredAt} onChange={e=>setFact('occurredAt',e.target.value)}/></label>}
           <label className="field">Corte de esta observación (Bogotá)<input required type="datetime-local" value={event.sourceAsOf} onChange={e=>setFact('sourceAsOf',e.target.value)}/></label>
+          {needsOpeningClassification&&<label className="field">Relación con el conteo físico del {inventoryOpening.on}<select required value={event.inventoryOpeningIncluded||''} onChange={e=>setFact('inventoryOpeningIncluded',e.target.value)}><option value="">Confirma cuándo ocurrió</option><option value="false">Posterior al conteo</option><option value="true">Ya estaba reflejado en el conteo</option></select></label>}
         </div>
         <h4 className={styles.subheading}>Contexto y correcciones</h4>
         <details><summary>Rectificar un evento anterior</summary><label className="field">Hecho que no ocurrió o cuya fecha / estado era incorrecto<select value={event.correctionOf} onChange={e=>setFact('correctionOf',e.target.value)}><option value="">Nuevo hecho, sin rectificación</option>{(shipment.events||[]).filter(item=>!superseded.has(item.id)).map(item=><option key={item.id} value={item.id}>{stateLabel(item.status)} · {item.occurredOn||(item.occurredAt?dateLabel(item.occurredAt):'Fecha desconocida')}</option>)}</select></label></details>
@@ -53,7 +88,7 @@ export function ShipmentControls({shipment,orderLines=[],siblings=[],onMutate,bu
         <label className="field">Notas<textarea maxLength={4000} value={metadata.notes} onChange={e=>setMeta('notes',e.target.value)}/></label><label className="field">Motivo de corrección<input required={locked} maxLength={2000} value={metadata.reason} onChange={e=>setMeta('reason',e.target.value)}/></label><button type="submit" className="button subtle">Guardar guía y notas</button></fieldset>
       </form>
     </details>
-    <details className="form-section"><summary>Historial de eventos ({shipment.events?.length||0})</summary><ol className="history-timeline">{(shipment.events||[]).map(item=><li key={item.id}>{stateLabel(item.status)} · {item.occurredOn|| (item.occurredAt?dateLabel(item.occurredAt):'Fecha desconocida')}{superseded.has(item.id)?' · Rectificado':''}{item.correctionOf?' · Rectificación':''}{item.reason?' · '+item.reason:''}{item.detail?' · '+item.detail:''}<small className="muted">Corte (día): {dateLabel(item.sourceAsOf,false)} · Registrado: {dateLabel(item.recordedAt)}</small></li>)}</ol></details>
+    <details className="form-section"><summary>Historial de eventos ({shipment.events?.length||0})</summary><ol className="history-timeline">{(shipment.events||[]).map(item=><li key={item.id}>{stateLabel(item.status)} · {item.occurredOn?dateLabel(item.occurredOn,false):(item.occurredAt?dateLabel(item.occurredAt):'Fecha desconocida')}{superseded.has(item.id)?' · Rectificado':''}{item.correctionOf?' · Rectificación':''}{item.reason?' · '+item.reason:''}{item.detail?' · '+item.detail:''}{item.rawStatus&&<p style={{whiteSpace:'pre-wrap'}}><strong>Estado de entrega / seguimiento en el origen:</strong> {item.rawStatus}</p>}<small className="muted">Corte (día): {dateLabel(item.sourceAsOf,false)} · Registrado: {dateLabel(item.recordedAt)}</small></li>)}</ol></details>
   </div>;
 }
 
@@ -86,7 +121,7 @@ function ShipmentDialog({id,api,onClose,onOpenOrder,onMutation,onInteractionStat
   const otherObservation=shipment?.sourceAsOf&&(!fileCut||Date.parse(fileCut.sourceAsOf)!==Date.parse(shipment.sourceAsOf));
   return <dialog ref={dialog} className={`editor-drawer ${styles.editor}`} aria-labelledby="shipment-title"><header><div><p className="eyebrow">Envíos · Seguimiento y vinculación</p><h2 id="shipment-title" data-dialog-initial-focus tabIndex={-1}>{shipment?.tracking||'Detalle del envío'}</h2></div><button className="icon-button" type="button" aria-label="Cerrar envío" disabled={working} onClick={close}><Icon name="close"/></button></header><div className="drawer-body">
     {error&&<div role="alert" className="error" ref={errorRef} tabIndex={-1}>{error}<button className="button subtle" type="button" disabled={working} onClick={retryRead}>Reintentar lectura</button></div>}{notice&&<p role="status">{notice}</p>}{loading&&<p role="status">{shipment?'Actualizando; se muestran datos anteriores.':'Cargando envío…'}</p>}
-    {shipment&&<><section className={styles.observation} aria-label="Estado y origen del envío"><p className={styles.sectionLabel}>Último estado observado</p><p><strong>{stateLabel(shipment.status)}</strong> · {shipment.carrier||'Sin transportadora'} · {shipment.platformName||'Origen manual / histórico'}{shipment.sourceName?' / '+shipment.sourceName:''}</p>
+    {shipment&&<><section className={styles.observation} aria-label="Origen del envío"><p className={styles.sectionLabel}>Origen del envío</p><p>{shipment.carrier||'Sin transportadora'} · {shipment.platformName||'Origen manual / histórico'}{shipment.sourceName?' / '+shipment.sourceName:''}</p>
     <p>Corte del archivo de esta cuenta: {fileCut?(fileCut.precision==='day'?`${fileCut.value} · Sin hora informada`:dateLabel(fileCut.value)):'Sin corte de archivo verificable'}</p></section>
     {otherObservation&&<p>Observación más reciente (día): {dateLabel(shipment.sourceAsOf,false)}</p>}
     <div className="admin-actions">{shipment.orderId?<button type="button" className="button subtle" disabled={working} onClick={openOrder}>Abrir {orderNumber(shipment.orderNumber)}</button>:!linking&&<button className="button primary" type="button" disabled={working} onClick={startLink}>Vincular pedido conocido</button>}</div>

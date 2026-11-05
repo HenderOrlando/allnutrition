@@ -10,7 +10,7 @@ export async function GET(request,{params}) { try {
   return json({records:await listResources(store,resource,query)});
 } catch(error){return errorResponse(error);} }
 export async function POST(request,{params}) { try {
-  const user=await authorize(request,{write:true}),{resource}=await params,input=await jsonBody(request);
+  const user=await authorize(request,{write:true}),{resource}=await params,input=await jsonBody(request,resource==='profiles'?{maxBytes:2*1024*1024}:undefined);
   return json(await (resource==='accounts'?saveAccount(await db(),input,user.user.id):saveResource(await db(),resource,input,user.user.id)),201);
 } catch(error){return errorResponse(error);} }
 export async function PUT(request,{params}) { try {

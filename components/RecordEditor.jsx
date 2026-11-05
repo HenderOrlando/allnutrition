@@ -23,7 +23,7 @@ const publicationHelp={
 };
 const contentSections={
  combos:[
-  {key:'basics',title:'Datos de la oferta',description:'Define el nombre y el precio final del combo. El precio no se calcula a partir de sus productos.',fields:['title','description','price']},
+  {key:'basics',title:'Datos de la oferta',description:'Define el nombre, el precio final y si estará disponible para pedidos privados. El precio no se calcula a partir de sus productos.',fields:['title','description','price','orderable']},
   {key:'components',title:'Productos del combo',description:'Añade cada referencia una sola vez e indica cuántas unidades incluye. Las existencias del combo dependen de estos componentes.',fields:['items'],singleColumn:true},
   {key:'presentation',title:'Imagen y condiciones',description:'Usa una imagen pública e indica los límites o condiciones confirmadas de la oferta.',fields:['image','conditions'],singleColumn:true},
   {key:'publication',title:'Organización y publicación',description:'Asigna catálogos, revisa la dirección corta y elige la visibilidad del combo.',fields:['slug','status','sort','catalogIds']}
@@ -59,7 +59,7 @@ const fieldHelp={
 export default function RecordEditor({kind,record,all,api,onClose,onSaved,onReload,onInteractionStateChange}){
  const schema=schemas[kind];
  const configurationContent=['faqs','messages','shipping'].includes(kind);
- const [initialForm]=useState(()=>({...emptyRecord(kind),...record}));
+ const [initialForm]=useState(()=>({...emptyRecord(kind),...record,...(['products','combos'].includes(kind)&&record.id&&record.orderable==null?{orderable:kind==='products'&&record.productType==='gift'||record.status==='published'}:{})}));
  const [form,setForm]=useState(initialForm),[busy,setBusy]=useState(false),[uploadingImage,setUploadingImage]=useState(false),[error,setError]=useState(null);
  const [invalidCostDraft,setInvalidCostDraft]=useState(false);
  const initialSnapshot=useMemo(()=>JSON.stringify(initialForm),[initialForm]);
@@ -77,7 +77,7 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
  const change=(field,value)=>setForm(old=>({...old,[field]:value,
   ...(field==='title'&&!record.id&&(!old.slug||old.slug===slugify(old.title))?{slug:slugify(value)}:{}),
   ...(kind==='products'&&field==='productType'?(value==='gift'?{unitCostMinor:null,costEffectiveOn:null,...(!record.id?{orderable:true}:{})}:{items:[],...(!record.id?{orderable:old.status==='published'}:{})}):{}),
-  ...(kind==='products'&&field==='status'&&value==='published'&&!record.id&&(old.productType||'product')==='product'?{orderable:true}:{})
+  ...(field==='status'&&value==='published'&&!record.id&&(kind==='combos'||kind==='products'&&(old.productType||'product')==='product')?{orderable:true}:{})
  }));
  function goToSection(key){
   setActiveSection(key);
@@ -165,7 +165,7 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
    {fieldByName.has('price')&&<div><dt>Precio</dt><dd>{validPrice?money(form.price):'Precio sin definir'}{isGift&&form.price===0?' · Obsequio sin cobro':''}</dd></div>}
    {kind==='products'&&!isGift&&<><div><dt>Existencias físicas</dt><dd>{form.stockQuantity??'Sin contar'}</dd></div><div><dt>Reservadas en pedidos</dt><dd>{record.stockReserved||0}</dd></div></>}
    {['products','combos'].includes(kind)&&<div><dt>{kind==='combos'||isGift?'Posibles con sus componentes':'Disponibles para nuevos pedidos'}</dt><dd>{availableUnits??'Existencias sin contar'}</dd></div>}
-   {kind==='products'&&<div><dt>Uso en pedidos</dt><dd>{form.orderable?'Habilitado (sujeto a disponibilidad)':'No habilitado'}{isGift&&form.status!=='published'?' · Obsequio privado':''}</dd></div>}
+   {['products','combos'].includes(kind)&&<div><dt>Uso en pedidos</dt><dd>{form.orderable?'Habilitado (sujeto a disponibilidad)':'No habilitado'}{form.status!=='published'&&(kind==='combos'||isGift)?` · ${kind==='combos'?'Combo':'Obsequio'} privado`:''}</dd></div>}
    {(kind==='combos'||isGift)&&<div><dt>Componentes</dt><dd>{form.items?.length?<ul>{form.items.map((item,index)=><li key={index}>{item.quantity} × {componentProducts.find(product=>product.id===item.productId)?.title||'Referencia sin seleccionar'}</li>)}</ul>:'Sin productos incluidos'}</dd></div>}
    <div><dt>Publicación</dt><dd>{publication}</dd></div>
   </dl>
@@ -209,6 +209,7 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
          </div>
          {section.key==='inventory'&&<>{isGift?<p className="hint">Este obsequio no tiene existencias propias: utiliza las unidades de sus componentes. Posibles ahora: {availableUnits??'por contar'}.</p>:<><p className="hint">Reservadas: {record.stockReserved||0} · Disponibles para nuevos pedidos: {availableUnits??'sin contar'}. El conteo físico debe incluir las unidades reservadas.</p>{form.stockQuantity==null&&<p className="hint">Sin un conteo no se pueden reservar ni despachar nuevas unidades de esta referencia.</p>}</>}<p className="small muted">El conteo queda auditado. Registrar existencias no crea compras, gastos ni movimientos de caja. Las reservas se confirman al guardar el pedido, no al seleccionar productos.</p></>}
          {kind==='combos'&&section.key==='components'&&componentCost}
+         {kind==='combos'&&section.key==='basics'&&<p className="hint">Disponible para pedidos no significa publicado: puedes usar un combo en borrador sin imagen con productos normales privados habilitados para pedidos. Necesita componentes válidos y un precio mayor que cero; sus existencias se reservan por componente. Publicarlo requiere que los componentes estén publicados.</p>}
          {section.key==='publication'&&<p className="hint">La visibilidad elegida se aplica al guardar. «Publicado» solo aparece en la vitrina si su publicación global está habilitada.</p>}
         </section>)}
         <details className={styles.help}>

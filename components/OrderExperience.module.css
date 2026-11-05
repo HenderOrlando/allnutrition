@@ -11,7 +11,6 @@
 .editor :global(.drawer-body),
 .editor fieldset,
 .wizard fieldset,
-.columnGrid > *,
 .taskHeading > div {
   min-width: 0;
 }
@@ -74,6 +73,12 @@
 .observation p:last-child,
 .stepGuide p:last-child {
   margin-bottom: 0;
+}
+
+.observation :is(header, dl, dd) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .sectionLabel {
@@ -240,12 +245,6 @@
   cursor: pointer;
 }
 
-.columnGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
 
 .wizard details {
   min-width: 0;
@@ -321,4 +320,439 @@
     flex: 1 1 160px;
     max-width: 100%;
   }
+}
+
+.importMapping {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.importMappingSummary,
+.importMappingToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  margin: 16px 0;
+}
+
+.importMappingSummary > * {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--admin-lilac);
+}
+
+.importMappingToolbar > :global(.field) {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
+.importMappingToolbar > :global(.button) {
+  align-self: flex-end;
+}
+
+.importMappingProblems,
+.importMappingNotice {
+  padding: 12px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  margin-block: 12px;
+  background: var(--admin-paper);
+  font-size: 14px;
+}
+
+.importMappingProblems {
+  border-color: var(--admin-accent);
+  background: var(--admin-apricot);
+  color: var(--admin-ink);
+}
+
+.importMappingProblems p,
+.importMappingNotice p {
+  margin: 8px 0;
+}
+
+.importMappingHead,
+.importMappingRow {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 20px;
+  padding: 16px;
+}
+
+.importMappingHead {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--admin-muted);
+}
+
+.importMappingRows {
+  display: grid;
+  gap: 12px;
+}
+
+.importMappingRow {
+  border: 1px solid var(--admin-line);
+  border-radius: 16px;
+  background: var(--admin-surface);
+}
+
+.importMappingRow[data-import-column-problem] {
+  border-color: var(--admin-accent);
+}
+
+.importMappingRow > *,
+.importMappingTrigger > span,
+.importDestinationDialog > *,
+.importDestinationFilters > * {
+  min-width: 0;
+}
+
+.importMappingSource h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--admin-muted);
+}
+
+.importMappingSource > strong {
+  display: block;
+}
+
+.importMappingSample {
+  margin-bottom: 12px;
+}
+
+.importMappingSample p,
+.importMappingSample summary {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.importMappingSample small,
+.importMappingMetadata {
+  font-size: 13px;
+  color: var(--admin-muted);
+}
+
+.importMappingSample summary,
+.importMappingInsurance > summary {
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.importMappingZoneLabel {
+  display: none;
+}
+
+.importMapping .importMappingTrigger {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  white-space: normal;
+}
+
+.importMappingTrigger small {
+  display: block;
+  margin-top: 4px;
+}
+
+.importMappingTrigger svg {
+  flex-shrink: 0;
+  transform: rotate(90deg);
+}
+
+.importMappingIssueList {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  color: var(--admin-accent);
+  font-size: 14px;
+}
+
+.importMappingInsurance {
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  margin-block: 20px;
+}
+
+.importMappingInsurance dt {
+  font-weight: 700;
+}
+
+.importMappingInsurance dd {
+  margin: 4px 0 16px;
+}
+
+.importMapping :is(button, input, select),
+.importDestinationDialog :is(button, input, select) {
+  min-height: 44px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.importMapping button,
+.importDestinationDialog button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.importDestinationDialog {
+  width: min(820px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--admin-line);
+  border-radius: 20px;
+  background: var(--admin-surface);
+  color: var(--admin-ink);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.importDestinationDialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.importDestinationDialog > header,
+.importDestinationDialog > footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  flex-shrink: 0;
+}
+
+.importDestinationDialog > header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--admin-line);
+}
+
+.importDestinationDialog > header h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+.importDestinationDialog > header button {
+  flex-shrink: 0;
+  min-width: 44px;
+}
+
+.importDestinationDialog > footer {
+  flex-wrap: wrap;
+  border-top: 1px solid var(--admin-line);
+}
+
+.importDestinationBody {
+  padding: 20px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.importDestinationFilters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.importDestinationFilters > :global(.field) {
+  margin-bottom: 12px;
+}
+
+.importDestinationPinned {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-paper);
+}
+
+.importAdditionalEditor {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+.importDestinationResults > section {
+  margin-block: 24px;
+}
+
+.importDestinationResults h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.importDestinationDialog .importDestinationOption {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  margin: 8px 0;
+  padding: 14px;
+  border: 1px solid var(--admin-control-border);
+  border-radius: 12px;
+  background: var(--admin-surface);
+  color: var(--admin-ink);
+  text-align: left;
+  font: inherit;
+}
+
+.importDestinationOption > span,
+.importDestinationOption > small {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.importDestinationDialog .importDestinationOption:disabled {
+  opacity: 1;
+  color: var(--admin-muted);
+  border-style: dashed;
+  background: var(--admin-paper);
+}
+
+@media (max-width: 767px) {
+  .importMappingHead {
+    display: none;
+  }
+
+  .importMappingRow,
+  .importDestinationFilters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .importMappingZoneLabel {
+    display: block;
+    margin-bottom: 12px;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .importMappingToolbar > :global(.button),
+  .importDestinationPinned > button {
+    width: 100%;
+  }
+
+  .importDestinationDialog > header,
+  .importDestinationDialog > footer,
+  .importDestinationBody {
+    padding: 16px;
+  }
+
+  .importDestinationDialog > footer > button {
+    flex: 1 1 140px;
+  }
+}
+
+.importMappingSamples,
+.importMappingDestination {
+  min-width: 0;
+}
+
+.sheetCatalog,
+.reviewEffects {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  margin-block: 24px;
+}
+
+.sheetGrid,
+.inventoryEffects {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
+.sheetCard,
+.inventoryEffect,
+.expenseReview,
+.importProposal {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-paper);
+  overflow-wrap: anywhere;
+}
+
+.sheetCard[data-active='true'] {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.sheetCard > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sheetCard h4,
+.inventoryEffect h5,
+.expenseReview h6 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.sheetCard dl,
+.inventoryEffect dl,
+.expenseReview dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px 16px;
+}
+
+.sheetCard :is(dt, dd),
+.inventoryEffect :is(dt, dd),
+.expenseReview :is(dt, dd) {
+  min-width: 0;
+  margin: 0;
+}
+
+.sheetCard dt,
+.inventoryEffect dt,
+.expenseReview dt {
+  color: var(--admin-muted);
+}
+
+.sheetCard :global(.button),
+.importProposal :global(.button) {
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
+}
+
+.sheetSample {
+  margin-block: 12px;
+}
+
+.sheetSample p {
+  white-space: pre-wrap;
+}
+
+.expenseReview {
+  margin-block: 16px;
+}
+
+.resultsTable {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.resultsTable table {
+  min-width: 640px;
 }

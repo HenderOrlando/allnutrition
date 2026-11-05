@@ -6,6 +6,7 @@ import Icon from './Icons';
 import { bogotaDate } from '@/lib/business/dates.mjs';
 import { formatMoneyMinor, MAX_MONEY_MINOR } from '@/lib/business/money.mjs';
 import styles from './FinanceExperience.module.css';
+import OrderLineCosts from './OrderLineCosts';
 
 const titles={collection:'Registrar cobro',refund:'Registrar reembolso',return:'Registrar devolución','complete-costs':'Completar o corregir costos','resolve-legacy-payment':'Conciliar pago histórico',expense:'Registrar gasto','expense-recovery':'Recuperar sobrepago','pay-expense':'Pagar gasto',income:'Registrar ingreso',advance:'Registrar anticipo',transfer:'Transferir','cash-close':'Cerrar caja','cash-reopen':'Reabrir cierre','cash-reverse':'Revertir movimiento','document-reverse':'Revertir documento','settlement-save':'Registrar liquidación','settlement-confirm':'Confirmar recepción','payroll-prepare':'Preparar sueldo','payroll-confirm':'Confirmar sueldo','payroll-pay':'Pagar sueldo','link-shipment':'Vincular pedido'};
 titles['account-save']='Configurar cuenta';
@@ -30,6 +31,7 @@ function initial(action,context){
     expenseId:expense?.id,settlementId:settlement?.id,payrollId:payroll?.id,personId:payroll?.personId||expense?.personId||null,startOn:payroll?.startOn||today.slice(0,8)+'01',endOnExclusive:payroll?.endOnExclusive||'',
     closingId:closing?.id,cashEntryId:entry?.id,documentId:context.documentId||entry?.sourceId||'',documentType:context.documentType||'collection',
     fromAccountId:account?.id||null,toAccountId:null,countedMinor:null,shippingCreditMinor:0,mode:'opening_balance',
+    inventoryOpeningIncluded:'',
     lines:action==='settlement-confirm'?remainingSettlement(settlement):action==='settlement-save'?(settlement?.lines||[]):action==='return'?(order?.items||[]).map(l=>({lineId:l.lineId,quantity:0,condition:'recoverable'})):[],
     assignments:(order?.items||[]).map(l=>({lineId:l.lineId,quantity:order?.shipments?.length?0:l.quantity})),
     lineCosts:(order?.items||[]).map(l=>({lineId:l.lineId,selected:l.unitCostMinor==null,unitCostMinor:l.unitCostMinor,components:l.components?.map(c=>({productId:c.productId,unitCostMinor:c.unitCostMinor}))||[]})),
@@ -106,6 +108,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
     const out={...Object.fromEntries(fields.filter(key=>form[key]!==undefined).map(key=>[key,form[key]])),requestId:requestId.current};
     for(const key of ['accountId','shipmentId','personId','expenseId','settlementId','payrollId','externalKey'])if(out[key]==null||out[key]==='')delete out[key];
     if(action==='return')out.lines=form.lines.filter(l=>l.quantity>0);
+    if(action==='return'&&context.order?.inventoryOpening&&(!form.occurredOn||form.occurredOn===context.order.inventoryOpening.on)&&form.inventoryOpeningIncluded!=='')out.inventoryOpeningIncluded=form.inventoryOpeningIncluded==='true';
     if(action==='link-shipment')out.assignments=form.assignments.filter(l=>l.quantity>0);
     if(action==='complete-costs')out.lineCosts=form.lineCosts.filter(l=>l.selected).map(({selected,...line})=>line);
     if(action==='settlement-confirm')out.lines=form.lines.filter(l=>l.grossMinor!==0||l.deductions.some(d=>d.amountMinor!==0));
@@ -165,12 +168,13 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       </>}
       {action==='return'&&<>
         {input('occurredOn','Fecha de devolución',{required:true,type:'date'})}{reason()}
+        {order?.inventoryOpening&&(!form.occurredOn||form.occurredOn===order.inventoryOpening.on)&&<label className="field">Relación con el conteo físico del {order.inventoryOpening.on}<select required value={form.inventoryOpeningIncluded} onChange={e=>set('inventoryOpeningIncluded',e.target.value)}><option value="">Confirma cuándo ocurrió</option><option value="false">Posterior al conteo</option><option value="true">Ya estaba reflejado en el conteo</option></select></label>}
         {(order?.items||[]).map(line=>{const item=form.lines.find(l=>l.lineId===line.lineId);return <section className="form-section" key={line.lineId}><h4>{line.title}</h4><p>Comprado: {line.quantity}. El servidor calcula el crédito acumulado y evita devolver dos veces las unidades.</p><div className="product-form-grid"><label className="field">Cantidad a devolver<input type="number" min={0} max={line.quantity} step={1} value={item.quantity} onChange={e=>set('lines',form.lines.map(l=>l.lineId===line.lineId?{...l,quantity:Number(e.target.value)}:l))}/></label><label className="field">Condición<select value={item.condition} onChange={e=>set('lines',form.lines.map(l=>l.lineId===line.lineId?{...l,condition:e.target.value}:l))}><option value="recoverable">Mercancía recuperable</option><option value="non_recoverable">No recuperable</option></select></label></div></section>;})}
         {amount('shippingCreditMinor','Flete cobrado que se acredita (COP)')}<p className="hint">La devolución comercial no mueve caja. Registra el reembolso por separado cuando ocurra.</p>
       </>}
       {action==='complete-costs'&&<>
         {reason()}<p className="hint">Corrige snapshots históricos, recuperaciones y pérdidas vinculadas. No cambia el precio, las ventas ni la caja.</p>
-        {form.lineCosts.map((line,index)=><section className="form-section" key={line.lineId}><label className="checkbox-field"><input type="checkbox" checked={line.selected} onChange={e=>set('lineCosts',form.lineCosts.map((l,i)=>i===index?{...l,selected:e.target.checked}:l))}/>{order.items.find(l=>l.lineId===line.lineId)?.title}</label>{line.selected&&(line.components.length?line.components.map((component,j)=>amount('component-'+index+'-'+j,order.items[index].components[j].title,component.unitCostMinor,value=>set('lineCosts',form.lineCosts.map((l,i)=>i===index?{...l,components:l.components.map((c,k)=>k===j?{...c,unitCostMinor:value}:c)}:l)))):amount('cost-'+index,'Costo unitario histórico (COP)',line.unitCostMinor,value=>set('lineCosts',form.lineCosts.map((l,i)=>i===index?{...l,unitCostMinor:value}:l))))}</section>)}
+        <OrderLineCosts items={order.items} value={form.lineCosts} onChange={value=>set('lineCosts',value)} renderAmount={amount}/>
       </>}
       {action==='resolve-legacy-payment'&&<>
         <p className="hint">Conserva la historia sin inventar un depósito por el antiguo estado Pagado. Elige una sola alternativa.</p>
@@ -179,7 +183,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         {order?.legacyFinancialReview?.reason==='ambiguous_refund'&&<div className="product-form-grid">{amount('receiptAmountMinor','Cobro histórico comprobado (COP)')}{amount('refundAmountMinor','Reembolso histórico comprobado (COP)')}{input('receiptOn','Fecha del cobro histórico',{required:true,type:'date'})}{input('refundOn','Fecha del reembolso histórico',{required:true,type:'date'})}</div>}
       </>}
       {['expense','pay-expense','expense-recovery','income','advance','transfer'].includes(action)&&<>
-        {action==='expense'&&<fieldset className={styles.fieldGroup}><legend>Datos del gasto</legend><div className="product-form-grid">{select('category','Categoría',[['other','Otro gasto'],['shipping_out','Flete de ida'],['shipping_return','Flete de retorno'],['platform_fee','Cargo de plataforma']])}{input('concept','Concepto',{required:true})}{input('supplier','Proveedor (opcional)')}{<>{input('incurredOn','Fecha del gasto',{type:'date',nullable:true})}{Boolean(order?.shipments?.length)&&select('shipmentId','Envío vinculado',order.shipments.map(s=>[s.id,s.tracking||'Entrega local']),{required:false})}</>}</div></fieldset>}
+        {action==='expense'&&<fieldset className={styles.fieldGroup}><legend>Datos del gasto</legend><div className="product-form-grid">{select('category','Categoría',[['advertising','Publicidad'],['operating','Operación'],['other','Otro gasto'],['shipping_out','Flete de ida'],['shipping_return','Flete de retorno'],['shipping_insurance','Seguro de envío'],['platform_fee','Cargo de plataforma']])}{input('concept','Concepto',{required:true})}{input('supplier','Proveedor (opcional)')}{<>{input('incurredOn','Fecha del gasto',{type:'date',nullable:true})}{Boolean(order?.shipments?.length)&&select('shipmentId','Envío vinculado',order.shipments.map(s=>[s.id,s.tracking||'Entrega local']),{required:false})}</>}</div></fieldset>}
         {action==='expense'&&context.expense?.id&&<>{reason()}<p>La corrección conserva pagos anteriores; un sobrepago queda como crédito para recuperar, no como ingreso ficticio.</p></>}
         {action==='expense'&&!context.expense?.id&&<details><summary>Responsable opcional del gasto</summary>{personSelect(false)}</details>}
         {action==='income'&&<>{select('concept','Concepto',[['owner_funding','Aporte del propietario'],['other_non_sale','Otro ingreso no ligado a venta']])}{input('description','Descripción',{required:true})}<p className="hint">Este ingreso aumenta caja, nunca ventas.</p></>}

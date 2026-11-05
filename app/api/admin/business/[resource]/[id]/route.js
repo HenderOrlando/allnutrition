@@ -9,6 +9,6 @@ export async function GET(request,{params}) { try {
 } catch(error){return errorResponse(error);} }
 export async function PUT(request,{params}) { try {
   const user=await authorize(request,{write:true}),{resource,id}=await params;
-  const input=await jsonBody(request),store=await db();
+  const input=await jsonBody(request,resource==='profiles'?{maxBytes:2*1024*1024}:undefined),store=await db();
   return json(await (resource==='accounts'?saveAccount(store,input,user.user.id,id):saveResource(store,resource,input,user.user.id,id)));
 } catch(error){return errorResponse(error);} }
