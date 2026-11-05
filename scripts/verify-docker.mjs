@@ -215,8 +215,8 @@ try {
   for (const key of Object.keys(values)) delete dockerEnv[key];
   composeArgs = ['compose', '-p', project, '--env-file', generated.envFile, '-f', 'compose.yaml', '-f', 'compose.staging.yaml'];
   compose(['config', '--quiet'], 'Validación privada de Compose');
-  // Native FFmpeg/Chromium installation exceeded the former 10-minute build limit during dpkg.
-  compose(['build', 'web', 'checks'], 'Build de runtime y checks Node24', { timeout: 1800000 });
+  // A cold native toolchain exceeded 30 minutes; source edits now preserve its Docker cache.
+  compose(['build', 'web', 'checks'], 'Build de runtime y checks Node24', { timeout: 5400000 });
   const image = inspectImage(values.APP_IMAGE);
   result.imageId = image.Id;
   result.architecture = image.Architecture;
