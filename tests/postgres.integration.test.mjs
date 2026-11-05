@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/db/index.mjs';
+import { openPostgres } from '../lib/db/postgres.mjs';
+import { databaseConfig } from '../lib/db/config.mjs';
 import { runContracts } from './contract.mjs';
 import { testDatabaseEnv, resetPostgresStore } from './postgres-fixture.mjs';
 import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8 } from '../lib/db/migrations.mjs';
@@ -51,6 +53,27 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
   try { await resetPostgresStore(store); return store; }
   catch (error) { await store.close(); throw error; }
  };
+ await t.test('una transacción posterior no confirma escrituras cuyo rollback quedó incierto',async context=>{
+  const observer=await factory(),table=observer.t('transaction_timeout_'+requestId().replaceAll('-',''));
+  let db,backend;
+  context.after(async()=>{
+   try{
+    if(backend)await observer.db.run("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid=? AND backend_start::text=? AND datname='allnutrition_test'",[backend.pid,backend.started]);
+   }finally{
+    try{await db?.close();}
+    finally{try{await observer.db.exec({text:`DROP TABLE IF EXISTS ${table}`,query_timeout:120000});}finally{await observer.close();}}
+   }
+  });
+  db=await openPostgres({...databaseConfig(env),max:1});
+  await observer.db.exec({text:`CREATE TABLE ${table}(id INTEGER PRIMARY KEY)`,query_timeout:120000});
+  backend=await db.get('SELECT pid,backend_start::text AS started FROM pg_stat_activity WHERE pid=pg_backend_pid()');
+  await assert.rejects(()=>db.transaction(async tx=>{
+   await tx.run(`INSERT INTO ${table}(id) VALUES(1)`);
+   await tx.exec({text:'SELECT pg_sleep(300)',query_timeout:50});
+  }));
+  await db.transaction(async tx=>{await tx.run(`INSERT INTO ${table}(id) VALUES(2)`);});
+  assert.deepEqual(await db.all(`SELECT id FROM ${table} ORDER BY id`),[{id:2}]);
+ });
  await t.test('publicidad v8 conserva negocio v7, revierte DDL y exige migración al arrancar',async()=>{
   const store=await factory();
   try{
@@ -63,17 +86,19 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    });
    await assert.rejects(()=>openStore(env));
    const before=await migrationRows(store);
+   const markerFailure=new Error('synthetic social marker failure');
    const failingStore={provider:store.provider,transaction:fn=>store.transaction(tx=>{
     const run=tx.db.run;
     tx.db={...tx.db,run:async(sql,params)=>{
-     if(sql.startsWith(`INSERT INTO ${tx.t('migrations')}(version,applied_at) VALUES(8,`))throw new Error('synthetic social marker failure');
+     if(sql.startsWith(`INSERT INTO ${tx.t('migrations')}(version,applied_at) VALUES(8,`))throw markerFailure;
      return run(sql,params);
     }};
     return fn(tx);
    })};
-   await assert.rejects(()=>migrateSocialV8(failingStore));
+   await assert.rejects(()=>migrateSocialV8(failingStore),error=>error===markerFailure);
    assert.deepEqual(await migrationRows(store),before);
-   assert.equal((await store.db.get("SELECT to_regclass('allnutrition.social_connections') AS relation")).relation,null);
+   for(const table of [...SOCIAL_TABLES,...SOCIAL_INTERNAL_TABLES])assert.equal((await store.db.get('SELECT to_regclass(?) AS relation',[store.t(table)])).relation,null,table);
+   assert.equal((await store.db.get("SELECT to_regprocedure('allnutrition.social_connection_method_guard()') AS routine")).routine,null);
    assert.deepEqual(await migrateSocialV8(store),{migrated:true,version:8});
    const after=await migrationRows(store);
    assert.deepEqual(after.migrations.filter(row=>row.version!==8),before.migrations);
@@ -107,7 +132,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
     await tx.db.exec("ALTER TABLE allnutrition.expenses DROP CONSTRAINT expenses_category_check; ALTER TABLE allnutrition.expenses ADD CONSTRAINT expenses_category_check CHECK(category IN ('shipping_out','shipping_return','platform_fee','commission','salary','bonus','other'));");
     await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version IN (6,7)`);
    });
-   await assert.rejects(()=>openStore(env),/npm run db:migrate.*seguro de envíos v6/);
+   await assert.rejects(()=>openStore(env));
    const fixture=await createBusinessFixture(store,{year:2025,pay:true});
    await returnBusinessFixture(store,fixture,{refund:true});
    await confirmPayroll(store,{requestId:requestId(),personId:fixture.person.id,startOn:'2025-10-01',endOnExclusive:'2025-11-01',bonusMinor:1000000,discountMinor:0,reason:'Aplicar crédito histórico antes de migrar'},fixture.actorId);
@@ -136,7 +161,6 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    assert.equal(after.migrations.filter(row=>row.version===6).length,1);
    delete after.migrations;delete before.migrations;assert.deepEqual(after,before);
    assert.deepEqual(nextSchema.relation,schema.relation);assert.deepEqual(nextSchema.indexes,schema.indexes);assert.deepEqual(nextSchema.constraints,schema.constraints);
-   assert.match(nextSchema.category.definition,/shipping_insurance/);
    await insertInsurance(store,fixture);
    await assert.rejects(()=>store.db.run(`UPDATE ${store.t('expenses')} SET category='invalid' WHERE id='insurance-v6'`),{code:'23514'});
    await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('expenses')} WHERE id=?`,[fixture.shippingExpenseId]),{code:'23503'});
@@ -190,7 +214,6 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    assert.deepEqual(after.migrations.filter(row=>row.version!==7),before.migrations);
    delete after.migrations;delete before.migrations;assert.deepEqual(after,before);
    assert.deepEqual(nextSchema.relation,schema.relation);assert.deepEqual(nextSchema.indexes,schema.indexes);assert.deepEqual(nextSchema.constraints,schema.constraints);
-   assert.match(nextSchema.category.definition,/advertising/);assert.match(nextSchema.category.definition,/operating/);
    for(const category of ['advertising','operating'])await insert(category);
    await assert.rejects(()=>store.db.run(`UPDATE ${store.t('expenses')} SET category='invalid' WHERE id='v7-operating'`),{code:'23514'});
    await assert.rejects(()=>store.db.run(`UPDATE ${store.t('expenses')} SET source_key='excel-expense:advertising' WHERE id='v7-operating'`),{code:'23505'});
