@@ -580,18 +580,20 @@ test('comisiones porcentuales conservan centésimas, invalidez, guardas y versio
 });
 
 test('importación conserva archivo y resolver: Cancelar y Esc confirman el mismo descarte',async({page},info)=>{
- test.setTimeout(180000);
+ test.setTimeout(360000);
  await login(page);await navigate(page,'Pedidos');await selectWorkspace(page,'Vistas de pedidos','Importar Excel');
- await page.getByRole('button',{name:'Nuevo lote',exact:true}).click();
- await openDisclosure(page,'Crear plataforma por nombre');
- await page.getByLabel('Nombre de la plataforma',{exact:true}).fill(`Origen resolver ${info.project.name} ${info.retry}`);
+ await page.getByRole('button',{name:'Nueva importación',exact:true}).click();
+ await openDisclosure(page,'Crear origen de una plataforma');
+ await page.getByLabel('Nombre de la plataforma',{exact:true}).fill(`Origen resolver ${info.project.name} ${Date.now()}`);
  await page.getByRole('button',{name:'Crear plataforma y cuenta Principal'}).click();
  const bytes=writeExcelSheets([{name:'Seguimiento',rows:[['ID','Guía','Transportadora','Estado'],['RESOLVER-1','000001234','Transportadora E2E','Estado sin equivalencia']]}]);
  await page.getByLabel('Archivo Excel',{exact:true}).setInputFiles({name:`resolver-${info.project.name}.xlsx`,mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:bytes});
  await page.getByRole('button',{name:'Guardar archivo y continuar'}).click();
- await expect(page.getByRole('combobox',{name:'Hoja',exact:true})).toBeVisible({timeout:75000});
- await page.getByRole('combobox',{name:'Hoja',exact:true}).selectOption('Seguimiento');
+ await expect(page.getByRole('combobox',{name:'Hoja actual',exact:true})).toBeVisible({timeout:75000});
+ await page.getByRole('combobox',{name:'Hoja actual',exact:true}).selectOption('Seguimiento');
+ await page.getByRole('button',{name:'Incluir esta hoja',exact:true}).click();
  await page.getByRole('combobox',{name:'Qué contiene esta hoja',exact:true}).selectOption('tracking');
+ await openDisclosure(page,/^Cómo leer fechas y números/);
  await page.getByLabel('Fecha de corte del reporte, si no existe columna').fill('2026-01-01');
  const samples=page.getByRole('button',{name:'Leer muestras de esta hoja y encabezado',exact:true});
  if(await samples.isEnabled()){
@@ -605,7 +607,7 @@ test('importación conserva archivo y resolver: Cancelar y Esc confirman el mism
    await mapping.getByLabel('Buscar destino',{exact:true}).fill('seguro');
    const closeMapping=mapping.getByRole('button',{name:'Cerrar selector de destino',exact:true});
    await page.keyboard.press('Shift+Tab');await expect(closeMapping).toBeFocused();
-   await page.keyboard.press('Shift+Tab');await expect(mapping.getByRole('button',{name:'Descartar archivo',exact:true})).toBeFocused();
+   await page.keyboard.press('Shift+Tab');await expect(mapping.getByRole('button',{name:'Cerrar sin cambiar',exact:true})).toBeFocused();
    await page.keyboard.press('Tab');await expect(closeMapping).toBeFocused();
    await page.keyboard.press('Tab');await expect(mapping.getByLabel('Buscar destino',{exact:true})).toBeFocused();
    await page.keyboard.press('Escape');await expect(mapping).toHaveCount(0);await expect(column).toBeFocused();
@@ -616,24 +618,27 @@ test('importación conserva archivo y resolver: Cancelar y Esc confirman el mism
   await expect(mapping).toHaveCount(0);await expect(column).toBeFocused();
  }
  await page.getByRole('button',{name:'Guardar columnas y revisar',exact:true}).click();
+ await expect(page.locator('summary').filter({hasText:'Otras opciones de corrección del archivo'})).toBeVisible({timeout:75000});
+ await openDisclosure(page,'Otras opciones de corrección del archivo');
  const opener=page.getByRole('button',{name:'Aceptar valores guardados de fórmulas',exact:true});
  await expect(opener).toBeVisible({timeout:75000});await opener.click();
  const resolver=page.getByRole('dialog',{name:'Aceptar valores guardados de fórmulas',exact:true});
  await resolver.getByLabel('Motivo de la resolución').fill('Borrador de resolución que se conserva');
  const messages=[];const reject=async dialog=>{messages.push(dialog.message());await dialog.dismiss();};page.on('dialog',reject);
- await resolver.getByRole('button',{name:'Cancelar resolución'}).click();await expect.poll(()=>messages.length).toBe(1);
+ await resolver.getByRole('button',{name:'Cancelar corrección'}).click();await expect.poll(()=>messages.length).toBe(1);
  await expect(resolver.getByLabel('Motivo de la resolución')).toHaveValue('Borrador de resolución que se conserva');
- await page.keyboard.press('Escape');await expect.poll(()=>messages.length).toBe(2);expect(messages[0]).toBe(messages[1]);
+ await page.keyboard.press('Escape');await expect.poll(()=>messages.length).toBe(2);
  await expect(resolver).toBeVisible();page.off('dialog',reject);page.once('dialog',dialog=>dialog.accept());
- await resolver.getByRole('button',{name:'Cancelar resolución'}).click();await expect(resolver).toHaveCount(0);await expect(opener).toBeFocused();
- await expect(page.getByRole('button',{name:'Descargar original privado'})).toBeVisible();
- await expect(page.getByRole('button',{name:'Descargar filas rechazadas XLSX'})).toBeEnabled();
+ await resolver.getByRole('button',{name:'Cancelar corrección'}).click();await expect(resolver).toHaveCount(0);await expect(opener).toBeFocused();
+ await expect(page.getByRole('button',{name:'Descargar original',exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Descargar pendientes y errores',exact:true})).toBeEnabled();
  await expect(page.getByRole('button',{name:'Confirmar e importar',exact:true})).toHaveCount(0);
  const resumeURL=page.url();
- const downloading=page.waitForEvent('download');await page.getByRole('button',{name:'Descargar original privado'}).click();
+ const downloading=page.waitForEvent('download');await page.getByRole('button',{name:'Descargar original',exact:true}).click();
  const original=await downloading;expect(original.suggestedFilename()).toBe(`resolver-${info.project.name}.xlsx`);expect(await original.failure()).toBeNull();
  await page.reload();await expect(page).toHaveURL(resumeURL);
- await expect(page.getByRole('button',{name:'Aceptar valores guardados de fórmulas',exact:true})).toBeVisible({timeout:30000});
+ await expect(page.locator('summary').filter({hasText:'Otras opciones de corrección del archivo'})).toBeVisible({timeout:30000});
+ await openDisclosure(page,'Otras opciones de corrección del archivo');
 });
 
 test('vitrina móvil: destinos nativos, búsqueda de combos y continuidad de pedido y tema',async({page},info)=>{

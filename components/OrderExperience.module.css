@@ -756,3 +756,277 @@
 .resultsTable table {
   min-width: 640px;
 }
+
+.wizard {
+  --import-action-clearance: calc(112px + env(safe-area-inset-bottom));
+}
+
+.wizard :is(section, article, form, fieldset, [role='group']),
+.wizard :global(.admin-actions) > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.wizard :is(button, a, summary) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.wizard :is(button, select, textarea, summary, input:not([type='checkbox']):not([type='radio'])),
+.wizard :global(.checkbox-field) {
+  min-height: 44px;
+}
+
+.wizard :is(input, select, textarea, button, summary, [tabindex], [id]) {
+  scroll-margin-top: 88px;
+  scroll-margin-bottom: var(--import-action-clearance);
+}
+
+.wizard .progress > li {
+  min-width: 0;
+}
+
+.wizard .progress button {
+  width: 100%;
+  padding-inline: 0;
+  text-align: start;
+}
+
+.wizard .progress span {
+  margin-top: 4px;
+}
+
+.wizard > section[aria-label='Importaciones'] > .taskHeading {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.wizard > section[aria-label='Importaciones'] > .taskHeading > div {
+  flex: 1 1 260px;
+}
+
+.wizard > section[aria-label='Importaciones'] > div:has(> .importProposal) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+  margin-block: 24px;
+}
+
+.wizard .importProposal > h3 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.wizard .importProposal p {
+  margin-block: 8px;
+}
+
+.wizard .importProposal > details:last-child {
+  margin-bottom: 0;
+}
+
+.wizard .importActions {
+  position: static;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-surface);
+  isolation: isolate;
+}
+
+.wizard .importActions > p {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 14px;
+}
+
+.importDecisionList {
+  min-width: 0;
+  max-width: 100%;
+  max-height: min(50dvh, 28rem);
+  margin-block: 16px;
+  padding: 4px 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--admin-control-border);
+  border-radius: 12px;
+  background: var(--admin-surface);
+  overflow-wrap: anywhere;
+}
+
+.importDecisionList:focus-visible,
+.wizard .resultsTable:focus-visible {
+  outline: 3px solid var(--admin-accent);
+  outline-offset: 3px;
+}
+
+.importDecisionList ul {
+  margin: 0;
+  padding-inline-start: 20px;
+}
+
+.importDecisionList li {
+  padding-block: 12px;
+}
+
+.importDecisionList li + li {
+  border-top: 1px solid var(--admin-line);
+}
+
+.importDecisionList li p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
+.importDownloads {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 16px;
+  min-width: 0;
+  margin-block: 32px 16px;
+}
+
+.importDownloads > :is(h3, p) {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.importDownloads > article {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-paper);
+  overflow-wrap: anywhere;
+}
+
+.importDownloads > article > :is(h4, p) {
+  margin: 0;
+}
+
+.importDownloads > article > button {
+  margin-top: auto;
+}
+
+.importResult {
+  margin-block: 20px;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-inline-start-width: 5px;
+  border-radius: 12px;
+  background: var(--admin-paper);
+  overflow-wrap: anywhere;
+}
+
+.importResult > h4 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.importResult > p:last-child {
+  margin-bottom: 0;
+}
+
+.importResult[data-result='partial'] {
+  border-color: var(--admin-apricot-ink);
+  border-inline-start-style: double;
+  background: var(--admin-apricot);
+  color: var(--admin-apricot-ink);
+}
+
+.importResult[data-result='complete'] {
+  border-color: var(--admin-mint-ink);
+  background: var(--admin-mint);
+  color: var(--admin-mint-ink);
+}
+
+.wizard .sheetGrid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  align-items: start;
+}
+
+.wizard .sheetCard dl {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin-block: 12px;
+}
+
+.wizard .sheetCard dd + dt {
+  margin-top: 8px;
+}
+
+.wizard .sheetCard header > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.wizard .sheetCard h4 {
+  margin-bottom: 0;
+}
+
+.wizard .resultsTable {
+  width: 100%;
+  padding-bottom: 8px;
+  overscroll-behavior-x: contain;
+}
+
+.wizard .resultsTable caption {
+  padding-block: 12px;
+  text-align: start;
+  font-weight: 600;
+}
+
+.wizard .resultsTable :is(th, td) {
+  vertical-align: top;
+}
+
+@media (min-width: 768px) {
+  .wizard {
+    --import-action-clearance: 16rem;
+  }
+
+  .wizard .importActions {
+    position: sticky;
+    bottom: 16px;
+    z-index: 5;
+    margin-block: 24px;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1099px) {
+  .wizard {
+    --import-action-clearance: calc(20rem + env(safe-area-inset-bottom));
+  }
+
+  .wizard .importActions {
+    bottom: calc(96px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 767px) {
+  .wizard .importActions > :is(button, a) {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .wizard .sheetGrid,
+  .wizard .inventoryEffects {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wizard :is(.inventoryEffect, .expenseReview) dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .wizard :is(.inventoryEffect, .expenseReview) dd + dt {
+    margin-top: 8px;
+  }
+}

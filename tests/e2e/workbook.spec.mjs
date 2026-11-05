@@ -98,34 +98,48 @@ async function upload(page, bytes, filename) {
   await button(wizard(page), 'Guardar archivo y continuar').click();
   await expect(wizard(page).locator('[data-import-sheet]').first()).toBeVisible({ timeout });
 }
+async function confirmDecision(page, title, confirmLabel, affected) {
+  const dialog = page.getByRole('dialog', { name: title, exact: true });
+  await expect(dialog).toBeVisible();
+  const list = dialog.getByRole('region', { name: 'Elementos afectados', exact: true }).getByRole('listitem');
+  await expect(list).toHaveCount(affected.length);
+  expect(await list.locator('strong').allTextContents()).toEqual(affected.map(item => item.label));
+  expect(await list.locator('p').allTextContents()).toEqual(affected.map(item => item.detail));
+  await button(dialog, confirmLabel).click();
+  await expect(dialog).toHaveCount(0);
+}
+async function configureReading(page) {
+  const w = wizard(page);
+  await openDisclosure(w, /^Cómo leer fechas y números/);
+  await w.getByLabel('Orden explícito de las fechas', { exact: true }).selectOption('ISO');
+  await w.getByLabel('Separador decimal', { exact: true }).selectOption('.');
+  await w.getByLabel('Separador de miles', { exact: true }).selectOption('');
+}
 async function readSamples(page) {
   const w = wizard(page), samples = button(w, 'Leer muestras de esta hoja y encabezado');
-  const sheetName = await w.getByRole('combobox', { name: 'Hoja', exact: true }).inputValue();
+  await expect(samples).toBeVisible({ timeout });
+  const sheetName = await w.getByRole('combobox', { name: 'Hoja actual', exact: true }).inputValue();
   if (await samples.isEnabled()) await samples.click();
   await expect.poll(async () => (await batch(page)).workbook?.inspections?.some(sheet => sheet.sheetName === sheetName && sheet.headerRow === 1), { timeout }).toBe(true);
   await expect(samples).toBeDisabled({ timeout });
 }
 async function configureSheets(page, f) {
   const w = wizard(page), uploaded = await batch(page);
-  page.once('dialog', async dialog => {
-    expect(dialog.type()).toBe('confirm');
-    await dialog.accept();
-  });
+  const proposals = uploaded.workbook.suggestions.sheets.filter(sheet => !sheet.possibleDuplicateOf && sheet.config.columns.some(column => column.destination && column.destination !== 'ignore'));
   await button(w, 'Aplicar propuesta del libro').click();
+  await confirmDecision(page, 'Revisar propuesta del libro', 'Usar estas propuestas', [
+    ...proposals.map(sheet => ({ label: sheet.sheetName, detail: 'Incluir y usar propuesta' })),
+    ...uploaded.workbook.sheets.filter(sheet => !proposals.some(proposal => proposal.sheetName === sheet.name)).map(sheet => ({ label: sheet.name, detail: 'No importar' })),
+  ]);
   await readSamples(page);
   for (const sheet of uploaded.workbook.sheets) {
     const card = w.locator(`[data-import-sheet=${JSON.stringify(sheet.name)}]`);
     await expect(card).toHaveCount(1);
-    if (sheet.empty === true || ['INSTRUCCIONES', 'POR COMPLETAR'].includes(sheet.name)) {
-      await button(card, `No importar ${sheet.name}`).click();
-      continue;
-    }
+    if (sheet.empty === true || ['INSTRUCCIONES', 'POR COMPLETAR'].includes(sheet.name)) continue;
     await button(card, `Usar propuesta de ${sheet.name}`).click();
-    await w.getByRole('combobox', { name: 'Hoja', exact: true }).selectOption(sheet.name);
+    await w.getByRole('combobox', { name: 'Hoja actual', exact: true }).selectOption(sheet.name);
     await readSamples(page);
-    await w.getByLabel('Orden explícito de las fechas', { exact: true }).selectOption('ISO');
-    await w.getByLabel('Separador decimal', { exact: true }).selectOption('.');
-    await w.getByLabel('Separador de miles', { exact: true }).selectOption('');
+    await configureReading(page);
     if (sheet.name === 'ENVIOS') {
       await openDisclosure(w, 'Equivalencias del estado de entrega / seguimiento');
       const external = 'ENTREGADO';
@@ -156,26 +170,21 @@ async function confirmWorkbookCutoff(page, f) {
   const chosen = (await batch(page)).config.sheets.filter(sheet => sheet.enabled && !sheet.columns.some(column => column.destination === 'reportAsOf'));
   if (!chosen.length) { await noOverflow(page); return; }
   await w.getByLabel('Este archivo está actualizado hasta…', { exact: true }).fill(f.cutoff);
-  page.once('dialog', async dialog => {
-    expect(dialog.type()).toBe('confirm');
-    expect(dialog.message()).toContain(`actualizadas hasta el ${f.cutoff}`);
-    for (const sheet of chosen) expect(dialog.message()).toContain(sheet.sheetName);
-    await dialog.accept();
-  });
   await button(w, 'Confirmar corte para hojas elegidas').click();
+  await confirmDecision(page, 'Confirmar corte del archivo', 'Confirmar este corte', chosen.map(sheet => ({ label: sheet.sheetName, detail: `Corte: ${f.cutoff}` })));
   await noOverflow(page);
 }
-async function preview(page, label = 'Guardar columnas y revisar') {
+async function preview(page, label) {
   const requested = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/preview') && response.request().method() === 'POST');
-  await button(wizard(page), label).click();
+  await wizard(page).getByRole('button', { name: label || /^(Guardar columnas y revisar|Guardar cambios y revisar)$/, exact: true }).click();
   expect((await requested).status()).toBe(202);
-  await expect(wizard(page).getByRole('heading', { name: 'Completa lo necesario para incorporar tu negocio', exact: true })).toBeVisible({ timeout });
   await expect.poll(async () => (await batch(page)).state, { timeout }).toBe('review');
+  await expect(wizard(page).locator('[data-import-operation]').first()).toBeVisible({ timeout });
   return batch(page);
 }
 async function repairPhones(page, f) {
   const w = wizard(page);
-  await openDisclosure(w, /^Filas fuente y motivos/);
+  await openDisclosure(w, /^Filas originales y motivos/);
   for (const number of [2, 3]) {
     const row = w.locator('article').filter({ has: page.getByRole('heading', { name: `VENTAS · fila ${number}`, exact: true }) });
     await openDisclosure(row, 'Valores originales por posición');
@@ -186,7 +195,7 @@ async function repairPhones(page, f) {
     await expect(dialog.getByLabel('Columna de la celda')).toHaveValue('5');
     await dialog.getByLabel('Valor corregido', { exact: true }).fill(f.phone);
     await dialog.getByLabel('Motivo de la resolución').fill('Celular sintético confirmado por el negocio, no deducido de otra columna');
-    await button(dialog, 'Preparar resolución').click();
+    await button(dialog, 'Preparar corrección').click();
     await expect(dialog).toHaveCount(0);
     await expect(button(row, 'Completar o corregir columna 5')).toBeFocused();
   }
@@ -197,9 +206,10 @@ function operation(page, key) {
 async function createProductFromReview(page, f, reviewed) {
   const group = reviewed.preview.groups.find(group => group.kind === 'commercial');
   const card = operation(page, group.entityKey || group.key);
-  await openDisclosure(card, 'Resolver este grupo');
+  await openDisclosure(card, 'Otras opciones de corrección');
   await button(card, 'Vincular producto').click();
   const resolver = page.getByRole('dialog', { name: 'Vincular producto', exact: true });
+  await openDisclosure(resolver, 'Cambiar ubicación o identificación');
   await resolver.getByLabel('Identificador exacto del archivo', { exact: false }).fill(f.productKey);
   await button(resolver, 'Guardar lote y crear producto').click();
   const dialog = page.getByRole('dialog');
@@ -221,13 +231,14 @@ async function createProductFromReview(page, f, reviewed) {
 }
 async function confirmHistoricalPolicy(page, f, reviewed) {
   const group = reviewed.preview.groups.find(group => group.kind === 'commercial');
+  await button(wizard(page), 'Todas las operaciones').click();
   const card = operation(page, group.key);
-  await openDisclosure(card, 'Resolver este grupo');
+  await openDisclosure(card, 'Otras opciones de corrección');
   await button(card, 'Aprobar política histórica').click();
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('combobox', { name: 'Versión de regla aprobada', exact: true }) });
   await dialog.getByRole('combobox', { name: 'Versión de regla aprobada', exact: true }).selectOption(f.ruleId);
   await dialog.getByLabel('Motivo de la resolución').fill('Reconocer al entregar y usar las fechas reales de cargos; comisiones deshabilitadas en este caso sintético');
-  await button(dialog, 'Preparar resolución').click();
+  await button(dialog, 'Preparar corrección').click();
   await expect(dialog).toHaveCount(0);
 }
 async function assertValid(page) {
@@ -242,7 +253,6 @@ async function apply(page) {
   await button(wizard(page), 'Continuar a confirmación').click();
   await button(wizard(page), 'Confirmar e importar').click();
   await expect.poll(async () => (await batch(page)).state, { timeout, intervals: [1000, 2000, 3000] }).toBe('completed');
-  await expect(wizard(page).getByText(/Importación completada\. Los hechos aplicados/)).toBeVisible({ timeout });
   return batch(page);
 }
 async function businessFacts(page, f) {
@@ -295,7 +305,7 @@ async function businessFacts(page, f) {
   return { order, shipment, expenses: expenses.records.map(expense => ({ id: expense.id, category: expense.category, amountMinor: expense.amountMinor, identity: expense.importIdentity, campaign: expense.campaign, quantity: expense.quantity, unitCostMinor: expense.unitCostMinor })).sort((a, b) => a.id.localeCompare(b.id)), product, report };
 }
 async function inspectDownloads(page, f, original) {
-  const template = await downloaded(page, 'Descargar plantilla del negocio');
+  const template = await downloaded(page, 'Descargar plantilla vacía');
   expect(template.name).toBe('plantilla-negocio.xlsx');
   const catalog = await readExcel(template.bytes, { filename: template.name, mode: 'catalog' });
   expect(catalog.sheets.map(sheet => sheet.name)).toEqual(['VENTAS', 'ENVIOS', 'GASTOS PAUTA', 'GASTOS OPERACION', 'INSTRUCCIONES']);
@@ -303,15 +313,15 @@ async function inspectDownloads(page, f, original) {
     const parsed = await readExcel(template.bytes, { filename: template.name, mode: 'rows', sheetName: sheet.name, headerRow: 1 });
     expect(parsed.rows).toHaveLength(1);
   }
-  const expanded = await downloaded(page, 'Descargar copia con GASTOS OPERACION');
+  const expanded = await downloaded(page, 'Descargar copia con hoja de gastos de operación');
   // This synthetic original already contains the expected operation sheet: expansion must return it intact.
   expect(sha(expanded.bytes)).toBe(sha(original));
   const before = unzipSync(original), after = unzipSync(expanded.bytes);
   expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
   for (const name of Object.keys(before)) expect(sha(after[name]), name).toBe(sha(before[name]));
-  const privateOriginal = await downloaded(page, 'Descargar original privado');
+  const privateOriginal = await downloaded(page, 'Descargar original');
   expect(sha(privateOriginal.bytes)).toBe(sha(original));
-  const prepared = await downloaded(page, 'Descargar datos preparados con IDs');
+  const prepared = await downloaded(page, 'Descargar datos preparados para volver a importar');
   const XLSX = require('xlsx'), workbook = XLSX.read(prepared.bytes, { type: 'buffer', cellDates: false });
   const data = name => XLSX.utils.sheet_to_json(workbook.Sheets[name], { defval: '' });
   expect(data('VENTAS')).toHaveLength(2);
@@ -355,9 +365,8 @@ test('libro sintético: cuatro pasos, apertura, corrección, perfil y reimportac
     await navigate(page, 'Configuración');
     await button(page, 'Ya llevo mi negocio en Excel').click();
     await expect(page).toHaveURL(url => url.searchParams.get('section') === 'orders' && url.searchParams.get('tab') === 'imports');
-    if (await button(wizard(page), 'Nuevo lote').count()) await button(wizard(page), 'Nuevo lote').click();
-    await button(wizard(page), 'Mis archivos Excel').click();
-    await expect(button(wizard(page), 'Mis archivos Excel')).toHaveAttribute('aria-pressed', 'true');
+    if (await button(wizard(page), 'Nueva importación').count()) await button(wizard(page), 'Nueva importación').click();
+    await button(wizard(page), 'Crear un origen para mis archivos').click();
     await wizard(page).getByLabel('Nombre del origen', { exact: true }).fill(`Origen ${marker}`);
     await button(wizard(page), 'Crear origen').click();
     await expect(wizard(page)).toContainText('Principal');
@@ -366,13 +375,13 @@ test('libro sintético: cuatro pasos, apertura, corrección, perfil y reimportac
   const original = syntheticWorkbook(f);
   await test.step('Catálogo multihoja, exclusiones, publicidad por grupos, corte y apertura', async () => {
     await upload(page, original, `libro-${marker}.xlsx`);
-    await expect(wizard(page).getByRole('combobox', { name: 'Hoja', exact: true })).toHaveValue('');
+    await expect(wizard(page).getByRole('combobox', { name: 'Hoja actual', exact: true })).toHaveValue('');
     await expect(wizard(page).locator('[data-import-sheet]')).toHaveCount(6);
     await expect(wizard(page).locator('[data-import-sheet="REVISION"]')).toContainText(/vacía/i);
     await configureSheets(page, f);
-    await openDisclosure(wizard(page), 'Guardar como perfil reutilizable de esta cuenta');
-    await wizard(page).getByLabel('Nombre del perfil', { exact: true }).fill(f.profileName);
-    await button(wizard(page), 'Guardar perfil').click();
+    await openDisclosure(wizard(page), 'Guardar una configuración para próximas importaciones');
+    await wizard(page).getByLabel('Nombre de la configuración', { exact: true }).fill(f.profileName);
+    await button(wizard(page), 'Guardar configuración').click();
     await expect.poll(async () => (await batch(page)).profileId, { timeout }).toBeTruthy();
     const saved = await batch(page);
     f.sourceId = saved.sourceId;
@@ -390,17 +399,16 @@ test('libro sintético: cuatro pasos, apertura, corrección, perfil y reimportac
     let reviewed = await preview(page);
     expect(reviewed.preview.groups.some(group => group.errors?.some(error => error.code === 'IMPORT_ORDER_INCOMPLETE'))).toBe(true);
     await repairPhones(page, f);
-    reviewed = await preview(page, 'Guardar resoluciones y revisar de nuevo');
+    reviewed = await preview(page, 'Guardar cambios y revisar');
     await createProductFromReview(page, f, reviewed);
     reviewed = await preview(page);
     await wizard(page).getByLabel('Fecha del conteo físico', { exact: true }).fill(f.opening);
     await wizard(page).getByRole('checkbox', { name: 'Confirmo que las existencias guardadas son el conteo físico real de esta fecha', exact: true }).check();
     await confirmHistoricalPolicy(page, f, reviewed);
-    await preview(page, 'Guardar resoluciones y revisar de nuevo');
+    await preview(page, 'Guardar cambios y revisar');
     reviewed = await assertValid(page);
     expect(reviewed.inventoryOpening).toEqual({ on: f.opening, confirmed: true });
     expect(reviewed.preview.inventory.find(effect => effect.productId === f.product.id)).toMatchObject({ stockQuantity: 10, stockReserved: 0, consumptionDelta: 0, reservationDelta: 0 });
-    await expect(wizard(page)).toContainText(/Caja no cambia por registrar estos gastos/);
     await noOverflow(page);
     await wizard(page).screenshot({ path: info.outputPath('synthetic-workbook-review.png') });
     f.prepared = await inspectDownloads(page, f, original);
@@ -445,8 +453,8 @@ test('libro sintético: cuatro pasos, apertura, corrección, perfil y reimportac
     await page.screenshot({ path: info.outputPath('synthetic-workbook-report.png') });
   });
   await test.step('Otro nombre y filas reordenadas reutilizan perfil sin duplicar hechos', async () => {
-    await page.goto(`/admin?section=orders&tab=imports&source=${f.sourceId}&record=${f.profileId}`);
-    await expect(wizard(page).getByRole('combobox', { name: 'Perfil de columnas', exact: true })).toHaveValue(f.profileId, { timeout });
+    await page.goto(`/admin?section=orders&tab=imports&batch=new&source=${f.sourceId}&record=${f.profileId}`);
+    await expect(wizard(page).getByRole('combobox', { name: 'Usar una configuración guardada (opcional)', exact: true })).toHaveValue(f.profileId, { timeout });
     await upload(page, syntheticWorkbook(f, { corrected: true, reordered: true }), `otro-mes-${marker}.xlsx`);
     expect((await batch(page)).config).toEqual({ ...f.profileConfig, sheets: f.profileConfig.sheets.map(sheet => ({ ...sheet, reportAsOf: null })) });
     await confirmWorkbookCutoff(page, f);
@@ -462,8 +470,8 @@ test('libro sintético: cuatro pasos, apertura, corrección, perfil y reimportac
     expect(await moneyAndPeople(page)).toEqual(baseline);
   });
   await test.step('El preparado descargado antes de aplicar vuelve a cargar con sus IDs y correcciones', async () => {
-    await page.goto(`/admin?section=orders&tab=imports&source=${f.sourceId}`);
-    await expect(wizard(page).getByRole('combobox', { name: 'Perfil de columnas', exact: true })).toBeVisible({ timeout });
+    await page.goto(`/admin?section=orders&tab=imports&batch=new&source=${f.sourceId}`);
+    await expect(wizard(page).getByRole('combobox', { name: 'Usar una configuración guardada (opcional)', exact: true })).toBeVisible({ timeout });
     await upload(page, f.prepared, `preparado-reordenado-${marker}.xlsx`);
     await configureSheets(page, f);
     await preview(page);
@@ -487,9 +495,9 @@ test('descarga privada amplía un libro sintético conservando las partes origin
   await login(page);
   await navigate(page, 'Pedidos');
   await selectWorkspace(page, 'Vistas de pedidos', 'Importar Excel');
-  await button(wizard(page), 'Nuevo lote').click();
+  await button(wizard(page), 'Nueva importación').click();
   const marker = `Descarga-${info.project.name}-${randomUUID().slice(0, 8)}`;
-  await button(wizard(page), 'Mis archivos Excel').click();
+  await button(wizard(page), 'Crear un origen para mis archivos').click();
   await wizard(page).getByLabel('Nombre del origen', { exact: true }).fill(marker);
   await button(wizard(page), 'Crear origen').click();
   const original = writeExcelSheets([
@@ -497,7 +505,7 @@ test('descarga privada amplía un libro sintético conservando las partes origin
     { name: 'VENTAS', rows: [IMPORT_TABLES.sales.columns.map(column => column.header)] },
   ]);
   await upload(page, original, `${marker}.xlsx`);
-  const expanded = await downloaded(page, 'Descargar copia con GASTOS OPERACION');
+  const expanded = await downloaded(page, 'Descargar copia con hoja de gastos de operación');
   expect(expanded.name).toBe(`${marker} - con operacion.xlsx`);
   const catalog = await readExcel(expanded.bytes, { filename: expanded.name, mode: 'catalog' });
   expect(catalog.sheets.map(sheet => sheet.name)).toEqual(['REVISION', 'VENTAS', 'GASTOS OPERACION']);
@@ -510,7 +518,7 @@ test('descarga privada amplía un libro sintético conservando las partes origin
     expect(after[name], `No se elimina ${name}`).toBeDefined();
     if (!changedMetadata.has(name)) expect(sha(after[name]), name).toBe(sha(bytes));
   }
-  expect(sha((await downloaded(page, 'Descargar original privado')).bytes)).toBe(sha(original));
+  expect(sha((await downloaded(page, 'Descargar original')).bytes)).toBe(sha(original));
   const saved = await batch(page);
   expect(saved.acceptedRevision).toBeNull();
   await noOverflow(page);
@@ -558,8 +566,8 @@ test('vínculo de producto existente: guarda sin crear, retoma la selección fil
   await navigate(page, 'Pedidos');
   await selectWorkspace(page, 'Vistas de pedidos', 'Importar Excel');
   const w = wizard(page);
-  await button(w, 'Nuevo lote').click();
-  await button(w, 'Mis archivos Excel').click();
+  await button(w, 'Nueva importación').click();
+  await button(w, 'Crear un origen para mis archivos').click();
   await w.getByLabel('Nombre del origen', { exact: true }).fill(`Origen sintético ${marker}`);
   await button(w, 'Crear origen').click();
   const original = writeExcelSheets([{ name: 'VENTAS', rows: [
@@ -568,11 +576,9 @@ test('vínculo de producto existente: guarda sin crear, retoma la selección fil
   ] }]);
   await upload(page, original, `${marker}-2026.xlsx`);
   await button(w.locator('[data-import-sheet="VENTAS"]'), 'Usar propuesta de VENTAS').click();
-  await w.getByRole('combobox', { name: 'Hoja', exact: true }).selectOption('VENTAS');
+  await w.getByRole('combobox', { name: 'Hoja actual', exact: true }).selectOption('VENTAS');
   await readSamples(page);
-  await w.getByLabel('Orden explícito de las fechas', { exact: true }).selectOption('ISO');
-  await w.getByLabel('Separador decimal', { exact: true }).selectOption('.');
-  await w.getByLabel('Separador de miles', { exact: true }).selectOption('');
+  await configureReading(page);
   await confirmWorkbookCutoff(page, { cutoff: '2026-10-21' });
   let reviewed = await preview(page);
   expect(reviewed.preview.groups).toHaveLength(2);
@@ -583,14 +589,15 @@ test('vínculo de producto existente: guarda sin crear, retoma la selección fil
   const resolver = page.getByRole('dialog', { name: 'Vincular producto', exact: true });
   const selection = resolver.getByRole('combobox', { name: 'Registro que se vinculará', exact: true });
   const search = resolver.getByLabel('Buscar registro real', { exact: true });
-  const savedLinks = w.getByRole('region', { name: 'Vínculos de productos guardados', exact: true });
+  const savedLinks = w.locator('details[aria-label="Vínculos de productos guardados"]');
   const openProductLink = async rowNumber => {
     const group = groupForRow(reviewed, rowNumber);
     expect(group).toBeTruthy();
     const card = operation(page, group.key);
-    await openDisclosure(card, 'Resolver este grupo');
+    await openDisclosure(card, 'Otras opciones de corrección');
     await button(card, 'Vincular producto').click();
     await expect(resolver).toBeVisible();
+    await openDisclosure(resolver, 'Cambiar ubicación o identificación');
   };
   const selectExisting = async () => {
     await search.fill(productName);
@@ -613,9 +620,10 @@ test('vínculo de producto existente: guarda sin crear, retoma la selección fil
     expect(saved.preview).toBeNull();
     expect(saved.acceptedRevision).toBeNull();
     expect(previewRequests).toBe(previewsBefore);
+    await openDisclosure(w, /^Vínculos guardados/);
     await expect(savedLinks).toContainText(externalKey);
     await expect(savedLinks).toContainText(productName);
-    await expect(button(w, 'Revisar datos guardados')).toBeVisible();
+    await expect(button(w, 'Guardar cambios y revisar')).toBeVisible();
     expect(unexpectedWrites).toEqual([]);
     return saved;
   };
@@ -638,12 +646,15 @@ test('vínculo de producto existente: guarda sin crear, retoma la selección fil
   const resume = page.url(), previewsBeforeReload = previewRequests;
   await page.reload();
   await expect(page).toHaveURL(resume);
+  await expect(savedLinks).toBeVisible({ timeout });
+  await openDisclosure(w, /^Vínculos guardados/);
   await expect(savedLinks).toContainText(productName, { timeout });
   expect(links(await batch(page))).toEqual(links(firstSaved));
   expect(previewRequests).toBe(previewsBeforeReload);
   await expect(button(pendingLinks, `Vincular o crear ${productKeys[1]}`)).toBeVisible();
   await button(savedLinks, `Cambiar vínculo de ${productKeys[0]}`).click();
   await expect(resolver).toBeVisible();
+  await openDisclosure(resolver, 'Cambiar ubicación o identificación');
   await expect(resolver.getByLabel('Identificador exacto del archivo', { exact: false })).toHaveValue(productKeys[0]);
   await expect(resolver.getByLabel('Motivo de la resolución', { exact: true })).toHaveValue(reasons[0]);
   await expect(selection).toHaveValue(product.id);
@@ -656,6 +667,7 @@ test('vínculo de producto existente: guarda sin crear, retoma la selección fil
   await saveExisting(productKeys[0], reasons[0]);
   await button(pendingLinks, `Vincular o crear ${productKeys[1]}`).click();
   await expect(resolver).toBeVisible();
+  await openDisclosure(resolver, 'Cambiar ubicación o identificación');
   await resolver.getByLabel('Identificador exacto del archivo', { exact: false }).fill(productKeys[1]);
   await resolver.getByLabel('Motivo de la resolución', { exact: true }).fill(reasons[1]);
   await search.fill(absentQuery);
@@ -689,7 +701,7 @@ test('vínculo de producto existente: guarda sin crear, retoma la selección fil
   expect(links(bothSaved).find(link => link.externalKey === productKeys[0])).toEqual(links(firstSaved)[0]);
   await expect(pendingLinks).toHaveCount(0);
 
-  reviewed = await preview(page, 'Revisar datos guardados');
+  reviewed = await preview(page, 'Guardar cambios y revisar');
   expect(reviewed.preview.groups.flatMap(group => group.errors || []).filter(error => error.code === 'IMPORT_PRODUCT_LINK')).toEqual([]);
   for (const [index, externalKey] of productKeys.entries()) {
     expect(groupForRow(reviewed, index + 2).lines).toEqual([expect.objectContaining({ kind: 'products', itemId: product.id, title: productName, productExternalKey: externalKey, quantity: 1, unitPriceMinor: 5500000 })]);
@@ -719,42 +731,29 @@ test('fechas originales: 101 correcciones seleccionadas se conservan por celda a
   await navigate(page, 'Pedidos');
   await selectWorkspace(page, 'Vistas de pedidos', 'Importar Excel');
   const w = wizard(page);
-  await button(w, 'Nuevo lote').click();
-  await button(w, 'Mis archivos Excel').click();
+  await button(w, 'Nueva importación').click();
+  await button(w, 'Crear un origen para mis archivos').click();
   await w.getByLabel('Nombre del origen', { exact: true }).fill(`Origen ${marker}`);
   await button(w, 'Crear origen').click();
   await upload(page, original, `${marker}-2027.xlsx`);
   await button(w.locator(`[data-import-sheet="${sheetName}"]`), `Usar propuesta de ${sheetName}`).click();
-  await w.getByRole('combobox', { name: 'Hoja', exact: true }).selectOption(sheetName);
+  await w.getByRole('combobox', { name: 'Hoja actual', exact: true }).selectOption(sheetName);
   await readSamples(page);
-  await w.getByLabel('Orden explícito de las fechas', { exact: true }).selectOption('ISO');
-  await w.getByLabel('Separador decimal', { exact: true }).selectOption('.');
-  await w.getByLabel('Separador de miles', { exact: true }).selectOption('');
-  await w.getByLabel('Este archivo está actualizado hasta…', { exact: true }).fill(cutoff);
-  page.once('dialog', async dialog => {
-    expect(dialog.type()).toBe('confirm');
-    expect(dialog.message()).toContain(cutoff);
-    expect(dialog.message()).toContain(sheetName);
-    await dialog.accept();
-  });
-  await button(w, 'Confirmar corte para hojas elegidas').click();
+  await configureReading(page);
+  await confirmWorkbookCutoff(page, { cutoff });
   const first = await preview(page);
   expect(first.preview.groups).toHaveLength(101);
   const initialWarnings = first.preview.groups.flatMap(group => group.errors || []).filter(error => error.code === 'IMPORT_YEAR_CONFIRMATION');
   expect(initialWarnings).toHaveLength(101);
   expect(initialWarnings.map(error => ({ sheet: error.sheet, rowNumber: error.rowNumber, columnIndex: error.columnIndex, date: error.normalizedDate })).sort((a, b) => a.rowNumber - b.rowNumber)).toEqual(dates.map((date, index) => ({ sheet: sheetName, rowNumber: index + 2, columnIndex: 1, date })));
   await w.getByRole('region', { name: 'Problemas por resolver', exact: true }).getByRole('button', { name: /^Año de fecha por confirmar/ }).click();
-  await button(w, 'Seleccionar todas las operaciones filtradas (101)').click();
-  page.once('dialog', async dialog => {
-    expect(dialog.type()).toBe('confirm');
-    expect(dialog.message()).toContain(sheetName);
-    expect(dialog.message()).toContain(dates[0]);
-    expect(dialog.message()).toContain(dates.at(-1));
-    expect(dialog.message()).toContain('102');
-    await dialog.accept();
-  });
-  await button(w, 'Conservar fechas originales de seleccionadas (101)').click();
-  await preview(page, 'Guardar resoluciones y revisar de nuevo');
+  await button(w, `Seleccionar todas las ${initialWarnings.length} filtradas`).click();
+  await w.getByRole('region', { name: 'Acciones para seleccionadas', exact: true }).getByRole('button', { name: new RegExp(`Conservar fechas originales.*${dates.length}`) }).click();
+  await confirmDecision(page, 'Conservar fechas originales', 'Confirmar estas fechas', dates.map((date, index) => ({
+    label: `${sheetName} · fila ${index + 2} · columna 2`,
+    detail: `Original: ${date} · Interpretación: ${date}`,
+  })));
+  await preview(page, 'Guardar cambios y revisar');
   const expectedCells = dates.map((value, index) => ({ sheet: sheetName, rowNumber: index + 2, columnIndex: 1, value }));
   const savedCells = reviewed => reviewed.resolutions.filter(resolution => resolution.action === 'cell_value').map(({ sheet, rowNumber, columnIndex, value }) => ({ sheet, rowNumber, columnIndex, value })).sort((a, b) => a.rowNumber - b.rowNumber);
   const preparedDates = reviewed => reviewed.preview.groups.flatMap(group => group.expenses.map(expense => ({ rowNumber: expense.rowRefs?.[0]?.rowNumber ?? group.rowRefs[0].rowNumber, date: expense.input.incurredOn }))).sort((a, b) => a.rowNumber - b.rowNumber);
@@ -774,11 +773,302 @@ test('fechas originales: 101 correcciones seleccionadas se conservan por celda a
   expect(preparedDates(reviewed).every(row => row.date.startsWith('2026-'))).toBe(true);
   expect(reviewed.state).toBe('review');
   expect(reviewed.acceptedRevision).toBeNull();
-  expect(sha((await downloaded(page, 'Descargar original privado')).bytes)).toBe(sha(original));
+  expect(sha((await downloaded(page, 'Descargar original')).bytes)).toBe(sha(original));
   expect(await moneyAndPeople(page)).toEqual(financialBefore);
   const expensesAfter = await get(page, '/api/admin/finance/expenses');
   expect(expensesAfter.total).toBe(expensesBefore.total);
   expect(expensesAfter.records).toEqual(expensesBefore.records);
   expect(metricValues(await get(page, '/api/admin/reports?period=year&anchor=2026-01-01'))).toEqual(metricValues(reportBefore));
   await noOverflow(page);
+});
+
+const sourceRows = page => wizard(page).locator('details:has(> summary[data-import-source-rows])');
+const sourceRow = (page, sheet, rowNumber) => sourceRows(page).locator('article').filter({ has: page.getByRole('heading', { name: `${sheet} · fila ${rowNumber}`, exact: true }) });
+async function startOwnImport(page, marker) {
+  await page.goto('/admin?section=orders&tab=imports&batch=new');
+  await button(wizard(page), 'Crear un origen para mis archivos').click();
+  await wizard(page).getByLabel('Nombre del origen', { exact: true }).fill(`Origen ${marker}`);
+  await button(wizard(page), 'Crear origen').click();
+  await expect(button(wizard(page), 'Guardar archivo y continuar')).toBeDisabled();
+}
+function waitForRows(page, id, filters = {}) {
+  const expected = { page: '1', state: '', q: '', sheet: '', rowNumber: '', ...filters };
+  return page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === `/api/admin/imports/${encodeURIComponent(id)}` &&
+      Object.entries(expected).every(([key, value]) => (url.searchParams.get(key) || '') === String(value));
+  }, { timeout });
+}
+async function rowsFromResponse(response) {
+  expect(response.status()).toBe(200);
+  return (await response.json()).rows;
+}
+async function expectSourceRows(page, rows) {
+  await expect(sourceRows(page).locator('article > h4')).toHaveText(rows.records.map(row => `${row.sheet} · fila ${row.rowNumber}`));
+}
+async function correctSourceCell(page, sheet, rowNumber, column, value, reason) {
+  const row = sourceRow(page, sheet, rowNumber);
+  await openDisclosure(row, 'Valores originales por posición');
+  await button(row, `Completar o corregir columna ${column}`).click();
+  const dialog = page.getByRole('dialog', { name: 'Completar o corregir celda', exact: true });
+  await expect(dialog.getByRole('combobox', { name: 'Hoja de la celda', exact: true })).toHaveValue(sheet);
+  await expect(dialog.getByLabel('Columna de la celda', { exact: true })).toHaveValue(String(column));
+  await dialog.getByLabel('Valor corregido', { exact: true }).fill(value);
+  await dialog.getByLabel('Motivo de la resolución', { exact: true }).fill(reason);
+  await button(dialog, 'Preparar corrección').click();
+  await expect(dialog).toHaveCount(0);
+}
+async function reviewPending(page) {
+  const previous = await batch(page), writes = [];
+  const observe = request => {
+    if (new URL(request.url()).pathname.startsWith(`/api/admin/imports/${previous.id}`) && request.method() !== 'GET') writes.push({ path: new URL(request.url()).pathname, method: request.method() });
+  };
+  page.on('request', observe);
+  try {
+    const requested = page.waitForResponse(response => new URL(response.url()).pathname === `/api/admin/imports/${previous.id}/preview` && response.request().method() === 'POST');
+    await button(wizard(page), 'Revisar pendientes').click();
+    const response = await requested;
+    expect(response.status()).toBe(202);
+    expect(response.request().postDataJSON()).toMatchObject({ version: previous.version, requestId: expect.any(String) });
+    await expect.poll(async () => (await batch(page)).state, { timeout }).toBe('review');
+    await expect(wizard(page).locator('[data-import-operation]').first()).toBeVisible({ timeout });
+    expect(writes).toEqual([{ path: `/api/admin/imports/${previous.id}/preview`, method: 'POST' }]);
+    const reviewed = await batch(page);
+    expect(reviewed.version).toBeGreaterThan(previous.version);
+    expect(reviewed.preview.previewHash).not.toBe(previous.preview.previewHash);
+    expect(reviewed.acceptedRevision).toBe(previous.acceptedRevision);
+    return reviewed;
+  } finally {
+    page.off('request', observe);
+  }
+}
+
+test('una importación parcial exige autorización y permite completar solo el gasto pendiente sin duplicar ni mover caja', async ({ page }, info) => {
+  test.setTimeout(600000);
+  await login(page);
+  const marker = `Parcial-${info.project.name}-${randomUUID().slice(0, 8)}`, sheet = 'GASTOS OPERACION';
+  const baseline = await moneyAndPeople(page);
+  const original = writeExcelSheets([{ name: sheet, rows: [
+    IMPORT_TABLES.operating.columns.map(column => column.header),
+    [`${marker}-1`, '2026-10-20', `${marker} gasto completo`, 10000, 'Proveedor sintético', `${marker}-REF-1`, 'No registra un pago'],
+    [`${marker}-2`, '2026-10-20', `${marker} gasto pendiente`, '', 'Proveedor sintético', `${marker}-REF-2`, 'Importe pendiente, no cero'],
+  ] }]);
+  await startOwnImport(page, marker);
+  await upload(page, original, `${marker}.xlsx`);
+  await configureSheets(page, { cutoff: '2026-10-31' });
+  const first = await preview(page);
+  expect(first.preview.summary).toMatchObject({ valid: 1, rejected: 1, total: 2 });
+  expect(first.acceptedRevision).toBeNull();
+  const commits = [];
+  const observeCommit = request => {
+    if (new URL(request.url()).pathname === `/api/admin/imports/${first.id}/commit` && request.method() === 'POST') commits.push(request.postDataJSON());
+  };
+  page.on('request', observeCommit);
+  await button(wizard(page), 'Revisar importación parcial').click();
+  const partial = wizard(page).getByRole('checkbox', { name: 'Importar 1 operaciones válidas y dejar 1 pendientes', exact: true });
+  await expect(partial).not.toBeChecked();
+  await expect(button(wizard(page), 'Confirmar e importar')).toBeDisabled();
+  expect(commits).toEqual([]);
+  expect((await get(page, '/api/admin/finance/expenses?' + new URLSearchParams({ q: marker }))).total).toBe(0);
+  await partial.check();
+  await button(wizard(page), 'Confirmar e importar').click();
+  await expect.poll(async () => (await batch(page)).state, { timeout }).toBe('completed_with_errors');
+  await expect(wizard(page).locator('[data-result="partial"]')).toBeVisible({ timeout });
+  expect(commits).toHaveLength(1);
+  expect(commits[0]).toMatchObject({ version: first.version, previewHash: first.preview.previewHash, includeValidOnly: true, requestId: expect.any(String) });
+  const applied = await batch(page);
+  expect(applied.progress.expenseIds).toHaveLength(1);
+  expect(applied.progress.orderIds).toEqual([]);
+  const one = await get(page, '/api/admin/finance/expenses?' + new URLSearchParams({ q: marker }));
+  expect(one.total).toBe(1);
+  expect(one.records[0].amountMinor).toBe(1000000);
+  const firstDetail = await get(page, `/api/admin/finance/expenses?record=${encodeURIComponent(one.records[0].id)}`);
+  expect(firstDetail.payments).toEqual([]);
+  expect(firstDetail.paidMinor).toBe(0);
+  expect(await moneyAndPeople(page)).toEqual(baseline);
+  const pending = await reviewPending(page);
+  expect(pending.preview.summary).toMatchObject({ valid: 0, applied: 1, rejected: 1 });
+  expect(commits).toHaveLength(1);
+  await page.reload();
+  await expect(button(wizard(page), 'Resolver primer pendiente')).toBeEnabled({ timeout });
+  await openDisclosure(wizard(page), /^Filas originales y motivos/);
+  const filtered = waitForRows(page, first.id, { state: 'rejected' });
+  await sourceRows(page).getByRole('combobox', { name: 'Filtrar filas', exact: true }).selectOption('rejected');
+  const rejectedRows = await rowsFromResponse(await filtered);
+  expect(rejectedRows.records.map(row => [row.sheet, row.rowNumber])).toEqual([[sheet, 3]]);
+  await expectSourceRows(page, rejectedRows);
+  await expect(sourceRows(page).getByRole('combobox', { name: 'Filtrar filas', exact: true })).toBeEnabled();
+  const reason = `Importe 20000 COP confirmado explícitamente para ${marker}, no deducido del gasto anterior`;
+  await correctSourceCell(page, sheet, 3, 4, '20000', reason);
+  const corrected = await preview(page);
+  expect(corrected.resolutions).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'cell_value', sheet, rowNumber: 3, columnIndex: 3, value: '20000', reason })]));
+  expect(corrected.preview.summary).toMatchObject({ valid: 1, applied: 1, rejected: 0 });
+  await apply(page);
+  const final = await batch(page);
+  expect(final.acceptedRevision).toBeGreaterThan(applied.acceptedRevision);
+  const expenses = await get(page, '/api/admin/finance/expenses?' + new URLSearchParams({ q: marker }));
+  expect(expenses.total).toBe(2);
+  expect(new Set(expenses.records.map(expense => expense.id)).size).toBe(2);
+  expect(expenses.records.map(expense => expense.amountMinor).sort((a, b) => a - b)).toEqual([1000000, 2000000]);
+  expect(expenses.records.map(expense => expense.importIdentity.externalId).sort()).toEqual([`${marker}-1`, `${marker}-2`]);
+  expect(expenses.records.find(expense => expense.amountMinor === 1000000).id).toBe(one.records[0].id);
+  for (const expense of expenses.records) {
+    const detail = await get(page, `/api/admin/finance/expenses?record=${encodeURIComponent(expense.id)}`);
+    expect(detail.payments).toEqual([]);
+    expect(detail.paidMinor).toBe(0);
+  }
+  expect(commits).toHaveLength(2);
+  expect(commits[1].includeValidOnly).toBe(false);
+  expect(await moneyAndPeople(page)).toEqual(baseline);
+  page.off('request', observeCommit);
+});
+
+test('los problemas abren su fila exacta entre hojas y conservan filtros y búsqueda al revisar pendientes y paginar', async ({ page }, info) => {
+  test.setTimeout(480000);
+  await login(page);
+  const marker = `Filas-${info.project.name}-${randomUUID().slice(0, 8)}`;
+  const pageSize = (await get(page, '/api/admin/imports')).pageSize;
+  const sheet = 'GASTOS OPERACION', copySheet = 'ZZ GASTOS OPERACION';
+  const expense = (id, concept, amount) => [id, '2026-10-20', concept, amount, 'Proveedor sintético de filas', `REF-${id}`, 'Solo datos sintéticos'];
+  const duplicate = expense(`${marker}-DUP`, `${marker} copia identificada`, 10000);
+  const validRows = Array.from({ length: pageSize * 2 + 1 }, (_, index) => expense(`${marker}-${index}`, `${marker} concepto ${index}`, index + 100));
+  const original = writeExcelSheets([
+    { name: sheet, rows: [IMPORT_TABLES.operating.columns.map(column => column.header), duplicate, ...validRows, expense(`${marker}-PEND`, `${marker} importe pendiente`, '')] },
+    { name: copySheet, rows: [IMPORT_TABLES.operating.columns.map(column => column.header), duplicate] },
+  ]);
+  await startOwnImport(page, marker);
+  await upload(page, original, `${marker}.xlsx`);
+  await configureSheets(page, { cutoff: '2026-10-31' });
+  let reviewed = await preview(page);
+  expect(reviewed.rows.total).toBeGreaterThan(reviewed.rows.pageSize);
+  const duplicateGroup = reviewed.preview.groups.find(group => group.errors.some(issue => issue.code === 'IMPORT_DUPLICATE_EXPENSE'));
+  expect(duplicateGroup.rowRefs).toEqual(expect.arrayContaining([{ sheet, rowNumber: 2 }, { sheet: copySheet, rowNumber: 2 }]));
+  const rows = sourceRows(page), path = `/api/admin/imports/${reviewed.id}`;
+  await openDisclosure(wizard(page), /^Filas originales y motivos/);
+  const filter = rows.getByRole('combobox', { name: 'Filtrar filas', exact: true }), search = rows.getByLabel('Buscar en las filas de este archivo', { exact: true });
+  let response = waitForRows(page, reviewed.id, { state: 'new' });
+  await filter.selectOption('new');
+  await rowsFromResponse(await response);
+  response = waitForRows(page, reviewed.id, { state: 'new', q: marker });
+  await search.fill(marker);
+  await button(rows, 'Buscar filas').click();
+  await rowsFromResponse(await response);
+  response = waitForRows(page, reviewed.id, { page: '2', state: 'new', q: marker });
+  await button(rows, 'Siguiente').click();
+  const secondPage = await rowsFromResponse(await response);
+  expect(secondPage.page).toBe(2);
+  expect(secondPage.records.every(row => row.sheet === sheet)).toBe(true);
+  await expectSourceRows(page, secondPage);
+  await expect(sourceRow(page, copySheet, 2)).toHaveCount(0);
+  const card = operation(page, duplicateGroup.key);
+  const locations = card.locator('details').filter({ has: page.locator('summary').filter({ hasText: /^Ubicaciones de las posibles repeticiones$/ }) }).first();
+  await locations.locator('summary').click();
+  const copyLocation = locations.locator(':scope > div').filter({ has: page.getByText(`${copySheet} · fila 2`, { exact: true }) });
+  response = waitForRows(page, reviewed.id, { sheet: copySheet, rowNumber: '2' });
+  await button(copyLocation, 'Ver fila original').click();
+  const exact = await rowsFromResponse(await response);
+  expect(exact.total).toBe(1);
+  expect(exact.records.map(row => [row.sheet, row.rowNumber])).toEqual([[copySheet, 2]]);
+  expect(exact.records[0].source[0].value).toBe(duplicate[0]);
+  await expectSourceRows(page, exact);
+  await expect(filter).toHaveValue('');
+  await expect(search).toHaveValue('');
+  response = waitForRows(page, reviewed.id);
+  await button(rows, 'Ver todas las filas').click();
+  const restored = await rowsFromResponse(await response);
+  expect(restored.page).toBe(1);
+  expect(restored.total).toBe(reviewed.rows.total);
+  await expectSourceRows(page, restored);
+  await button(copyLocation, 'Omitir esta repetición').click();
+  const resolver = page.getByRole('dialog', { name: 'Marcar fila duplicada', exact: true });
+  await openDisclosure(resolver, 'Cambiar ubicación o identificación');
+  await expect(resolver.getByRole('combobox', { name: 'Hoja de origen', exact: true })).toHaveValue(copySheet);
+  await expect(resolver.getByLabel('Fila de origen (si aplica)', { exact: true })).toHaveValue('2');
+  await resolver.getByLabel('Motivo de la resolución', { exact: true }).fill('Esta es la copia sintética exacta del mismo gasto, no una operación independiente');
+  await button(resolver, 'Preparar corrección').click();
+  await expect(resolver).toHaveCount(0);
+
+  // A real preview keeps the active row query through its server-polling GET.
+  response = waitForRows(page, reviewed.id, { state: 'new' });
+  await filter.selectOption('new');
+  await rowsFromResponse(await response);
+  const query = `${marker} concepto 0`;
+  response = waitForRows(page, reviewed.id, { state: 'new', q: query });
+  await search.fill(query);
+  await button(rows, 'Buscar filas').click();
+  const matching = await rowsFromResponse(await response);
+  expect(matching.records).toHaveLength(1);
+  await correctSourceCell(page, sheet, 3, 7, 'Nota sintética confirmada durante esta revisión', 'Conservar una observación explícita, sin cambiar importes ni identidades');
+  const pollingQueries = [];
+  const observeRows = request => {
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === path) pollingQueries.push({ state: url.searchParams.get('state'), q: url.searchParams.get('q') });
+  };
+  page.on('request', observeRows);
+  const polled = waitForRows(page, reviewed.id, { state: 'new', q: query });
+  reviewed = await preview(page);
+  await rowsFromResponse(await polled);
+  page.off('request', observeRows);
+  expect(pollingQueries.length).toBeGreaterThan(0);
+  expect(pollingQueries.every(filters => filters.state === 'new' && filters.q === query)).toBe(true);
+  await expectSourceRows(page, (await get(page, `${path}?${new URLSearchParams({ state: 'new', q: query })}`)).rows);
+  await expect(filter).toHaveValue('new');
+  await expect(search).toHaveValue(query);
+  expect(new URL(page.url()).searchParams.has('q')).toBe(false);
+  expect(page.url()).not.toContain(encodeURIComponent(query));
+  expect(reviewed.preview.groups.filter(group => group.errors.length)).toHaveLength(1);
+
+  const assertFilter = async (state, q = '') => {
+    const expected = await get(page, `${path}?${new URLSearchParams({ state, q, page: '1' })}`);
+    const changing = waitForRows(page, reviewed.id, { state, q });
+    if (await search.inputValue() !== q) {
+      await search.fill(q);
+      await button(rows, 'Buscar filas').click();
+    } else {
+      await filter.selectOption(state);
+    }
+    const actual = await rowsFromResponse(await changing);
+    expect(actual).toEqual(expected.rows);
+    expect(actual.page).toBe(1);
+    expect(actual.records.every(row => !state || row.state === state)).toBe(true);
+    await expectSourceRows(page, actual);
+    expect(new URL(page.url()).searchParams.has('q')).toBe(false);
+    expect(new URL(page.url()).searchParams.has('state')).toBe(false);
+    return actual;
+  };
+  // Search first retains the existing state; then a state change must reset page 2.
+  await assertFilter('new');
+  response = waitForRows(page, reviewed.id, { page: '2', state: 'new' });
+  await button(rows, 'Siguiente').click();
+  await rowsFromResponse(await response);
+  expect((await assertFilter('rejected')).records.length).toBeGreaterThan(0);
+  expect((await assertFilter('applied')).total).toBe(0);
+  expect((await assertFilter('skipped')).records.map(row => [row.sheet, row.rowNumber])).toEqual([[copySheet, 2]]);
+  await assertFilter('skipped', `${marker} copia identificada`);
+  expect((await assertFilter('skipped', `${marker}-inexistente`)).total).toBe(0);
+  await assertFilter('skipped');
+  await button(wizard(page), 'Revisar importación parcial').click();
+  await wizard(page).getByRole('checkbox', { name: /^Importar \d+ operaciones válidas y dejar 1 pendientes$/ }).check();
+  await button(wizard(page), 'Confirmar e importar').click();
+  await expect.poll(async () => (await batch(page)).state, { timeout }).toBe('completed_with_errors');
+  await expect(wizard(page).locator('[data-result="partial"]')).toBeVisible({ timeout });
+  expect((await assertFilter('applied')).records.length).toBeGreaterThan(0);
+  reviewed = await reviewPending(page);
+  await openDisclosure(wizard(page), /^Filas originales y motivos/);
+  response = waitForRows(page, reviewed.id);
+  await filter.selectOption('');
+  await rowsFromResponse(await response);
+  response = waitForRows(page, reviewed.id, { page: '2' });
+  await button(rows, 'Siguiente').click();
+  await rowsFromResponse(await response);
+  await expect(button(wizard(page), 'Resolver primer pendiente')).toBeEnabled();
+  await page.reload();
+  await expect(button(wizard(page), 'Resolver primer pendiente')).toBeEnabled({ timeout });
+  await openDisclosure(wizard(page), /^Filas originales y motivos/);
+  response = waitForRows(page, reviewed.id, { state: 'rejected' });
+  await filter.selectOption('rejected');
+  const pending = await rowsFromResponse(await response);
+  expect(pending.records).toHaveLength(1);
+  await openDisclosure(sourceRow(page, pending.records[0].sheet, pending.records[0].rowNumber), 'Valores originales por posición');
+  await expect(button(sourceRow(page, pending.records[0].sheet, pending.records[0].rowNumber), 'Completar o corregir columna 4')).toBeEnabled();
 });

@@ -11,7 +11,7 @@ const categories = [...new Set(importFields.map(field => field.group))];
 const types = { identifier: 'Identificador', text: 'Texto', money: 'Importe COP', date: 'Fecha', integer: 'Entero', enum: 'Opción', additional: 'Texto con nombre propio' };
 const effects = { information: 'Informativo', commercial: 'Datos del pedido', logistics: 'Seguimiento', cost: 'Costo', collection: 'Recaudo', settlement: 'Liquidación', validation: 'Comprobación, no gasto' };
 const scopeLabels = { order: 'Pedido', shipment: 'Envío', expense: 'Gasto' };
-const filters = ['Todas', 'Sin asignar', 'Asignadas', 'Ignoradas', 'Con problemas'];
+const filters = ['Todas', 'Sin decidir', 'Asignadas', 'Ignoradas', 'Con problemas'];
 const insuranceHelp = 'Vacío: costo no informado. 0: sin cargo de seguro.';
 const searchText = value => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').trim();
 const fieldSearch = new Map(importFields.map(field => [field.value, searchText(`${field.label} ${field.group} ${field.description} ${types[field.type]} ${effects[field.effect]}`)]));
@@ -21,13 +21,19 @@ function columnLetter(index) {
   while (value > 0) { value--; letter = String.fromCharCode(65 + value % 26) + letter; value = Math.floor(value / 26); }
   return letter;
 }
-const assignmentState = mapping => !mapping?.destination ? 'Sin asignar' : mapping.destination === 'ignore' ? 'Ignoradas' : 'Asignadas';
+const assignmentState = mapping => !mapping?.destination ? 'Sin decidir' : mapping.destination === 'ignore' ? 'Ignoradas' : 'Asignadas';
 const usesGroup = (field, layout) => field.scope === 'line' && layout === 'order_rows' || field.scope === 'expense_line' && layout === 'expense_columns';
 const destinationKey = (field, group, layout) => `${usesGroup(field, layout) ? group : 0}:${field.value}`;
 
-export default function ImportColumnMapping({ config, headers, sampleRows, columnCount, disabled, onChangeColumn, onDiscardImport, discardLabel }) {
-  const rootRef = useRef(null), filterRef = useRef(null);
-  const [query, setQuery] = useState(''), [filter, setFilter] = useState('Todas'), [selector, setSelector] = useState(null), [focusIssue, setFocusIssue] = useState(false);
+export default function ImportColumnMapping({ config, headers, sampleRows, columnCount, disabled, onChangeColumn, onIgnoreUnassigned, onNextSheet, onInteractionStateChange }) {
+  const rootRef = useRef(null), filterRef = useRef(null), interactionRef = useRef(onInteractionStateChange);
+  interactionRef.current = onInteractionStateChange;
+  const [query, setQuery] = useState(''), [filter, setFilter] = useState('Todas'), [selector, setSelector] = useState(null), [focusIssue, setFocusIssue] = useState(false), [focusColumn, setFocusColumn] = useState(null);
+  const selectorOpen = selector !== null;
+  useEffect(() => {
+    interactionRef.current?.({ open: selectorOpen });
+    if (selectorOpen) return () => interactionRef.current?.({ open: false });
+  }, [selectorOpen]);
   const searchId = useId(), filterId = useId(), issuesId = useId();
   const columns = config.columns || [], byIndex = new Map(), issuesByIndex = new Map(), usage = new Map();
   for (const column of columns) {
@@ -45,7 +51,7 @@ export default function ImportColumnMapping({ config, headers, sampleRows, colum
     issuesByIndex.get(index).push(issue);
   }
   const rows = (sampleRows || []).filter(row => row.rowNumber > Number(config.headerRow)).slice(0, 3);
-  const counts = { 'Sin asignar': 0, Asignadas: 0, Ignoradas: 0 };
+  const counts = { 'Sin decidir': 0, Asignadas: 0, Ignoradas: 0 };
   const search = searchText(query);
   const columnData = Array.from({ length: columnCount || 0 }, (_, index) => {
     const mapping = byIndex.get(index), header = cellText(headers?.[index]), letter = columnLetter(index), definition = definitions.get(mapping?.destination), state = assignmentState(mapping);
@@ -59,22 +65,35 @@ export default function ImportColumnMapping({ config, headers, sampleRows, colum
     (trigger || filterRef.current)?.focus();
     setFocusIssue(false);
   }, [focusIssue, filter, query]);
+  useEffect(() => {
+    if (focusColumn === null) return;
+    const trigger = rootRef.current?.querySelector(`[data-import-column="${focusColumn}"] [data-import-destination]:not(:disabled)`);
+    (trigger || filterRef.current)?.focus();
+    trigger?.scrollIntoView({ block: 'nearest' });
+    setFocusColumn(null);
+  }, [focusColumn, filter, query]);
+  function nextPendingColumn() {
+    if (disabled) return;
+    const target = columnData.find(column => column.state === 'Sin decidir') || columnData.find(column => column.issues.length);
+    if (!target) { onNextSheet?.(); return; }
+    setQuery(''); setFilter('Todas'); setFocusColumn(target.index);
+  }
   function showIssues(event) {
     if (event.target !== event.currentTarget || !issues.length) return;
     setQuery(''); setFilter('Con problemas'); setFocusIssue(true);
   }
   function ignoreUnassigned() {
     if (disabled) return;
-    for (const column of columnData) if (column.state === 'Sin asignar') onChangeColumn(column.index, column.header, { destination: 'ignore', group: 0, fieldName: undefined });
+    onIgnoreUnassigned?.(columnData.filter(column => column.state === 'Sin decidir'));
   }
   function openSelector(column, trigger) {
     if (!disabled) setSelector({ ...column, trigger });
   }
   return <section ref={rootRef} className={styles.importMapping} aria-label="Asignación de columnas">
     <h3 className={styles.subheading}>Asignación de columnas</h3>
-    <p>Compara el origen con su destino. Las columnas sin asignar no se importarán; ignorarlas es una decisión explícita. Los encabezados repetidos se conservan por posición.</p>
+    <p>Compara cada columna del archivo con su destino. Las columnas sin decidir bloquean la revisión: asigna un dato o ignóralas explícitamente. Los encabezados repetidos se conservan por posición.</p>
     <div className={styles.importMappingSummary} aria-live="polite">
-      <strong>{counts.Asignadas} asignadas</strong><span>{counts['Sin asignar']} sin asignar</span><span>{counts.Ignoradas} ignoradas</span>
+      <strong>{counts.Asignadas} asignadas</strong><span>{counts['Sin decidir']} sin decidir</span><span>{counts.Ignoradas} ignoradas</span>
     </div>
     <div data-import-column-issues tabIndex={-1} onFocus={showIssues} className={issues.length ? styles.importMappingProblems : styles.importMappingNotice}>
       {issues.length ? <><strong>{issues.length} {issues.length === 1 ? 'problema de asignación' : 'problemas de asignación'}</strong><p>Cambia el destino, el grupo o el nombre adicional, o ignora la columna. Los problemas aparecen en todas las columnas afectadas.</p><button type="button" className="button subtle" onClick={() => { setQuery(''); setFilter('Con problemas'); setFocusIssue(true); }}>Ir al primer problema</button></> : 'Sin problemas de asignación de destinos.'}
@@ -82,10 +101,11 @@ export default function ImportColumnMapping({ config, headers, sampleRows, colum
     <div className={styles.importMappingToolbar}>
       <label className="field" htmlFor={searchId}>Buscar columnas<input ref={filterRef} id={searchId} type="search" value={query} placeholder="Encabezado, A, número o destino" onChange={event => setQuery(event.target.value)} /></label>
       <label className="field" htmlFor={filterId}>Mostrar columnas<select id={filterId} value={filter} onChange={event => setFilter(event.target.value)}>{filters.map(value => <option key={value}>{value}</option>)}</select></label>
-      <button type="button" className="button subtle" disabled={disabled || !counts['Sin asignar']} onClick={ignoreUnassigned}>Ignorar columnas sin asignar</button>
+      <button data-import-next-column type="button" className="button subtle" disabled={disabled || !columnData.some(column => column.state === 'Sin decidir' || column.issues.length) && !onNextSheet} onClick={nextPendingColumn}>Ir a la siguiente columna pendiente</button>
+      <button type="button" className="button subtle" disabled={disabled || !counts['Sin decidir'] || !onIgnoreUnassigned} onClick={ignoreUnassigned}>Ignorar columnas sin decidir</button>
     </div>
     <p className="small muted" role="status">{visible.length} de {columnData.length} columnas visibles.</p>
-    <div className={styles.importMappingHead} aria-hidden="true"><span>Origen</span><span>Muestras del archivo</span><span>Destino y efecto</span></div>
+    <div className={styles.importMappingHead} aria-hidden="true"><span>Columna del archivo</span><span>Ejemplo</span><span>Dato en All Nutrition</span></div>
     <div className={styles.importMappingRows}>{visible.map(column => {
       const { index, header, letter, mapping, definition, state } = column;
       const changedHeader = mapping?.header !== undefined && mapping.header !== normalizeImportFieldName(header);
@@ -93,10 +113,13 @@ export default function ImportColumnMapping({ config, headers, sampleRows, colum
         <div className={styles.importMappingSource}><h4>{letter} · Columna {index + 1}</h4><strong>{header || 'Sin encabezado'}</strong>
           {changedHeader && <div className={styles.importMappingNotice}><p>El perfil esperaba «{mapping.header || 'sin encabezado'}». La revisión buscará encabezados únicos; si falta o está repetido, pedirá corregirlo.</p><button type="button" className="button subtle" disabled={disabled} onClick={() => onChangeColumn(index, header, {})}>Confirmar asignación en esta posición</button></div>}
         </div>
-        <div className={styles.importMappingSamples}><span className={styles.importMappingZoneLabel}>Muestras</span>{column.samples.length ? column.samples.map(sample => <div key={sample.rowNumber} className={styles.importMappingSample}><small>Fila {sample.rowNumber}</small>{sample.value.length > 180 ? <details><summary>{sample.value.slice(0, 180)}… · Ver valor completo</summary><p>{sample.value}</p></details> : <p>{sample.value || '(vacío)'}</p>}</div>) : <p className="small muted">Sin filas de muestra después de este encabezado.</p>}</div>
+        <div className={styles.importMappingSamples}><span className={styles.importMappingZoneLabel}>Ejemplo</span>{column.samples.length ? <>
+          <ColumnSample sample={column.samples[0]} />
+          {column.samples.length > 1 && <details><summary>Ver {column.samples.length - 1} ejemplos más</summary>{column.samples.slice(1).map(sample => <ColumnSample key={sample.rowNumber} sample={sample} />)}</details>}
+        </> : <p className="small muted">Sin filas de muestra después de este encabezado.</p>}</div>
         <div className={styles.importMappingDestination}>
-          <button type="button" className={`button subtle ${styles.importMappingTrigger}`} aria-label={`Destino de columna ${index + 1}`} data-import-destination aria-haspopup="dialog" aria-invalid={column.issues.length ? true : undefined} aria-describedby={column.issues.length ? `${issuesId}-${index}` : undefined} disabled={disabled} onClick={event => openSelector(column, event.currentTarget)}><span>{state === 'Sin asignar' ? 'Sin asignar — no se importará' : state === 'Ignoradas' ? 'Ignorada' : definition?.label || 'Destino no válido'}{definition?.type === 'additional' && <small>{scopeLabels[definition.scope]} · {mapping.fieldName || 'Falta nombre adicional'}</small>}</span><Icon name="chevron" /></button>
-          {definition && <><p className={styles.importMappingMetadata}>{types[definition.type]} · {effects[definition.effect]}</p><p className="small muted">{definition.description}</p>{definition.value === 'insuranceCost' && <p className="small">{insuranceHelp}</p>}</>}
+          <button type="button" className={`button subtle ${styles.importMappingTrigger}`} aria-label={`Destino de columna ${index + 1}`} data-import-destination aria-haspopup="dialog" aria-invalid={column.issues.length ? true : undefined} aria-describedby={column.issues.length ? `${issuesId}-${index}` : undefined} disabled={disabled} onClick={event => openSelector(column, event.currentTarget)}><span>{state === 'Sin decidir' ? 'Sin decidir: asigna un dato o ignora esta columna' : state === 'Ignoradas' ? 'Ignorada' : definition?.label || 'Destino no válido'}{definition?.type === 'additional' && <small>{scopeLabels[definition.scope]} · {mapping.fieldName || 'Falta nombre adicional'}</small>}</span><Icon name="chevron" /></button>
+          {definition && <><p className={styles.importMappingMetadata}>{types[definition.type]} · {effects[definition.effect]}</p>{column.issues.length || definition.value === 'insuranceCost' ? <p className="small muted">{definition.description}</p> : <details><summary>Qué significa este dato</summary><p className="small muted">{definition.description}</p></details>}{definition.value === 'insuranceCost' && <p className="small">{insuranceHelp}</p>}</>}
           {definition && usesGroup(definition, config.layout) && <label className="field">{definition.scope === 'expense_line' ? 'Grupo de campaña' : 'Grupo de producto'}<input type="number" min={1} max={50} value={(mapping.group ?? 0) + 1} disabled={disabled} onChange={event => { const group = Number(event.target.value) - 1; if (Number.isInteger(group) && group >= 0 && group < 50) onChangeColumn(index, header, { group }); }} /><small>{definition.scope === 'expense_line' ? 'Cantidad y costo unitario de una campaña usan el mismo grupo. El total de control no genera otro gasto.' : 'Referencia, cantidad, precio y costo del mismo producto usan el mismo grupo.'}</small></label>}
           {column.issues.length > 0 && <ul id={`${issuesId}-${index}`} className={styles.importMappingIssueList}>{column.issues.map((issue, issueIndex) => <li key={`${issue.code}:${issueIndex}`}>{issue.message}</li>)}</ul>}
         </div>
@@ -104,24 +127,27 @@ export default function ImportColumnMapping({ config, headers, sampleRows, colum
     })}</div>
     {!columnData.length ? <p className={styles.emptyPrompt}>No se recibieron columnas de muestra. Selecciona hoja y encabezado y lee sus muestras antes de asignar.</p> : !visible.length && <div className={styles.emptyPrompt}><p>No hay columnas con esta búsqueda y filtro. Prueba otro encabezado, letra o destino.</p><button type="button" className="button subtle" onClick={() => { setQuery(''); setFilter('Todas'); filterRef.current?.focus(); }}>Mostrar todas las columnas</button></div>}
     {['orders','tracking','settlements'].includes(config.purpose || 'orders') && <details className={styles.importMappingInsurance}><summary>Seguro: valor declarado, costo y fecha son datos distintos</summary><dl>{importFields.filter(field => field.group === 'Seguro').map(field => <div key={field.value}><dt>{field.label}</dt><dd>{field.description}</dd></div>)}</dl><p>{insuranceHelp}</p><p>El costo del seguro es opcional. Importarlo no paga desde caja; los pagos se registran por separado.</p></details>}
-    {selector && createPortal(<DestinationDialog key={selector.index} column={selector} config={config} columns={columns} usage={usage} disabled={disabled} onChangeColumn={onChangeColumn} onClose={() => setSelector(null)} fallbackRef={filterRef} onDiscardImport={onDiscardImport} discardLabel={discardLabel} />, rootRef.current?.closest('.admin-theme') || document.body)}
+    {selector && createPortal(<DestinationDialog key={selector.index} column={selector} config={config} columns={columns} usage={usage} disabled={disabled} onChangeColumn={onChangeColumn} onClose={() => setSelector(null)} fallbackRef={filterRef} />, rootRef.current?.closest('.admin-theme') || document.body)}
   </section>;
 }
 
-function DestinationDialog({ column, config, columns, usage, disabled, onChangeColumn, onClose, fallbackRef, onDiscardImport, discardLabel }) {
+function ColumnSample({ sample }) {
+  return <div className={styles.importMappingSample}><small>Fila {sample.rowNumber}</small>{sample.value.length > 180 ? <details><summary>{sample.value.slice(0, 180)}… · Ver valor completo</summary><p>{sample.value}</p></details> : <p>{sample.value || '(vacío)'}</p>}</div>;
+}
+
+function DestinationDialog({ column, config, columns, usage, disabled, onChangeColumn, onClose, fallbackRef }) {
   const ref = useRef(null), inputRef = useRef(null), resultsRef = useRef(null), nameRef = useRef(null);
   const titleId = useId(), searchId = useId(), categoryId = useId(), groupId = useId(), nameId = useId(), helpId = useId(), nameErrorId = useId();
   const additionalOptions = importFields.filter(field => field.type === 'additional' && isImportFieldAllowed(field.value, config.purpose || 'orders'));
   const defaultAdditional = config.purpose === 'expenses' ? 'expenseAdditionalField' : config.purpose === 'orders' ? 'orderAdditionalField' : 'additionalField';
   const [query, setQuery] = useState(''), [category, setCategory] = useState(''), [group, setGroup] = useState(column.definition && usesGroup(column.definition, config.layout) ? column.mapping?.group ?? 0 : 0), [additional, setAdditional] = useState(column.definition?.type === 'additional'), [additionalDestination, setAdditionalDestination] = useState(column.definition?.type === 'additional' ? column.definition.value : defaultAdditional), [fieldName, setFieldName] = useState(column.mapping?.fieldName ?? column.header);
-  function dismiss(afterClose) {
+  function dismiss() {
     ref.current?.close();
     onClose();
     requestAnimationFrame(() => {
       const trigger = column.trigger;
       if (trigger?.isConnected && !trigger.matches(':disabled') && trigger.getClientRects().length) trigger.focus();
       else fallbackRef.current?.focus();
-      afterClose?.();
     });
   }
   const close = useDialog(ref, { busy: false, dirty: false, onClose: () => dismiss() });
@@ -196,6 +222,6 @@ function DestinationDialog({ column, config, columns, usage, disabled, onChangeC
         return <button type="button" key={field.value} aria-label={field.label} className={styles.importDestinationOption} disabled={disabled || assigned.length > 0} onClick={() => select(field)}><strong>{field.label}</strong><span>{types[field.type]} · {effects[field.effect]}</span><span>{field.description}</span>{field.options && <small>Valores: {field.options.map(option => `${option.value} (${option.label})`).join(', ')}.</small>}{assigned.length > 0 && <small>Asignado a {assigned.map(index => `${columnLetter(index)} · columna ${index + 1}`).join(', ')}. Libera esa asignación{field.scope === 'line' && config.layout === 'order_rows' ? ' o elige otro grupo de producto' : ''}.</small>}</button>;
       })}</section>)}{!results.length && <p className={styles.emptyPrompt}>No encontramos destinos con esta búsqueda y categoría. Prueba otro nombre o selecciona Todas las categorías; también puedes conservar un campo adicional.</p>}</div>
     </div>
-    <footer><button type="button" className="button subtle" onClick={close}>Cerrar sin cambiar</button>{onDiscardImport && <button type="button" className="button subtle" disabled={disabled} onClick={() => { if (!disabled) dismiss(onDiscardImport); }}>{discardLabel || 'Descartar archivo'}</button>}</footer>
+    <footer><button type="button" className="button subtle" onClick={close}>Cerrar sin cambiar</button></footer>
   </dialog>;
 }

@@ -51,6 +51,47 @@ const linkedOrder = async (store,sourceId,key='ORDER-001') => {
   return link ? store.order(link.internal_id) : null;
 };
 
+test('filas originales se localizan por hoja y fila exactas dentro de su importación',()=>fixture(async(store,f)=>{
+  const names=[' Datos ','datos'];
+  const config={formatVersion:2,sheets:names.map(sheetName=>configFor(fields,{sheetName}))};
+  const workbook=prefix=>writeExcelSheets(names.map((name,index)=>({
+    name,
+    rows:[fields,fields.map(field=>basicRow({
+      externalOrderId:`${prefix}-${index}`,externalShipmentId:`${prefix}-S-${index}`,
+      tracking:`${prefix}-GUIA-${index}`,collectionExternalId:`${prefix}-C-${index}`,
+      customerName:`${prefix} cliente ${index}`
+    })[field]??'')]
+  })));
+  const batch=await preview(store,await upload(store,f,[],{bytes:workbook('PRIMERO'),config}));
+  const second=await preview(store,await upload(store,f,[],{bytes:workbook('SEGUNDO'),config}));
+  assert.notEqual(batch.id,second.id);
+  assert.equal(batch.rows.total,2);
+  const location={sheet:names[0],rowNumber:'2'};
+  const located=await getImportBatch(store,batch.id,location);
+  assert.equal(located.rows.total,1);
+  const [row]=located.rows.records;
+  assert.equal(row.sheet,names[0]);assert.equal(row.rowNumber,2);
+  assert.equal(row.source[fields.indexOf('customerName')].value,'PRIMERO cliente 0');
+  const matching=await getImportBatch(store,batch.id,{...location,state:row.state,q:'PRIMERO cliente 0'});
+  assert.deepEqual(matching.rows.records,located.rows.records);
+  const empty=async filters=>{
+    const result=await getImportBatch(store,batch.id,filters);
+    assert.equal(result.rows.total,0);assert.deepEqual(result.rows.records,[]);
+  };
+  await empty({...location,state:row.state==='applied'?'new':'applied'});
+  await empty({...location,q:'SEGUNDO cliente 0'});
+  await empty({...location,q:'PRIMERO cliente 1'});
+  await empty({...location,rowNumber:3});
+  await empty({...location,rowNumber:10001});
+  await empty({...location,sheet:'Datos'});
+  const otherSheet=await getImportBatch(store,batch.id,{sheet:names[1],rowNumber:2});
+  assert.equal(otherSheet.rows.total,1);
+  assert.equal(otherSheet.rows.records[0].source[fields.indexOf('customerName')].value,'PRIMERO cliente 1');
+  for(const rowNumber of [null,''])assert.equal((await getImportBatch(store,batch.id,{rowNumber})).rows.total,2);
+  await assert.rejects(()=>getImportBatch(store,batch.id,{rowNumber:2}),{status:400,message:'Elige una hoja para localizar la fila.'});
+  for(const rowNumber of [0,10002])await assert.rejects(()=>getImportBatch(store,batch.id,{sheet:names[0],rowNumber}),{status:400});
+}));
+
 test('Excel agrupa líneas, toma flete una vez, declara liquidación sin caja y reimporta sin duplicar dinero',()=>fixture(async(store,f)=>{
   const rows=[basicRow({quantity:2,collectedAmount:'122.000',settlementExternalId:'SET-1',settlementDate:'2025-09-05',settlementGross:'122.000',settlementNet:'105.000'}),basicRow({productExternalKey:'GIFT',quantity:1,unitPrice:'0',collectedAmount:'122.000',settlementExternalId:'SET-1',settlementDate:'2025-09-05',settlementGross:'122.000',settlementNet:'105.000'})];
   const resolutions=[{action:'link_product',externalKey:'SKU-A',internalId:f.a.id},{action:'link_product',externalKey:'GIFT',internalId:f.gift.id}];
