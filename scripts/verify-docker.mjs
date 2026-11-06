@@ -258,7 +258,8 @@ try {
   stopWorker();
   compose(['run', '--rm', 'checks', 'npm', 'run', 'check'], 'Sintaxis e imports de la imagen checks');
   passed('npm run check');
-  const contracts = compose(['run', '--rm', 'checks', 'npm', 'test'], 'Contratos SQLite y PostgreSQL', { timeout: 2700000 });
+  // The expanded serial PostgreSQL contracts exceeded 45 minutes while still passing on the native builder.
+  const contracts = compose(['run', '--rm', 'checks', 'npm', 'test'], 'Contratos SQLite y PostgreSQL', { timeout: 10800000 });
   ensure(contracts.stdout.includes('Contrato completo con PostgreSQL real') && /(?:skipped 0|# skipped 0)/.test(contracts.stdout), 'El contrato PostgreSQL no se ejecutó o hubo pruebas omitidas.');
   passed('npm test: SQLite y PostgreSQL sin omisiones');
   compose(['run', '--rm', 'checks', 'npm', 'audit', '--omit=dev', '--audit-level=high'], 'Auditoría de dependencias de producción');

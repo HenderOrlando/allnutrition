@@ -1,5 +1,10 @@
 # Cambios — administración v3 y antecedentes
 
+## Plazo del pase contractual ampliado · 6 de noviembre de 2026
+
+- La aceptación permite tres horas para completar todos los contratos SQLite/PostgreSQL. El pase nativo anterior agotó 45 minutos mientras continuaban terminando casos seriales, sin alcanzar un resumen final.
+- No se cambia ningún plazo SQL, prueba, permiso ni opción de durabilidad. Auditoría, E2E, recuperación y cierre del proyecto siguen siendo obligatorios antes de etiquetar una imagen; un pase parcial continúa rechazado.
+
 ## Compatibilidad del aislamiento Linux · 6 de noviembre de 2026
 
 - El perfil seccomp admite `faccessat2` para la reapertura segura del runtime OCI moderno. `clone3` sigue bloqueado: devuelve `ENOSYS` en amd64/arm64 para conservar el fallback de hilos de glibc a `clone`.
