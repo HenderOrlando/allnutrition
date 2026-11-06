@@ -171,7 +171,8 @@ async function startWorker() {
   const schedulerId = compose(['ps', '-q', 'scheduler'], 'Identificación del scheduler', { quiet: true }).stdout.trim();
   ensure(schedulerId, 'El scheduler no está ejecutándose.');
   const inspected = JSON.parse(run('docker', ['inspect', schedulerId], 'Aislamiento del scheduler', { quiet: true, logOutput: false }).stdout)[0];
-  ensure(inspected.Image === result.imageId && inspected.Config.User === 'node' && Object.values(inspected.NetworkSettings.Ports || {}).every(bindings => !bindings?.length) && Object.keys(inspected.NetworkSettings.Networks).every(network => network === `${project}_backend`), 'Scheduler debe usar la imagen runtime, usuario node, red backend y ningún puerto publicado.');
+  const networks = Object.keys(inspected.NetworkSettings.Networks);
+  ensure(inspected.Image === result.imageId && inspected.Config.User === 'node' && Object.values(inspected.NetworkSettings.Ports || {}).every(bindings => !bindings?.length) && networks.length === 2 && networks.includes(`${project}_backend`) && networks.includes(`${project}_social_egress`), 'Scheduler debe usar la imagen runtime, usuario node, redes backend y social_egress y ningún puerto publicado.');
   const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
     const state = workerState();

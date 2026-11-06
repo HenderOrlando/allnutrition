@@ -1,5 +1,10 @@
 # Cambios — administración v3 y antecedentes
 
+## Compuerta de redes del scheduler · 6 de noviembre de 2026
+
+- La aceptación exige exactamente `backend` y `social_egress`, de acuerdo con Compose. Conserva la imagen runtime comprobada, usuario `node` y ausencia de puertos publicados; una red adicional sigue rechazándose.
+- Humo con contenedor y redes Docker reales: la comprobación anterior rechazó la topología prevista; corregida la aceptó y rechazó una tercera red. Se retiraron únicamente los recursos de ese humo. Esta comprobación no sustituye la aceptación integral nativa ni publica una imagen.
+
 ## Correcciones detectadas antes de la entrega integral · 5 de noviembre de 2026
 
 - El healthcheck espera el PostgreSQL definitivo por TCP; no confunde el servidor temporal del entrypoint con disponibilidad para migrar. Se conserva la verificación TLS del consumidor y no se añaden reintentos de escritura.

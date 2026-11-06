@@ -1,5 +1,11 @@
 # Verificación v3 — administración de negocio
 
+## Reanudación de la entrega integral · 6 de noviembre de 2026
+
+- Se retomó el HEAD publicado `4658dfb` en un constructor físico Linux/amd64 con Node 24 privado, usuario no root y acceso Docker acotado al proceso; no se reemplazó el Node global ni se copiaron credenciales productivas.
+- El candidato `release-all-adjustments-20261106T020425Z-91b7ab6b-r6`, paquete SHA-256 `2b4e733c9b43b3644fe111317453201314a687e45042ece9747c12a6f3fac74a`, se interrumpió después de preparar fuentes y validar Compose: una revisión detectó que el verificador seguía exigiendo únicamente `backend`, aunque Compose conecta el scheduler a `backend` y `social_egress`. No se promovió; su proyecto `allnutrition-test-6616d46a019e2327` quedó sin contenedores, volúmenes ni redes.
+- Reproducción con Docker real: imagen runtime conservada, usuario `node`, ningún puerto y las dos redes previstas. La guarda anterior rechazó el contenedor; la corregida lo aceptó y rechazó una tercera red real no prevista. Se conservaron las otras condiciones y se retiraron contenedor/redes del humo. La suite completa y la recuperación de copia real siguen siendo puertas obligatorias del sucesor.
+
 ## Preparación de entrega integral · 5 de noviembre de 2026
 
 - Se consolidaron primero los ajustes ya publicados de v7 y después publicidad, medios, API, análisis, panel e importaciones en commits temáticos. Libros reales, copia local de entorno, archivo de macOS y contexto local no versionado quedaron fuera del código y del paquete.
