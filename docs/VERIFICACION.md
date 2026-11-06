@@ -1,5 +1,19 @@
 # Verificación v3 — administración de negocio
 
+## Entrega integral publicada · 6 de noviembre de 2026
+
+- Corte completado a las **12:39:52 UTC / 07:39:52 Bogotá**, con el runtime inmutable descrito en la aceptación siguiente. Web y scheduler ejecutan ese mismo ID; PostgreSQL conserva el contenedor y proceso anteriores. Sólo están activos esos tres servicios; no hay runner ni consumidor de navegador social.
+- Recuperación real `allnutrition-recovery-91b7ab6b-r9`: respaldo v7 restaurado en base aislada y migrado con la imagen aceptada. Se conservaron contenido de las 41 tablas heredadas, esquema, marcadores anteriores, hash comercial y medios; validación completa nueva aprobada, TLS verificado, DDL runtime denegado y TCP sin TLS rechazado. La repetición fue idempotente y el clon quedó retirado. La validación rechazada del lector v7 usado sólo para exportar permanece registrada; no se convirtió en aprobación.
+- Producción: escritores detenidos antes de la copia final y migración v8; 14 tablas nuevas vacías, 56 tablas totales y marcadores 2–8. Antes de arrancar scheduler se conservaron las 56 tablas; en la comprobación posterior sólo cambió `job_runs`. Los cuatro medios, env/TLS y esquema heredado permanecieron iguales; no se reinició la base.
+- Respaldo final privado: dump de 463.683 bytes, modo `0600`, catálogo legible y snapshot exportado; medios y fuentes anteriores conservados por separado. Ubicación y advertencia de recuperación compatible en [DESPLIEGUE.md](DESPLIEGUE.md).
+- Humo HTTPS real: salud 200, pedidos anónimos 401 y lecturas autenticadas 200. Los conteos se mantuvieron en cero pedidos y cuatro importaciones; la misma sesión anterior al corte siguió válida. Plantilla descargada con 200/`no-store`, cinco hojas y sólo cabeceras en las cuatro hojas comerciales. CSRF ausente y origen ajeno devolvieron 403 sobre un ID confirmado inexistente, sin usar endpoints de creación.
+- Publicidad: listas de campañas, conexiones y piezas 200/vacías; `SOCIAL_PUBLISHING_ENABLED=false` y `SOCIAL_BROWSER_ENABLED=false` en web y scheduler. Runner deshabilitado y consumidor inactivo; no hubo OAuth, publicación ni gasto en Meta.
+- Nginx: vhost SHA-256 `789deae90ef1d49e99b82af1b394368a65aa12172d5baf7eed879e152d6ed474`, sintaxis válida y recarga gradual con el mismo master. Configuraciones ajenas sin cambios y otro dominio con 200. Peticiones sólo de cabeceras, declarando 10 MiB + 1 byte: PUT con UUID canónico alcanzó autenticación (401); POST y PUT con ID no canónico fueron rechazados (413), sin enviar cuerpo.
+- Interfaz productiva en Chromium privado: escritorio 1440×900 y móvil 390×844. Alta vacía de importación, pasos posteriores bloqueados, archivo sin seleccionar y continuación deshabilitada; lista de Publicidad vacía y conexiones API/navegador deshabilitadas. Sin desbordamiento horizontal móvil ni excepciones JavaScript observadas; se registró un `net::ERR_ABORTED` de prefetch `/?_rsc=…`. No se guardaron orígenes, archivos, vínculos ni campañas. Navegador cerrado; logout de la sesión propia 200, token rechazado con 401 y demás sesiones intactas.
+- Dos incidencias del auxiliar operativo, sin cambio de aplicación: una validación manual duplicó el archivo exclusivo que preflight crea; se conservó aparte y preflight ejecutó su propia validación. El primer humo de plantilla lanzó el worker Excel desde HOME, donde no existe; ejecutado desde la fuente sellada completó la lectura y el resto de puertas. Ambos rechazos se conservaron como evidencia, sin omitir comprobaciones ni reconstruir el runtime.
+- Cierre a las 13:00 UTC: salud 200, cero reinicios en web/scheduler/BD y heartbeat del scheduler de 28 segundos de antigüedad. Imagen anterior conservada; la sesión de comprobación ya estaba cerrada.
+- Limpieza posterior acotada al constructor físico: retirados el builder privado, su red, el volumen de caché que ocupaba 5.729.673.216 bytes y tres imágenes descartables (checks y dos runtimes rechazados). Runtime aprobado, imagen anterior, respaldos y registros conservados; sin prune global ni cambios de recursos en la VM productiva.
+
 ## Aceptación del mismo binario · 6 de noviembre de 2026
 
 Aplicación inmutable de `cc372473ee585d3454cb3ec7e65251e56ac09f66`, paquete SHA-256 `485f71bd48cdb57e6b9dd670af21fafd8cfb6fd0150eafeaa1633a9891d340c6`. Runtime aprobado: `allnutrition:release-b39d48b56e34`, ID `sha256:b39d48b56e34f3c3a41259773f4a58aa3da7a7e23a72f534bbe19809a22a8b1f`, Linux/amd64, Node 24.22.2, UID 1000.
@@ -16,7 +30,7 @@ El primer pase completo conservó el resultado contractual, pero rechazó tres E
 
 La continuación mantuvo los IDs exactos de runtime/checks y su mismo `BUILD_ID` (`V6OgD72RobcYV8Si3SzCV`), sin reconstruir. El arnés separado modifica únicamente `tests/e2e/app.spec.mjs`, SHA-256 `e48beb14b6d27e8deeb80db6215511d114ff48bc3a8df6aa60644493d783afc7`. `acceptance.json` conserva los hashes del resultado y registro anteriores, declara `reusedGates` y distingue esas pruebas de las recién ejecutadas. No se presenta como una repetición contractual nueva.
 
-Esta aprobación etiqueta la imagen; no acredita todavía la migración del respaldo real ni el corte productivo. Ambas comprobaciones se registran por separado. Meta permanece deshabilitado.
+Esta aprobación se utilizó para el corte y recuperación comprobados arriba. Distingue las puertas reutilizadas de las recién ejecutadas; no acredita una ejecución de CI remoto ni habilita Meta.
 
 ## Reanudación de la entrega integral · 6 de noviembre de 2026
 

@@ -1,5 +1,12 @@
 # Cambios — administración v3 y antecedentes
 
+## Entrega integral publicada · 6 de noviembre de 2026
+
+- Aplicación `cc37247` publicada como `allnutrition:release-b39d48b56e34`, sin reconstrucción tras la aceptación. El commit `16c78c9` sólo corrige el arnés E2E y documenta su procedencia.
+- Migración social v7→v8 con recuperación real ensayada, respaldo final y escritores detenidos; tablas heredadas, esquema, sesiones y medios conservados, sin reiniciar PostgreSQL.
+- Importaciones y Publicidad comprobadas en la interfaz productiva de escritorio/móvil. Meta API y navegador permanecen deshabilitados; no se aplicaron libros ni se crearon datos de negocio durante el humo.
+- Vhost Nginx actualizado con límite ampliado sólo para el PUT canónico de piezas y recarga gradual; los demás dominios permanecieron intactos. Evidencia y límites en [VERIFICACION.md](VERIFICACION.md); recuperación en [DESPLIEGUE.md](DESPLIEGUE.md).
+
 ## Contratos E2E de navegación e importaciones · 6 de noviembre de 2026
 
 - La matriz de navegación conserva los destinos, la selección responsive y la recarga sin fijar títulos de interfaz que no forman parte del contrato.
