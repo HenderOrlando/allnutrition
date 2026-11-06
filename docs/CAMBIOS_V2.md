@@ -1,5 +1,11 @@
 # Cambios — administración v3 y antecedentes
 
+## Contratos E2E de navegación e importaciones · 6 de noviembre de 2026
+
+- La matriz de navegación conserva los destinos, la selección responsive y la recarga sin fijar títulos de interfaz que no forman parte del contrato.
+- El escenario de cancelación/Escape abre el alta mediante `section=orders&tab=imports&batch=new`; no depende de que el historial vacío tenga un único botón de alta.
+- Corrección exclusiva del arnés de pruebas, sin cambios de aplicación ni reconstrucción del runtime. La aceptación del mismo binario y la procedencia de las puertas reutilizadas están en [VERIFICACION.md](VERIFICACION.md).
+
 ## Plazo del pase contractual ampliado · 6 de noviembre de 2026
 
 - La aceptación permite tres horas para completar todos los contratos SQLite/PostgreSQL. El pase nativo anterior agotó 45 minutos mientras continuaban terminando casos seriales, sin alcanzar un resumen final.

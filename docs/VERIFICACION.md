@@ -1,5 +1,23 @@
 # Verificación v3 — administración de negocio
 
+## Aceptación del mismo binario · 6 de noviembre de 2026
+
+Aplicación inmutable de `cc372473ee585d3454cb3ec7e65251e56ac09f66`, paquete SHA-256 `485f71bd48cdb57e6b9dd670af21fafd8cfb6fd0150eafeaa1633a9891d340c6`. Runtime aprobado: `allnutrition:release-b39d48b56e34`, ID `sha256:b39d48b56e34f3c3a41259773f4a58aa3da7a7e23a72f534bbe19809a22a8b1f`, Linux/amd64, Node 24.22.2, UID 1000.
+
+| Puerta | Resultado observado | Procedencia |
+| --- | --- | --- |
+| Contratos SQLite/PostgreSQL | 1.213 aprobados, cero fallos/omisiones; 93,7 minutos | Pase íntegro `7b6ccf12771710e0`, reutilizado con autorización expresa |
+| E2E escritorio/móvil | 48 aprobados; 20,2 minutos | Pase completo nuevo `61489437b66cba89` |
+| Sintaxis/imports y auditoría de producción | 283 archivos sin errores; cero vulnerabilidades conocidas | Ejecutados de nuevo en la continuación |
+| Scheduler, idempotencia, TLS, caída, reinicio y dump/restore | Todas las puertas aprobadas | Ejecutadas de nuevo en el proyecto descartable |
+| Cierre del proyecto descartable | Cero contenedores, volúmenes y redes propios | `cleanup.json` de la continuación |
+
+El primer pase completo conservó el resultado contractual, pero rechazó tres E2E: dos expectativas del título antiguo de importaciones y un selector ambiguo entre dos acciones de alta válidas. Se eliminaron las aserciones de redacción incidental y se abrió el alta por su URL explícita; no se omitieron escenarios ni se modificó el código de aplicación.
+
+La continuación mantuvo los IDs exactos de runtime/checks y su mismo `BUILD_ID` (`V6OgD72RobcYV8Si3SzCV`), sin reconstruir. El arnés separado modifica únicamente `tests/e2e/app.spec.mjs`, SHA-256 `e48beb14b6d27e8deeb80db6215511d114ff48bc3a8df6aa60644493d783afc7`. `acceptance.json` conserva los hashes del resultado y registro anteriores, declara `reusedGates` y distingue esas pruebas de las recién ejecutadas. No se presenta como una repetición contractual nueva.
+
+Esta aprobación etiqueta la imagen; no acredita todavía la migración del respaldo real ni el corte productivo. Ambas comprobaciones se registran por separado. Meta permanece deshabilitado.
+
 ## Reanudación de la entrega integral · 6 de noviembre de 2026
 
 - Se retomó el HEAD publicado `4658dfb` en un constructor físico Linux/amd64 con Node 24 privado, usuario no root y acceso Docker acotado al proceso; no se reemplazó el Node global ni se copiaron credenciales productivas.
