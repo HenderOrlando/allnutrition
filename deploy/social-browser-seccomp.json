@@ -63,6 +63,22 @@
       "excludes": {}
     },
     {
+      "comment": "Keep clone3 unavailable; ENOSYS lets glibc fall back to clone on supported application architectures.",
+      "names": [
+        "clone3"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38,
+      "args": [],
+      "includes": {
+        "arches": [
+          "amd64",
+          "arm64"
+        ]
+      },
+      "excludes": {}
+    },
+    {
       "names": [
         "accept",
         "accept4",
@@ -106,6 +122,7 @@
         "exit",
         "exit_group",
         "faccessat",
+        "faccessat2",
         "fadvise64",
         "fadvise64_64",
         "fallocate",

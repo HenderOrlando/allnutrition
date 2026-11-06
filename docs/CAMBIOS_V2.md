@@ -1,5 +1,11 @@
 # Cambios — administración v3 y antecedentes
 
+## Compatibilidad del aislamiento Linux · 6 de noviembre de 2026
+
+- El perfil seccomp admite `faccessat2` para la reapertura segura del runtime OCI moderno. `clone3` sigue bloqueado: devuelve `ENOSYS` en amd64/arm64 para conservar el fallback de hilos de glibc a `clone`.
+- Reproducción nativa: el perfil anterior provocó SIGSEGV en `runc/libpathrs` antes del código de aplicación; la consulta de permisos aislada permitió `/bin/true`. El perfil mínimo corregido ejecutó Node, un hilo real e interacción DOM en Chromium con sandbox, UID 1000, capacidades eliminadas, `no-new-privileges`, raíz de solo lectura y sin red.
+- No se añadieron permisos privilegiados ni se actualizó el runtime global. Esta comprobación de compatibilidad no acredita por sí sola una imagen de entrega.
+
 ## Compuerta de redes del scheduler · 6 de noviembre de 2026
 
 - La aceptación exige exactamente `backend` y `social_egress`, de acuerdo con Compose. Conserva la imagen runtime comprobada, usuario `node` y ausencia de puertos publicados; una red adicional sigue rechazándose.
