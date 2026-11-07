@@ -57,6 +57,7 @@ export async function signOut(page){
 
 export async function selectWorkspace(scope,label,destination){
  const nav=scope.getByRole('navigation',{name:label,exact:true});
+ await expect(nav).toBeVisible();
  const selector=nav.getByRole('combobox');
  if(await selector.isVisible()){
   await selector.selectOption({label:destination});
@@ -75,9 +76,9 @@ export async function openDisclosure(scope,label){
 }
 
 export async function openCashOperation(page,label){
- const action=page.getByRole('button',{name:label,exact:true});
- if(!await action.isVisible())await openDisclosure(page,/^(Registrar operación|Otras operaciones)$/);
- await action.click();
+ const action=page.getByRole('button',{name:label,exact:true}).and(page.locator(':visible'));
+ if(!await action.count())await openDisclosure(page,/^(Registrar operación|Otras operaciones)$/);
+ await page.getByRole('button',{name:label,exact:true}).and(page.locator(':visible')).first().click();
 }
 
 export function visibleRecord(page,text){

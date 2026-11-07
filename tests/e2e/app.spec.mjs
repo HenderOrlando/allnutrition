@@ -364,9 +364,9 @@ test('lanzador y guía se usan con foco real, sin abrirse sobre campos o diálog
  await page.locator('[data-admin-section-heading]').focus();await page.keyboard.press('Control+Shift+k');await expect(launcher).toHaveCount(0);
 });
 
-test('rechazar Atrás conserva el borrador y su destino; aceptar permite Atrás y Adelante sin reutilizarlo',async({page})=>{
- await login(page);await navigate(page,'Caja');
- const operations=page.locator('summary').filter({hasText:/^Registrar operación$/});
+test('rechazar Atrás conserva el borrador y su destino; aceptar permite Atrás y Adelante sin reutilizarlo',async({page},info)=>{
+ await guidedCashFixture(page,info);await navigate(page,'Caja');
+ const operations=page.getByRole('button',{name:'Registrar ingreso',exact:true});
  await openCashOperation(page,'Registrar ingreso');
  const drawer=page.getByRole('dialog');
  await expect(drawer.getByRole('heading',{level:2})).toBeFocused();
@@ -403,7 +403,7 @@ test('apertura cero con responsable sin credenciales e ingreso no comercial sepa
  test.setTimeout(60000);
  await login(page);await navigate(page,'Caja');
  await page.getByRole('button',{name:'Crear cuenta',exact:true}).first().click();
- const drawer=page.getByRole('dialog'),name=`Banco E2E ${info.project.name}`,personName=`Responsable E2E ${info.project.name}`;
+ const unique=`${info.project.name}-${crypto.randomUUID()}`,drawer=page.getByRole('dialog'),name=`Banco E2E ${unique}`,personName=`Responsable E2E ${unique}`,reference=`aporte-e2e-${unique}`;
  await drawer.locator('[name="name"]').fill(name);
  await drawer.getByLabel('Tipo de cuenta').selectOption('bank');
  await drawer.getByLabel('Saldo inicial confirmado (COP)').fill('0');
@@ -426,12 +426,12 @@ test('apertura cero con responsable sin credenciales e ingreso no comercial sepa
  await drawer.getByLabel('Descripción').fill('Aporte no comercial de prueba');
  await drawer.getByLabel('Importe (COP)').fill('500');
  await drawer.getByLabel('Cuenta').selectOption(account.id);
- await drawer.getByLabel('Referencia').fill(`aporte-e2e-${info.project.name}`);
+ await drawer.getByLabel('Referencia').fill(reference);
  const addingIncome=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/business/actions/income'&&r.request().method()==='POST');
  await drawer.getByRole('button',{name:'Registrar ingreso',exact:true}).click();
  const incomeResponse=await addingIncome;expect(incomeResponse.status()).toBe(200);
  const income=await incomeResponse.json();
- expect(income).toMatchObject({accountId:account.id,concept:'owner_funding',kind:'income',amountMinor:50000,reference:`aporte-e2e-${info.project.name}`});
+ expect(income).toMatchObject({accountId:account.id,concept:'owner_funding',kind:'income',amountMinor:50000,reference});
  await expect(drawer).toHaveCount(0);
  const overview=await (await page.request.get('/api/admin/finance/overview')).json();
  expect(overview.accounts.find(row=>row.id===account.id).balanceMinor).toBe(50000);
@@ -446,13 +446,14 @@ test('apertura cero con responsable sin credenciales e ingreso no comercial sepa
  await expect(accountHeading).toBeVisible();await expect(page).toHaveURL(accountURL);
  await accountHeading.focus();await page.keyboard.press('Escape');await expect(page).toHaveURL(overviewURL);await expect(accountTrigger).toBeFocused();
  await selectWorkspace(page,'Vistas de caja','Movimientos');await openDisclosure(page,/^Filtros(?: \(\d+ activos\))?$/);await page.getByRole('combobox',{name:'Cuenta',exact:true}).selectOption(account.id);
- const movementsURL=page.url(),incomeRow=page.locator('.cash-records .cash-row').filter({has:page.getByRole('heading',{name:'owner_funding',exact:true})});
+ const movementsURL=page.url(),incomeRow=page.locator('.cash-records .cash-row').filter({hasText:reference});
  const detailTrigger=incomeRow.getByRole('button',{name:'Ver detalle',exact:true});
+ await expect(incomeRow).toContainText(money(500));await expect(incomeRow).toContainText(name);
  await expect(detailTrigger).toHaveCount(1);await detailTrigger.click();
  const detailHeading=page.locator('.cash-detail').getByRole('heading',{level:2});await expect(detailHeading).toBeFocused();
  await expect(page).toHaveURL(url=>url.searchParams.get('record')===income.id&&url.searchParams.get('account')===account.id);
  await expect(page.locator('.cash-detail').getByText('Importe',{exact:true}).locator('..')).toContainText(money(500));
- await expect(page.locator('.cash-detail')).toContainText(`aporte-e2e-${info.project.name}`);
+ await expect(page.locator('.cash-detail')).toContainText(reference);
  const detailURL=page.url();await page.locator('.cash-detail').getByRole('button',{name:'Revertir movimiento completo',exact:true}).click();
  await expect(drawer).toBeVisible();await page.keyboard.press('Escape');await expect(drawer).toHaveCount(0);await expect(page).toHaveURL(detailURL);
  await page.getByLabel('Buscar',{exact:true}).focus();await page.keyboard.press('Escape');await expect(page).toHaveURL(detailURL);
@@ -723,4 +724,199 @@ test('vitrina móvil: destinos nativos, búsqueda de combos y continuidad de ped
   const current=await (await page.request.get('/api/admin/settings')).json();
   expect((await page.request.put('/api/admin/settings',{headers,data:{...current,launchApproved:original.launchApproved}})).status()).toBe(200);
  }
+});
+
+// All preconditions use the authenticated panel's CSRF token, never a database reset.
+async function guidedCashFixture(page,info){
+ const panelRequest=page.waitForRequest(request=>new URL(request.url()).pathname.startsWith('/api/admin/')&&Boolean(request.headers()['x-csrf-token']));
+ await login(page);const request=await panelRequest;
+ const headers={Origin:new URL(page.url()).origin,'x-csrf-token':await request.headerValue('x-csrf-token')};
+ const marker=`caja-${info.project.name}-${crypto.randomUUID()}`,today=bogotaDate();
+ const day=offset=>{const date=new Date(`${today}T12:00:00Z`);date.setUTCDate(date.getUTCDate()+offset);return date.toISOString().slice(0,10);};
+ const get=async path=>{const response=await page.request.get(path);expect(response.ok()).toBe(true);return response.json();};
+ const post=async(path,data)=>{const response=await page.request.post(path,{headers,data:{requestId:crypto.randomUUID(),...data}});expect(response.ok(),await response.text()).toBe(true);return response.json();};
+ const person=await post('/api/admin/business/people',{name:`Persona ${marker}`,active:true});
+ const account=await post('/api/admin/business/accounts',{name:`Efectivo ${marker}`,type:'cash',responsibleId:person.id,openingOn:day(-3),openingBalanceMinor:10000000});
+ const second=await post('/api/admin/business/accounts',{name:`Otra caja ${marker}`,type:'cash',responsibleId:person.id,openingOn:day(-3),openingBalanceMinor:700000});
+ const balance=async id=>(await get('/api/admin/finance/overview')).accounts.find(row=>row.id===id).balanceMinor;
+ return {headers,marker,today,day,get,post,person,account,second,balance};
+}
+async function submitCashAction(page,action,label){
+ const response=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/admin/business/actions/${action}`&&r.request().method()==='POST');
+ await page.getByRole('dialog').getByRole('button',{name:label,exact:true}).click();
+ const saved=await response;expect(saved.ok(),await saved.text()).toBe(true);
+ return {result:await saved.json(),payload:saved.request().postDataJSON()};
+}
+async function cashFilters(page){await openDisclosure(page,/^Filtros(?: \(\d+ activos\))?$/);}
+
+test('caja guiada: el gasto exige elegir pago y corregir o usar Pedidos no duplica salidas',async({page},info)=>{
+ test.setTimeout(120000);
+ const f=await guidedCashFixture(page,info),original=await f.get('/api/admin/business/settings');
+ const saveSettings=async data=>{const current=await f.get('/api/admin/business/settings');const response=await page.request.put('/api/admin/business/settings',{headers:f.headers,data:{...current,...data,requestId:crypto.randomUUID()}});expect(response.ok(),await response.text()).toBe(true);};
+ try{
+  await saveSettings({defaultPaymentAccountId:f.account.id});
+  await test.step('Gastos pendientes, pago explícito y formulario embebido',async()=>{
+  await navigate(page,'Caja');
+  const drawer=page.getByRole('dialog');
+  for(const toggle of [false,true]){
+   await openCashOperation(page,'Registrar gasto');
+   await expect(drawer.getByRole('radio',{name:'Dejar pendiente',exact:true})).toBeChecked();
+   await drawer.locator('[name="concept"]').fill(`${f.marker} pendiente ${toggle}`);
+   await drawer.locator('[name="amountMinor"]').fill('20000');
+   if(toggle){await drawer.getByRole('radio',{name:'Registrar y pagar ahora',exact:true}).check();await expect(drawer.locator('[name="accountId"]')).toHaveValue(f.account.id);await drawer.getByRole('radio',{name:'Dejar pendiente',exact:true}).check();}
+   const {result,payload}=await submitCashAction(page,'expense','Guardar gasto pendiente');
+   for(const key of ['accountId','effectiveOn','reference','expensePaymentMode'])expect(payload).not.toHaveProperty(key);
+   const detail=await f.get(`/api/admin/finance/expenses?record=${result.id}`);
+   expect(detail).toMatchObject({paidMinor:0,outstandingMinor:2000000});expect(detail.activePayments).toHaveLength(0);
+   expect(await f.balance(f.account.id)).toBe(10000000);
+   await expect(drawer).toHaveCount(0);
+  }
+  await openCashOperation(page,'Registrar gasto');
+  await drawer.locator('[name="concept"]').fill(`${f.marker} pagado`);await drawer.locator('[name="amountMinor"]').fill('20000');
+  await drawer.getByRole('radio',{name:'Registrar y pagar ahora',exact:true}).check();
+  await expect(drawer.locator('[name="accountId"]')).toHaveValue(f.account.id);
+  const {result:paid}=await submitCashAction(page,'expense','Registrar gasto y pago');
+  const paidDetail=await f.get(`/api/admin/finance/expenses?record=${paid.id}`);
+  expect(paidDetail).toMatchObject({paidMinor:2000000,outstandingMinor:0});expect(paidDetail.activePayments).toHaveLength(1);
+  expect(await f.balance(f.account.id)).toBe(8000000);
+  await selectWorkspace(page,'Vistas de caja','Gastos y pagos');await cashFilters(page);
+  await page.getByLabel('Buscar',{exact:true}).fill(`${f.marker} pagado`);
+  await page.locator('.cash-records .cash-row').filter({hasText:`${f.marker} pagado`}).getByRole('button',{name:'Ver detalle',exact:true}).click();
+  await page.locator('.cash-detail').getByRole('button',{name:'Corregir importe o fecha con motivo',exact:true}).click();
+  await expect(drawer.getByRole('radio')).toHaveCount(0);await expect(drawer.locator('[name="accountId"]')).toHaveCount(0);
+  await drawer.locator('[name="amountMinor"]').fill('19000');await drawer.locator('[name="reason"]').fill('Corrección de importe sin volver a pagar');
+  const correctionResponse=page.waitForResponse(r=>r.url().endsWith('/api/admin/business/actions/expense')&&r.request().method()==='POST');
+  await drawer.locator('button[type="submit"]').click();const corrected=await correctionResponse;expect(corrected.ok()).toBe(true);
+  expect(corrected.request().postDataJSON()).not.toHaveProperty('accountId');
+  const correctedDetail=await f.get(`/api/admin/finance/expenses?record=${paid.id}`);
+  expect(correctedDetail).toMatchObject({paidMinor:2000000,creditMinor:100000});expect(correctedDetail.activePayments).toHaveLength(1);expect(await f.balance(f.account.id)).toBe(8000000);
+  const products=await f.get('/api/admin/products'),product=products.records.find(row=>row.slug==='creatina-vital-force-70-servicios');
+  const order=await f.post('/api/admin/orders',{placedOn:f.today,customerName:f.marker,phone:'3001234567',city:'Bogotá',department:'Cundinamarca',address:'Dirección sintética',status:'new',deliveryMethod:'carrier',shippingChargeMinor:0,items:[{lineId:crypto.randomUUID(),kind:'products',itemId:product.id,quantity:1,unitPriceMinor:Math.round(product.price*100),discountMinor:0}]});
+  await navigate(page,'Pedidos');await page.getByLabel('Buscar pedidos').fill(f.marker);
+  await page.getByRole('button',{name:`Abrir pedido AN-${String(order.number).padStart(6,'0')}`,exact:true}).click();
+  await selectWorkspace(drawer,'Detalle del pedido','Rentabilidad');
+  await drawer.getByRole('button',{name:'Registrar gasto del pedido',exact:true}).click();
+  await expect(drawer.getByRole('radio',{name:'Dejar pendiente',exact:true})).toBeChecked();
+  await drawer.locator('[name="concept"]').fill(`${f.marker} pedido`);await drawer.locator('[name="amountMinor"]').fill('1000');
+  const {result:embedded,payload}=await submitCashAction(page,'expense','Guardar gasto pendiente');
+  expect(payload.orderId).toBe(order.id);expect(payload).not.toHaveProperty('accountId');
+  expect(await f.get(`/api/admin/finance/expenses?record=${embedded.id}`)).toMatchObject({paidMinor:0,outstandingMinor:100000});
+  expect(await f.balance(f.account.id)).toBe(8000000);
+  },{timeout:90000});
+ }finally{await saveSettings({defaultPaymentAccountId:original.defaultPaymentAccountId});}
+});
+
+test('caja guiada: el cierre consulta cuenta y fecha, descarta respuestas antiguas y conserva el conteo ante errores',async({page},info)=>{
+ test.setTimeout(120000);
+ const f=await guidedCashFixture(page,info);
+ for(const [offset,amountMinor] of [[-2,1000000],[-1,2000000]])await f.post('/api/admin/business/actions/income',{accountId:f.account.id,effectiveOn:f.day(offset),amountMinor,concept:'owner_funding',reference:`${f.marker} ${offset}`});
+ await navigate(page,'Caja');await openCashOperation(page,'Cerrar caja');
+ const drawer=page.getByRole('dialog'),account=drawer.locator('[name="accountId"]'),date=drawer.locator('[name="closingOn"]'),count=drawer.locator('[name="countedMinor"]'),save=drawer.getByRole('button',{name:'Cerrar caja',exact:true});
+ await account.selectOption(f.account.id);await date.fill(f.day(-2));await count.fill('109000');
+ await expect(drawer).toContainText(money(110000));await expect(drawer).toContainText(/Faltante.*1[.\s]?000/);
+ let release,started,delivered;const gate=new Promise(resolve=>{release=resolve;}),intercepted=new Promise(resolve=>{started=resolve;}),oldDelivered=new Promise(resolve=>{delivered=resolve;});
+ await page.route('**/api/admin/finance/closings?*',async route=>{
+  const url=new URL(route.request().url());
+  if(url.searchParams.get('preview')==='1'&&url.searchParams.get('account')===f.account.id&&url.searchParams.get('closingOn')===f.day(-1)){
+   const response=await route.fetch();started();await gate;await route.fulfill({response});delivered();return;
+  }
+  await route.continue();
+ });
+ try{
+  await date.fill(f.day(-1));await intercepted;await account.selectOption(f.second.id);
+  await expect(drawer).toContainText(money(7000));release();await oldDelivered;
+  await expect(drawer).toContainText(/Sobrante.*102[.\s]?000/);await expect(drawer).not.toContainText(money(130000));
+ }finally{release();}
+ let fail=true;
+ await page.route('**/api/admin/finance/closings?*',async route=>{
+  const url=new URL(route.request().url());
+  if(fail&&url.searchParams.get('preview')==='1'&&url.searchParams.get('account')===f.account.id){await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Consulta temporalmente no disponible'})});return;}
+  await route.fallback();
+ });
+ await account.selectOption(f.account.id);await expect(drawer.getByRole('button',{name:'Reintentar consulta',exact:true})).toBeVisible();
+ await expect(save).toBeDisabled();await expect(count).toHaveValue('109.000');await expect(account).toBeEnabled();await expect(date).toBeEnabled();
+ await drawer.getByRole('button',{name:'Reintentar consulta',exact:true}).click();
+ await expect(drawer.getByRole('button',{name:'Reintentar consulta',exact:true})).toBeVisible();await expect(save).toBeDisabled();await expect(count).toHaveValue('109.000');
+ // A corrected selection is usable even while the failing account is unavailable.
+ await account.selectOption(f.second.id);await expect(save).toBeEnabled();await expect(drawer).toContainText(money(7000));
+ fail=false;await account.selectOption(f.account.id);await date.fill(f.day(-2));
+ await expect(drawer).toContainText(money(110000));await expect(save).toBeEnabled();
+ // A concurrent real movement must be reflected by the authoritative save, not the preview.
+ await f.post('/api/admin/business/actions/income',{accountId:f.account.id,effectiveOn:f.day(-2),amountMinor:100000,concept:'owner_funding',reference:`${f.marker} concurrente`});
+ const before=await f.balance(f.account.id);
+ const {result}=await submitCashAction(page,'cash-close','Cerrar caja');
+ expect(result).toMatchObject({accountId:f.account.id,closingOn:f.day(-2),expectedMinor:11100000,countedMinor:10900000,differenceMinor:-200000});
+ expect(await f.balance(f.account.id)).toBe(before);
+ await expect(page.getByRole('button',{name:'Ver cierre',exact:true})).toBeVisible();
+ await expect(page.getByRole('status').filter({hasText:/cierre/i})).toContainText(money(111000));
+ await page.getByRole('button',{name:'Ver cierre',exact:true}).click();
+ await expect(page).toHaveURL(url=>url.searchParams.get('tab')==='overview'&&url.searchParams.get('account')===f.account.id&&url.searchParams.get('record')===result.id);
+ await expect(page.locator('.cash-detail').last()).toContainText(money(111000));
+});
+
+test('caja guiada: filtros efectivos, chips, historial y guía de teclado sin escrituras',async({page},info)=>{
+ test.setTimeout(120000);
+ const f=await guidedCashFixture(page,info),otherPerson=await f.post('/api/admin/business/people',{name:`Otra persona ${f.marker}`,active:true});
+ const incomes=[];
+ for(const account of [f.account,f.second])incomes.push(await f.post('/api/admin/business/actions/income',{accountId:account.id,effectiveOn:f.today,amountMinor:100000,concept:'owner_funding',reference:`${f.marker} ${account.id}`}));
+ const expenses=[];
+ for(const [category,person] of [['advertising',f.person],['operating',f.person],['advertising',otherPerson]])expenses.push(await f.post('/api/admin/business/actions/expense',{category,personId:person.id,amountMinor:200000,incurredOn:f.today,concept:`${f.marker} ${category} ${person.id}`}));
+ const sources=[],settlements=[];
+ const products=await f.get('/api/admin/products'),product=products.records.find(row=>row.slug==='creatina-vital-force-70-servicios');
+ for(let index=0;index<2;index++){
+  const platform=await f.post('/api/admin/business/platforms',{name:`Plataforma ${f.marker} ${index}`});
+  const source=(await f.get('/api/admin/business/sources')).records.find(row=>row.platformId===platform.id);sources.push(source);
+  const order=await f.post('/api/admin/orders',{placedOn:f.today,customerName:`${f.marker} ${index}`,phone:'3001234567',city:'Bogotá',department:'Cundinamarca',address:'Dirección sintética',status:'preparing',deliveryMethod:'carrier',shippingChargeMinor:0,items:[{lineId:crypto.randomUUID(),kind:'products',itemId:product.id,quantity:1,unitPriceMinor:Math.round(product.price*100),discountMinor:0}]});
+  let shipment=await f.post('/api/admin/business/shipments',{orderId:order.id,platformId:platform.id,sourceId:source.id,externalId:`${f.marker}-envio-${index}`,carrier:'Transportadora sintética',tracking:`${f.marker}-${index}`});
+  for(const status of ['collected','delivered'])shipment=await f.post(`/api/admin/business/shipments/${shipment.id}/events`,{version:shipment.version,status,occurredOn:f.today,externalKey:`${f.marker}-${status}-${index}`});
+  const current=await f.get(`/api/admin/orders/${order.id}`);
+  const collection=await f.post('/api/admin/business/actions/collection',{orderId:order.id,version:current.version,shipmentId:shipment.id,sourceId:source.id,holder:'platform',amountMinor:100000,occurredOn:f.today,method:'Contraentrega',reference:`${f.marker}-cobro-${index}`});
+  settlements.push(await f.post('/api/admin/business/actions/settlement-save',{sourceId:source.id,externalKey:`${f.marker}-${index}`,reportedOn:f.today,netMinor:100000,lines:[{collectionId:collection.id,grossMinor:100000,deductions:[]}]}));
+ }
+ await navigate(page,'Caja');
+ const writes=[];const watch=request=>{if(new URL(request.url()).pathname.startsWith('/api/admin/')&&!['GET','HEAD'].includes(request.method()))writes.push(request.url());};page.on('request',watch);
+ const guide=page.locator('summary').filter({hasText:/^Guía de caja$/});
+ await guide.focus();await page.keyboard.press('Enter');await expect(guide.locator('..')).toHaveAttribute('open','');
+ await page.keyboard.press('Space');await expect(guide.locator('..')).not.toHaveAttribute('open','');
+ expect(writes).toEqual([]);page.off('request',watch);
+ await selectWorkspace(page,'Vistas de caja','Movimientos');await cashFilters(page);
+ await page.getByLabel('Buscar',{exact:true}).fill(f.marker);
+ await page.getByRole('combobox',{name:'Cuenta',exact:true}).selectOption(f.account.id);
+ await expect(page.locator('.cash-records .cash-row').filter({hasText:incomes[0].reference})).toHaveCount(1);
+ await expect(page.locator('.cash-records .cash-row').filter({hasText:incomes[1].reference})).toHaveCount(0);
+ const movementsURL=page.url();
+ await page.reload();await cashFilters(page);await expect(page.getByRole('combobox',{name:'Cuenta',exact:true})).toHaveValue(f.account.id);
+ await page.getByRole('button',{name:`Quitar filtro: Cuenta: ${f.account.name}`,exact:true}).click();
+ await expect(page).toHaveURL(url=>!url.searchParams.has('account')&&url.searchParams.get('q')===f.marker);
+ await expect(page.locator('.cash-records .cash-row').filter({hasText:incomes[1].reference})).toHaveCount(1);
+ await page.goBack();await expect(page).toHaveURL(movementsURL);await expect(page.getByRole('combobox',{name:'Cuenta',exact:true})).toHaveValue(f.account.id);
+ await selectWorkspace(page,'Vistas de caja','Gastos y pagos');await cashFilters(page);
+ await expect(page).toHaveURL(url=>!url.searchParams.has('account'));await expect(page.getByRole('combobox',{name:'Cuenta',exact:true})).toHaveCount(0);
+ await page.getByRole('combobox',{name:'Categoría',exact:true}).selectOption('advertising');
+ await page.getByRole('combobox',{name:'Persona responsable',exact:true}).selectOption(f.person.id);
+ const rows=page.locator('.cash-records .cash-row');
+ await expect(rows.filter({hasText:expenses[0].concept})).toHaveCount(1);
+ for(const expense of expenses.slice(1))await expect(rows.filter({hasText:expense.concept})).toHaveCount(0);
+ const expensesURL=page.url();await page.reload();await cashFilters(page);
+ await expect(page.getByRole('combobox',{name:'Persona responsable',exact:true})).toHaveValue(f.person.id);
+ await page.getByRole('button',{name:`Quitar filtro: Persona responsable: ${f.person.name}`,exact:true}).click();
+ await expect(page).toHaveURL(url=>url.searchParams.get('category')==='advertising'&&!url.searchParams.has('seller'));
+ await expect(rows.filter({hasText:expenses[2].concept})).toHaveCount(1);
+ await page.goBack();await expect(page).toHaveURL(expensesURL);
+ const period=new URL(page.url()).searchParams.get('period');
+ await page.getByRole('button',{name:'Limpiar filtros',exact:true}).click();
+ await expect(page).toHaveURL(url=>url.searchParams.get('period')===period&&!['q','category','seller'].some(key=>url.searchParams.has(key)));
+ await selectWorkspace(page,'Vistas de caja','Liquidaciones');await cashFilters(page);
+ const scoped=page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/admin/finance/settlements'&&url.searchParams.get('source')===sources[0].id&&!url.searchParams.has('record');});
+ await page.getByRole('combobox',{name:'Cuenta de plataforma',exact:true}).selectOption(sources[0].id);
+ expect((await (await scoped).json()).records.map(row=>row.id)).toEqual([settlements[0].id]);
+ await expect(rows).toHaveCount(1);await rows.getByRole('button',{name:'Ver detalle',exact:true}).click();
+ await expect(page).toHaveURL(url=>url.searchParams.get('record')===settlements[0].id);
+ await page.locator('.cash-detail').getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+ await expect(page).toHaveURL(url=>url.searchParams.get('source')===sources[0].id);
+ await page.reload();await cashFilters(page);await expect(page.getByRole('combobox',{name:'Cuenta de plataforma',exact:true})).toHaveValue(sources[0].id);
+ await selectWorkspace(page,'Vistas de caja','Sueldos y anticipos');await cashFilters(page);
+ await expect(page).toHaveURL(url=>!['account','category','source'].some(key=>url.searchParams.has(key)));
+ await expect(page.getByRole('combobox',{name:'Persona',exact:true})).toBeVisible();
+ await selectWorkspace(page,'Vistas de caja','Resumen y cuentas');await expect(guide).toBeVisible();
 });
