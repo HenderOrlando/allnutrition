@@ -6,6 +6,8 @@ Las existencias por producto, avisos de agotamiento, importación histórica y *
 
 La corrección de **Flete / costo de envío** se publicó después, el **7 de noviembre de 2026**, como `allnutrition:release-206306367028`: aceptación nativa nueva de 1258 contratos y 48 E2E, recuperación real de 56 tablas y edición compilada en clon aprobadas. En producción se inspeccionaron escritorio/móvil y el formulario sin guardar gastos; los 300 fletes siguen exactos por guía, por 5.022.141 COP. No hubo reimportación, migración ni movimiento de caja.
 
+**Caja clara y guiada** se publicó el **7 de noviembre de 2026, 12:57:52 Bogotá**, como `allnutrition:release-e91b4832ea0e`: aceptación nativa nueva de **1263 contratos y 54 E2E**, recuperación real de 56 tablas y humo compilado en clon aprobados. Se verificaron resumen, gasto pendiente, cierre consultado y guía de teclado en producción de escritorio/móvil, sin guardar operaciones financieras reales. Respaldo final congelado y copia externa comprobados antes de promover; mismo esquema 9, PostgreSQL preservado y ninguna reimportación. Detalles y límites en [VERIFICACION.md](VERIFICACION.md).
+
 ## Instalación y acceso
 
 - Ejecutar `npm run verify:docker -- --interactive` con Node24, Docker/Compose, OpenSSL, puerto9443 libre y Chromium. Mantiene build, check, contratos SQLite/PostgreSQL reales, auditoría, E2E, TLS, rol limitado, caída/reinicio y restore.

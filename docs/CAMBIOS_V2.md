@@ -1,13 +1,13 @@
 # Cambios — administración v3 y antecedentes
 
-## Caja clara y guiada · actualización local, sin publicación
+## Caja clara y guiada · publicada el 7 de noviembre de 2026
 
 - Resumen separado en disponible actual, por recibir, gastos por pagar (incluidos sueldos) y créditos. Acciones del día visibles, requisitos explicados y cuentas archivadas consultables sin perder su saldo del consolidado.
 - Filtros de Caja aplicables por vista: cuenta solo en resumen/movimientos, persona en gastos/sueldos y origen en liquidaciones. Chips, período, detalle e historial mantienen los callbacks y la URL existentes; las consultas en curso ocultan los datos anteriores en vez de presentarlos como actuales.
 - Catálogo compartido de etiquetas en español y guía opcional nativa, sin guardar progreso, ejecutar operaciones ni incorporar bibliotecas. La ayuda de formularios distingue obligación, pago, declaración, recepción, anticipo y reversión.
 - Gasto pendiente por defecto, también en Pedidos. El pago inmediato requiere elegirlo; volver a pendiente omite cuenta/fecha/referencia del envío. Corregir conserva identidad e historial sin añadir otro pago. Revisión previa accesible y selección de cuentas activas; traslados exigen destinos distintos.
 - Consulta de cierre de solo lectura para cuenta/fecha con las mismas validaciones de guardado. Respuestas antiguas no sustituyen la selección nueva, los fallos conservan el conteo y guardar recalcula el esperado de forma autoritativa. Cerrar no ajusta dinero ni acepta saldos enviados por el cliente.
-- Sin migración, cambios contables ni publicación remota. Comprobaciones locales sobre SQLite en memoria y PostgreSQL descartable; evidencia y límites en [VERIFICACION.md](VERIFICACION.md).
+- Publicada como `allnutrition:release-e91b4832ea0e`, misma imagen Linux/amd64 aceptada para web/scheduler, sin rebuild ni migración. Aceptación nativa nueva: 1263 contratos y 54 E2E sin fallos/omisiones; recuperación real de 56 tablas y humo de escritorio/móvil aprobados. Respaldo final congelado y copia externa verificada antes de promover. No se reimportaron filas ni se guardaron operaciones financieras productivas durante el humo; evidencia y límites en [VERIFICACION.md](VERIFICACION.md).
 
 ## Flete / costo de envío visible y corregible desde el pedido
 
