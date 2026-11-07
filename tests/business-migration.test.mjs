@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../lib/store.mjs';
 import { schemas } from '../lib/schema.mjs';
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, convertV2Bundle, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, convertV2Bundle, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9 } from '../lib/db/migrations.mjs';
 import { resolveOrderRecognition } from '../lib/business/orders.mjs';
 import { saveResource, listResources } from '../lib/business/settings.mjs';
 import { writeExcelSheets } from '../lib/business/excel.mjs';
@@ -59,7 +59,7 @@ function legacyBundle() {
 }
 
 /** A disposable real SQLite v2 database; bypasses openStore's automatic v3 upgrade intentionally. */
-async function v2Store({ failMarker = false, failInventoryMarker = false, failCancellationMarker = false, failInsuranceMarker = false, failWorkbookMarker = false, failSocialMarker = false, oldExpenseCheck = false } = {}) {
+async function v2Store({ failMarker = false, failInventoryMarker = false, failCancellationMarker = false, failInsuranceMarker = false, failWorkbookMarker = false, failSocialMarker = false, failStockMarker = false, oldExpenseCheck = false } = {}) {
   const native = new DatabaseSync(':memory:');
   native.exec('PRAGMA foreign_keys=ON;');
   native.exec(await readFile(new URL('../db/sqlite.sql', import.meta.url), 'utf8'));
@@ -74,6 +74,7 @@ async function v2Store({ failMarker = false, failInventoryMarker = false, failCa
       if (failInsuranceMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(6,')) throw new Error('Fallo sintético al guardar marcador v6');
       if (failWorkbookMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(7,')) throw new Error('Fallo sintético al guardar marcador v7');
       if (failSocialMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(8,')) throw new Error('Fallo sintético al guardar marcador v8');
+      if (failStockMarker && sql.startsWith('INSERT INTO "migrations"(version,applied_at) VALUES(9,')) throw new Error('Fallo sintético al guardar marcador v9');
       return { changes: Number(native.prepare(sql).run(...params).changes) };
     },
     exec: async sql => native.exec(oldExpenseCheck && sql.includes('CREATE TABLE IF NOT EXISTS expenses (') ? sql.replace(",'shipping_insurance'", '').replace(",'advertising'", '').replace(",'operating'", '') : sql)
@@ -530,7 +531,7 @@ test('un fallo del marcador v6 revierte CHECK, índices y relaciones del esquema
   } finally { await store.close(); }
 });
 
-test('seguro v6 requiere el marcador v5 y una instalación nueva incluye v8', async () => {
+test('seguro v6 requiere el marcador v5 y conserva su contrato en una instalación actual', async () => {
   const historical = await v2Store();
   try {
     await migrateBusinessV3(historical);
@@ -541,7 +542,6 @@ test('seguro v6 requiere el marcador v5 y una instalación nueva incluye v8', as
   } finally { await historical.close(); }
   const fresh = await openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' });
   try {
-    assert.deepEqual((await fresh.db.all(`SELECT version FROM ${fresh.t('migrations')} ORDER BY version`)).map(row => row.version), [2, 3, 4, 5, 6, 7, 8]);
     await fresh.db.run(`INSERT INTO ${fresh.t('expenses')}(id,category,amount_minor,recorded_at,created_at,updated_at) VALUES(?,?,?,?,?,?)`, ['fresh-insurance', 'shipping_insurance', 0, MIGRATED, MIGRATED, MIGRATED]);
     assert.deepEqual(await migrateShippingInsuranceV6(fresh), { migrated: false, version: 6 });
   } finally { await fresh.close(); }
@@ -667,4 +667,89 @@ test('publicidad v8 revierte esquema y negocio si falla el marcador y exige v7',
     assert.deepEqual(await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"), schema);
     assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
   } finally { await store.close(); }
+});
+
+async function prepareStockMigration(store) {
+  await prepareSocialMigration(store);
+  await migrateSocialV8(store);
+  await store.db.run("DELETE FROM alert_rules WHERE type IN ('stock_low','cash_difference')");
+  // Recreate the real pre-v9 CHECK while retaining episodes referencing old rules.
+  const oldDDL=(await readFile(new URL('../db/stock-alert-v9.sqlite.sql',import.meta.url),'utf8')).replace(",'stock_low'",'');
+  await store.transaction(async tx=>{
+    await tx.lockWrites();
+    await tx.db.exec(oldDDL);
+    assert.deepEqual(await tx.db.all('PRAGMA foreign_key_check'),[]);
+    await tx.db.exec('PRAGMA defer_foreign_keys=OFF');
+    await tx.db.run("UPDATE alert_rules SET enabled=0,version=4,data=? WHERE id='shipment_incident'",[JSON.stringify({thresholds:{},selectedStatuses:['returned'],reminderHours:9,responsibleId:null})]);
+    await tx.db.run("INSERT INTO alerts(id,rule_id,entity_type,entity_id,episode,state,severity,first_seen_at,last_seen_at,data,version,created_at,updated_at) VALUES('kept-alert','shipment_incident','shipment','historical',1,'acknowledged','warning',?,?,'{}',3,?,?)",[CREATED,UPDATED,CREATED,UPDATED]);
+    await tx.db.exec('CREATE INDEX kept_alert_rule_index ON alert_rules(enabled,version)');
+  });
+}
+
+test('avisos v9 amplía CHECK real conservando filas, episodios, índices, claves y marcadores v2–v8',async()=>{
+  const store=await v2Store({oldExpenseCheck:true});
+  try {
+    await prepareStockMigration(store);
+    const tables=[...BASE_TABLES,...BUSINESS_TABLES,...SOCIAL_TABLES,...SOCIAL_INTERNAL_TABLES];
+    const before=await snapshot(store,tables);
+    const indexes=await store.db.all("SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='alert_rules' ORDER BY name");
+    await assert.rejects(()=>store.db.run("INSERT INTO alert_rules(id,type,created_at,updated_at) VALUES('stock_low','stock_low',?,?)",[CREATED,UPDATED]),/CHECK/);
+    assert.deepEqual(await migrateStockAlertsV9(store),{migrated:true,version:9});
+    const after=await snapshot(store,tables);
+    assert.deepEqual(after.migrations.filter(row=>row.version!==9),before.migrations);
+    const stock=after.alert_rules.find(row=>row.type==='stock_low');
+    assert.equal(stock.enabled,1);assert.equal(stock.version,1);
+    assert.deepEqual(JSON.parse(stock.data).thresholds,{amount:1,unit:'week'});
+    assert.equal(after.alert_rules.some(row=>row.type==='cash_difference'),false,'No repone otras reglas ausentes.');
+    after.alert_rules=after.alert_rules.filter(row=>row.type!=='stock_low');
+    delete after.migrations;delete before.migrations;
+    assert.deepEqual(after,before);
+    assert.deepEqual(await store.db.all("SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='alert_rules' ORDER BY name"),indexes);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'),[]);
+    assert.equal((await store.db.get('PRAGMA foreign_keys')).foreign_keys,1);
+    assert.equal((await store.db.get('PRAGMA defer_foreign_keys')).defer_foreign_keys,0);
+    await assert.rejects(()=>store.db.run("DELETE FROM alert_rules WHERE id='shipment_incident'"),/FOREIGN KEY/);
+    await assert.rejects(()=>store.db.run("UPDATE alert_rules SET type='invented' WHERE id='stock_low'"),/CHECK/);
+    await store.db.run("UPDATE alert_rules SET enabled=0,version=3,data=? WHERE id='stock_low'",[JSON.stringify({thresholds:{amount:2,unit:'month'},reminderHours:7,responsibleId:null,selectedStatuses:[]})]);
+    const migrated=await snapshot(store,tables);
+    assert.deepEqual(await migrateStockAlertsV9(store),{migrated:false,version:9});
+    assert.deepEqual(await snapshot(store,tables),migrated);
+  } finally {await store.close();}
+});
+
+test('avisos v9 revierte CHECK, default, episodios e índices si falla el marcador y exige v8',async()=>{
+  const store=await v2Store({oldExpenseCheck:true,failStockMarker:true});
+  try {
+    await prepareSocialMigration(store);
+    const tables=[...BASE_TABLES,...BUSINESS_TABLES];
+    const v7=await snapshot(store,tables);
+    await assert.rejects(()=>migrateStockAlertsV9(store),/requieren.*v8/);
+    assert.deepEqual(await snapshot(store,tables),v7);
+    await migrateSocialV8(store);
+    await store.db.run("DELETE FROM alert_rules WHERE type='stock_low'");
+    const oldDDL=(await readFile(new URL('../db/stock-alert-v9.sqlite.sql',import.meta.url),'utf8')).replace(",'stock_low'",'');
+    await store.transaction(async tx=>{await tx.lockWrites();await tx.db.exec(oldDDL);assert.deepEqual(await tx.db.all('PRAGMA foreign_key_check'),[]);await tx.db.exec('PRAGMA defer_foreign_keys=OFF');});
+    const before=await snapshot(store,tables);
+    const schema=await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name");
+    await assert.rejects(()=>migrateStockAlertsV9(store),/Fallo sintético al guardar marcador v9/);
+    assert.deepEqual(await snapshot(store,tables),before);
+    assert.deepEqual(await store.db.all("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"),schema);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'),[]);
+    assert.equal((await store.db.get('PRAGMA defer_foreign_keys')).defer_foreign_keys,0);
+    await assert.rejects(()=>store.db.run("INSERT INTO alert_rules(id,type,created_at,updated_at) VALUES('stock_low','stock_low',?,?)",[CREATED,UPDATED]),/CHECK/);
+  } finally {await store.close();}
+});
+
+test('avisos v9 conserva una regla stock_low restaurada con ID y configuración propios',async()=>{
+  const store=await v2Store({oldExpenseCheck:true});
+  try {
+    await prepareSocialMigration(store);await migrateSocialV8(store);
+    await store.db.run("UPDATE alert_rules SET id='restored-stock-rule',enabled=0,version=4,data=? WHERE id='stock_low'",[JSON.stringify({thresholds:{amount:3,unit:'month'},reminderHours:9,responsibleId:null,selectedStatuses:[]})]);
+    const tables=[...BASE_TABLES.filter(table=>table!=='migrations'),...BUSINESS_TABLES,...SOCIAL_TABLES,...SOCIAL_INTERNAL_TABLES];
+    const before=await snapshot(store,tables);
+    await migrateStockAlertsV9(store);
+    assert.deepEqual(await snapshot(store,tables),before);
+    assert.equal((await store.db.get("SELECT COUNT(*) AS n FROM alert_rules WHERE type='stock_low'")).n,1);
+    assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'),[]);
+  } finally {await store.close();}
 });

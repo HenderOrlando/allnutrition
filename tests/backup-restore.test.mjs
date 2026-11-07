@@ -203,3 +203,91 @@ test('counted stock and pending reservations survive a new backup while public D
     }
   } finally { await source.close(); await target.close(); }
 });
+
+test('stock warning horizon and product action survive restore; invalid units and dangling products remain atomic',async()=>{
+  const source=await factory(),target=await factory(),invalidTarget=await factory();
+  try{
+    const {createBusinessBasics,fixtureActor,requestId}=await import('./business-fixtures.mjs');
+    const {saveAlertRule,pageAlerts,evaluateAlerts,getAlertRule}=await import('../lib/business/alerts.mjs');
+    const f=await createBusinessBasics(source,{year:2025});
+    const a=await source.get('products',f.a.id);
+    await source.save('products',{...a,stockQuantity:0},a.id,a.version,fixtureActor);
+    const rule=await getAlertRule(source,'stock_low');
+    await saveAlertRule(source,{requestId:requestId(),version:rule.version,thresholds:{amount:2,unit:'month'},reason:'Anticipación de existencias confirmada'},fixtureActor,rule.id);
+    await evaluateAlerts(source,{now:'2025-09-05T17:00:00.000Z'});
+    const bundle=await source.exportData();
+    const warning=bundle.business.alerts.find(row=>row.rule_id==='stock_low');
+    assert.equal(warning.entity_type,'product');assert.equal(warning.entity_id,a.id);
+    const counted=await source.get('products',a.id);
+    await assert.rejects(()=>source.remove('products',counted.id,counted.version),{status:409});
+    assert.equal((await source.get('products',a.id)).id,a.id);
+    const baseline=await invalidTarget.exportData();
+    for(const mutate of [
+      copy=>{const row=copy.business.alert_rules.find(row=>row.id==='stock_low'),data=JSON.parse(row.data);data.thresholds.unit='year';row.data=JSON.stringify(data);},
+      copy=>{copy.business.alerts.find(row=>row.rule_id==='stock_low').entity_id='missing-product';}
+    ]){
+      const invalid=structuredClone(bundle);mutate(invalid);
+      await assert.rejects(()=>importData(invalidTarget,invalid),{status:400});
+      const after=await invalidTarget.exportData();
+      assert.deepEqual(after.products,baseline.products);assert.deepEqual(after.business.alerts,baseline.business.alerts);
+    }
+    await importData(target,bundle);
+    assert.deepEqual((await getAlertRule(target,'stock_low')).thresholds,{amount:2,unit:'month'});
+    const alerts=await pageAlerts(target,{type:'stock_low'});
+    assert.equal(alerts.total,1);
+    assert.deepEqual(alerts.records[0].action.view,{section:'products',record:a.id});
+    assert.equal((await target.get('products',a.id)).stockQuantity,0);
+  }finally{await source.close();await target.close();await invalidTarget.close();}
+});
+
+test('restoring a pre-stock-warning backup on schema 9 provisions only the missing rule and evaluates real zero stock',async()=>{
+  const source=await factory(),target=await factory();
+  try{
+    const {createBusinessBasics,fixtureActor}=await import('./business-fixtures.mjs');
+    const {getAlertRule,pageAlerts,evaluateAlerts}=await import('../lib/business/alerts.mjs');
+    const f=await createBusinessBasics(source,{year:2025}),a=await source.get('products',f.a.id);
+    await source.save('products',{...a,stockQuantity:0},a.id,a.version,fixtureActor);
+    const bundle=await source.exportData();
+    bundle.business.alert_rules=bundle.business.alert_rules.filter(rule=>rule.type!=='stock_low');
+    await importData(target,bundle);
+    const rule=await getAlertRule(target,'stock_low');
+    assert.deepEqual(rule.thresholds,{amount:1,unit:'week'});assert.equal(rule.enabled,true);
+    const after=await target.exportData();
+    assert.deepEqual(after.business.alert_rules.filter(rule=>rule.type!=='stock_low'),bundle.business.alert_rules);
+    assert.deepEqual(after.business.business_settings,bundle.business.business_settings);
+    assert.deepEqual(after.counters,bundle.counters);
+    await evaluateAlerts(target,{now:'2025-09-05T17:00:00.000Z'});
+    const warning=await pageAlerts(target,{type:'stock_low'});
+    assert.equal(warning.total,1);assert.equal(warning.records[0].entityId,a.id);
+  }finally{await source.close();await target.close();}
+});
+
+test('unknown balances with partial dispatch restore into an empty business without backfilling consumption',async()=>{
+  const source=await factory(),target=await factory();
+  try{
+    const {createBusinessBasics,businessOrderInput,fixtureActor,requestId}=await import('./business-fixtures.mjs');
+    const {createShipment,recordShipmentEvent}=await import('../lib/business/shipments.mjs');
+    const {registerReturn}=await import('../lib/business/collections.mjs');
+    const f=await createBusinessBasics(source,{year:2025}),template=await source.get('products',f.a.id),b=await source.get('products',f.b.id);
+    const a=await source.save('products',{...template,slug:'restored-uncounted-a',stockQuantity:null},null,null,fixtureActor);
+    await source.save('products',{...b,stockQuantity:3},b.id,b.version,fixtureActor);
+    let order=await source.saveOrder(businessOrderInput(a,{year:2025,items:[{lineId:requestId(),kind:'products',itemId:a.id,quantity:2,unitPriceMinor:5500000,discountMinor:0},{lineId:requestId(),kind:'products',itemId:b.id,quantity:1,unitPriceMinor:1000000,discountMinor:0}]}),fixtureActor);
+    let first=await createShipment(source,{requestId:requestId(),orderId:order.id,assignments:[{lineId:order.items[0].lineId,quantity:1}]},fixtureActor);
+    await recordShipmentEvent(source,first.id,{requestId:requestId(),version:first.version,status:'collected',occurredOn:'2025-09-02'},fixtureActor);
+    const bundle=await source.exportData(),saved=bundle.orders.find(value=>value.id===order.id);
+    await importData(target,bundle);
+    order=await target.order(order.id);
+    assert.deepEqual(order.inventory,saved.inventory);
+    assert.equal((await target.get('products',a.id)).stockQuantity,null);
+    assert.equal((await target.get('products',a.id)).stockReserved,1);
+    assert.equal((await target.get('products',b.id)).stockQuantity,3);
+    let pending=await createShipment(target,{requestId:requestId(),orderId:order.id,assignments:[{lineId:order.items[0].lineId,quantity:1},{lineId:order.items[1].lineId,quantity:1}]},fixtureActor);
+    await recordShipmentEvent(target,pending.id,{requestId:requestId(),version:pending.version,status:'collected',occurredOn:'2025-09-03'},fixtureActor);
+    assert.equal((await target.get('products',a.id)).stockQuantity,null);assert.equal((await target.get('products',a.id)).stockReserved,0);
+    assert.equal((await target.get('products',b.id)).stockQuantity,2);assert.equal((await target.get('products',b.id)).stockReserved,0);
+    order=await target.order(order.id);
+    await registerReturn(target,{requestId:requestId(),orderId:order.id,version:order.version,occurredOn:'2025-09-04',reason:'Retorno físico de prueba',shippingCreditMinor:0,lines:[{lineId:order.items[0].lineId,quantity:1,condition:'recoverable'}]},fixtureActor);
+    assert.equal((await target.get('products',a.id)).stockQuantity,null);
+    assert.equal((await target.get('products',b.id)).stockQuantity,2);
+  }finally{await source.close();await target.close();}
+});

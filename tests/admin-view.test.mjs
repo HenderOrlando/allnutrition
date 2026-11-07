@@ -216,6 +216,9 @@ test('operational statuses and issues cannot bleed between tabs',()=>{
   assert.equal(view.status,status);assert.equal(view.issue,'cash_below_minimum');
   const href=adminHref(view);assert.deepEqual(readAdminView(new URL(href,'https://example.test').searchParams),view);
  }
+ assert.equal(readAdminView({section:'business',tab:'alerts',issue:'stock_low'}).issue,'stock_low');
+ const stockTarget=readAdminView({section:'products',record:'product-stock'});
+ assert.deepEqual(readAdminView(new URL(adminHref(stockTarget),'https://example.test').searchParams),stockTarget);
  assert.equal(readAdminView({section:'business',tab:'people',status:'resolved',issue:'cash_below_minimum'}).issue,undefined);
  assert.equal(readAdminView({section:'business',tab:'alerts',status:'paid',issue:'made_up'}).status,'');
  assert.equal(readAdminView({section:'business',tab:'alerts',issue:'made_up'}).issue,undefined);

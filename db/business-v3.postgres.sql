@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS allnutrition.report_snapshots (
 );
 CREATE TABLE IF NOT EXISTS allnutrition.alert_rules (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL CHECK(type IN ('shipment_label_stale','shipment_no_update','shipment_overdue','shipment_incident','platform_not_updated','settlement_overdue','cash_below_minimum','cash_difference','cash_close_missing','business_data_missing')),
+  type TEXT NOT NULL CHECK(type IN ('shipment_label_stale','shipment_no_update','shipment_overdue','shipment_incident','platform_not_updated','settlement_overdue','cash_below_minimum','cash_difference','cash_close_missing','business_data_missing','stock_low')),
   scope_key TEXT NOT NULL DEFAULT 'global', enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
   version INTEGER NOT NULL DEFAULT 1 CHECK(version>=1), data TEXT NOT NULL DEFAULT '{}' CHECK(jsonb_typeof(data::jsonb) IS NOT NULL), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE(type,scope_key)

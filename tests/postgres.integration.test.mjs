@@ -6,7 +6,7 @@ import { openPostgres } from '../lib/db/postgres.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
 import { runContracts } from './contract.mjs';
 import { testDatabaseEnv, resetPostgresStore } from './postgres-fixture.mjs';
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
 import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore,runSocialBackupContracts } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
@@ -47,7 +47,7 @@ async function insertInsurance(store,fixture) {
 const url=process.env.TEST_DATABASE_URL;
 test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},async t=>{
  const env=testDatabaseEnv();
- const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);await migrateSocialV8(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=8`));}finally{await first.close();}
+ const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);await migrateSocialV8(first);await migrateStockAlertsV9(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=9`));}finally{await first.close();}
  const factory=async()=>{
   const store=await openStore(env);
   try { await resetPostgresStore(store); return store; }
@@ -122,6 +122,57 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    assert.deepEqual(await migrationRows(store),migrated);
    assert.deepEqual(await store.db.get(`SELECT * FROM ${store.t('social_connections')} WHERE id='social-connection'`),connection);
   }finally{try{await migrateSocialV8(store);}finally{await store.close();}}
+ });
+ await t.test('avisos v9 amplía solo alert_rules_type_check y conserva reglas, episodios, permisos y marcadores',async()=>{
+  const store=await factory();
+  const schema=async()=>({
+   relation:await store.db.get("SELECT oid,relowner,relacl,reloptions,relrowsecurity FROM pg_class WHERE oid='allnutrition.alert_rules'::regclass"),
+   indexes:await store.db.all("SELECT indexrelid,pg_get_indexdef(indexrelid) AS definition FROM pg_index WHERE indrelid='allnutrition.alert_rules'::regclass ORDER BY indexrelid"),
+   constraints:await store.db.all("SELECT oid,conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE (conrelid='allnutrition.alert_rules'::regclass OR confrelid='allnutrition.alert_rules'::regclass) AND conname<>'alert_rules_type_check' ORDER BY oid"),
+   type:await store.db.get("SELECT oid,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='allnutrition.alert_rules'::regclass AND conname='alert_rules_type_check'"),
+  });
+  try{
+   const fixture=await createBusinessFixture(store,{year:2025});
+   await store.transaction(async tx=>{
+    await tx.lockWrites();
+    await tx.db.run("DELETE FROM allnutrition.alert_rules WHERE type IN ('stock_low','cash_difference')");
+    await tx.db.exec("ALTER TABLE allnutrition.alert_rules DROP CONSTRAINT alert_rules_type_check; ALTER TABLE allnutrition.alert_rules ADD CONSTRAINT alert_rules_type_check CHECK(type IN ('shipment_label_stale','shipment_no_update','shipment_overdue','shipment_incident','platform_not_updated','settlement_overdue','cash_below_minimum','cash_difference','cash_close_missing','business_data_missing'));");
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=9`);
+    await tx.db.run("UPDATE allnutrition.alert_rules SET enabled=0,version=4,data=? WHERE id='shipment_incident'",[JSON.stringify({thresholds:{},selectedStatuses:['returned'],responsibleId:fixture.person.id,reminderHours:9})]);
+    await tx.db.run("INSERT INTO allnutrition.alerts(id,rule_id,entity_type,entity_id,episode,state,severity,first_seen_at,last_seen_at,data,version,created_at,updated_at) VALUES('stock-migration-kept','shipment_incident','shipment',?,1,'acknowledged','warning',?,?,'{}',3,?,?)",[fixture.shipmentId,'2025-09-02','2025-09-03','2025-09-02','2025-09-03']);
+   });
+   await assert.rejects(()=>openStore(env),/v9/);
+   const before=await migrationRows(store),oldSchema=await schema();
+   const markerFailure=new Error('synthetic stock marker failure');
+   const failingStore={provider:store.provider,transaction:fn=>store.transaction(tx=>{
+    const run=tx.db.run;
+    tx.db={...tx.db,run:async(sql,params)=>{
+     if(sql.startsWith(`INSERT INTO ${tx.t('migrations')}(version,applied_at) VALUES(9,`))throw markerFailure;
+     return run(sql,params);
+    }};
+    return fn(tx);
+   })};
+   await assert.rejects(()=>migrateStockAlertsV9(failingStore),error=>error===markerFailure);
+   assert.deepEqual(await migrationRows(store),before);assert.deepEqual(await schema(),oldSchema);
+   assert.deepEqual(await migrateStockAlertsV9(store),{migrated:true,version:9});
+   const after=await migrationRows(store),newSchema=await schema();
+   assert.deepEqual(after.migrations.filter(row=>row.version!==9),before.migrations);
+   const stock=after.alert_rules.find(row=>row.type==='stock_low');
+   assert.deepEqual(JSON.parse(stock.data).thresholds,{amount:1,unit:'week'});
+   assert.equal(stock.enabled,1);assert.equal(stock.version,1);
+   assert.equal(after.alert_rules.some(row=>row.type==='cash_difference'),false);
+   after.alert_rules=after.alert_rules.filter(row=>row.type!=='stock_low');
+   delete after.migrations;delete before.migrations;
+   assert.deepEqual(after,before);
+   assert.match(newSchema.type.definition,/stock_low/);
+   delete newSchema.type;delete oldSchema.type;assert.deepEqual(newSchema,oldSchema);
+   await assert.rejects(()=>store.db.run("DELETE FROM allnutrition.alert_rules WHERE id='shipment_incident'"),{code:'23503'});
+   await assert.rejects(()=>store.db.run("UPDATE allnutrition.alert_rules SET type='invented' WHERE id='stock_low'"),{code:'23514'});
+   await store.db.run("UPDATE allnutrition.alert_rules SET enabled=0,version=3,data=? WHERE id='stock_low'",[JSON.stringify({thresholds:{amount:2,unit:'month'},reminderHours:7,responsibleId:fixture.person.id,selectedStatuses:[]})]);
+   const migrated=await migrationRows(store);
+   assert.deepEqual(await migrateStockAlertsV9(store),{migrated:false,version:9});
+   assert.deepEqual(await migrationRows(store),migrated);
+  }finally{try{await migrateStockAlertsV9(store);}finally{await store.close();}}
  });
  await t.test('seguro v6 migra el CHECK v5 real, revierte fallos y conserva ownership, permisos y relaciones',async()=>{
   // The factory verifies the connected database is the explicitly authorized allnutrition_test.

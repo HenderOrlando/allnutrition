@@ -5,9 +5,9 @@ import { openStore } from '../lib/db/index.mjs';
 import { insertRow, stamp } from '../lib/business/commands.mjs';
 import { bogotaDate } from '../lib/business/dates.mjs';
 import { emptyRecord } from '../lib/schema.mjs';
-import { getBusinessSettings, saveBusinessSettings, saveResource, listResources, ALERT_TYPES } from '../lib/business/settings.mjs';
+import { getBusinessSettings, saveBusinessSettings, saveResource, listResources, ALERT_TYPES, initializeBusinessDefaults, isOnboardingProduct } from '../lib/business/settings.mjs';
 import { saveAccount } from '../lib/business/cash.mjs';
-import { listAlertRules, getAlertRule, saveAlertRule, pageAlerts, getAlert, updateAlert, alertClientData } from '../lib/business/alerts.mjs';
+import { listAlertRules, getAlertRule, saveAlertRule, pageAlerts, getAlert, updateAlert, alertClientData, stockAlertThresholds } from '../lib/business/alerts.mjs';
 
 const actor='settings-alert-admin', requestId=()=>randomUUID();
 async function fixture(fn) {
@@ -44,6 +44,62 @@ test('reglas tipadas persisten versiones, auditoría e idempotencia sin invalida
   const audit=await store.db.get(`SELECT data FROM ${store.t('business_audit')} WHERE entity_type='alert_rule' AND entity_id=?`,[rule.id]);
   assert.equal(JSON.parse(audit.data).previous.thresholds.hours,48);
   assert.equal(JSON.parse(audit.data).next.thresholds.hours,60);
+}));
+
+test('anticipación de existencias valida enteros y horizontes normalizados sin mutar datos',()=>{
+  assert.deepEqual(stockAlertThresholds(),{amount:1,unit:'week'});
+  for (const [unit,maximum] of [['day',3650],['week',521],['month',121]]) {
+    const input=Object.freeze({amount:maximum,unit});
+    assert.deepEqual(stockAlertThresholds(input),input);
+    assert.throws(()=>stockAlertThresholds({amount:maximum+1,unit}),{status:400});
+  }
+  for (const input of [null,[],{amount:0},{amount:-1},{amount:1.5},{amount:'1'},{amount:null},{unit:null},{unit:'year'},{days:7}]) assert.throws(()=>stockAlertThresholds(input),{status:400});
+});
+
+test('regla stock_low persiste unidad, cantidad, responsable y configuración independiente',()=>fixture(async store=>{
+  const original=await getAlertRule(store,'stock_low');
+  assert.deepEqual(original.thresholds,{amount:1,unit:'week'});
+  const input={requestId:requestId(),version:original.version,thresholds:{amount:2,unit:'month'},reminderHours:6};
+  const saved=await saveAlertRule(store,input,actor,original.id);
+  assert.deepEqual(saved.thresholds,{amount:2,unit:'month'});
+  assert.equal(saved.reminderHours,6);
+  assert.deepEqual(await saveAlertRule(store,input,actor,original.id),saved);
+  const updated=await saveAlertRule(store,{requestId:requestId(),version:saved.version,thresholds:{unit:'week'}},actor,original.id);
+  assert.deepEqual(updated.thresholds,{amount:2,unit:'week'});
+  for (const thresholds of [{amount:0},{amount:522,unit:'week'},{unit:'year'},{hours:1}]) await assert.rejects(()=>saveAlertRule(store,{requestId:requestId(),version:updated.version,thresholds},actor,original.id),{status:400});
+}));
+
+test('inicialización de actualización solo inserta reglas ausentes sin cambiar configuraciones ni marcadores',()=>fixture(async store=>{
+  const person=await saveResource(store,'people',{name:'Responsable conservado',requestId:requestId()},actor);
+  await saveAccount(store,{name:'Banco conservado',type:'bank',responsibleId:person.id,openingOn:bogotaDate(),openingBalanceMinor:100,requestId:requestId()},actor);
+  const old=await getAlertRule(store,'shipment_label_stale');
+  await saveAlertRule(store,{requestId:requestId(),version:old.version,thresholds:{hours:80},enabled:false,responsibleId:person.id,reminderHours:9},actor,old.id);
+  await store.db.run(`DELETE FROM ${store.t('alert_rules')} WHERE id='stock_low'`);
+  const snapshot=async ()=>({
+    settings:await store.db.all(`SELECT * FROM ${store.t('business_settings')} ORDER BY id`),
+    accounts:await store.db.all(`SELECT * FROM ${store.t('cash_accounts')} ORDER BY id`),
+    rules:await store.db.all(`SELECT * FROM ${store.t('alert_rules')} WHERE id<>'stock_low' ORDER BY id`),
+    counters:await store.db.all(`SELECT * FROM ${store.t('counters')} ORDER BY id`),
+    migrations:await store.db.all(`SELECT * FROM ${store.t('migrations')} ORDER BY version`),
+  });
+  const before=await snapshot();
+  const initialize=()=>store.transaction(async tx=>{await tx.lockWrites();await initializeBusinessDefaults(tx);});
+  // Reads do not silently provision a default.
+  assert.equal((await listAlertRules(store)).records.some(rule=>rule.type==='stock_low'),false);
+  await initialize();
+  assert.deepEqual(await snapshot(),before);
+  let stock=await getAlertRule(store,'stock_low');
+  assert.deepEqual(stock.thresholds,{amount:1,unit:'week'});assert.equal(stock.enabled,true);
+  stock=await saveAlertRule(store,{requestId:requestId(),version:stock.version,enabled:false,thresholds:{amount:3,unit:'month'},responsibleId:person.id,reminderHours:7},actor,stock.id);
+  const preserved=await snapshot();
+  await initialize();await initialize();
+  assert.deepEqual(await getAlertRule(store,'stock_low'),stock);
+  assert.deepEqual(await snapshot(),preserved);
+  await store.db.run(`UPDATE ${store.t('alert_rules')} SET id='restored-stock-rule' WHERE id='stock_low'`);
+  const restored=await getAlertRule(store,'restored-stock-rule');
+  await initialize();
+  assert.deepEqual(await getAlertRule(store,'restored-stock-rule'),restored);
+  assert.equal((await listAlertRules(store)).records.filter(rule=>rule.type==='stock_low').length,1);
 }));
 
 test('alertas paginan20 por severidad/antigüedad y no exponen JSON ni contactos',()=>fixture(async store=>{
@@ -84,6 +140,7 @@ test('acciones de alertas usan pedidos vinculados o destinos reales; sin inventa
   const closing=alertClientData({...base,entity_type:'cash_closing',entity_id:'closing',target_account_id:'bank'}).action.view;
   assert.deepEqual(closing,{section:'cash',tab:'overview',account:'bank',record:'closing'});
   assert.deepEqual(alertClientData({...base,entity_type:'source',entity_id:'source'}).action.view,{section:'orders',tab:'imports',source:'source'});
+  assert.deepEqual(alertClientData({...base,type:'stock_low',entity_type:'product',entity_id:'product'}).action.view,{section:'products',record:'product'});
 });
 
 test('configuración completa exige recursos reales, no crea caja ni exige sueldo fijo y excluye heartbeat derivado',()=>fixture(async store=>{
@@ -92,12 +149,23 @@ test('configuración completa exige recursos reales, no crea caja ni exige sueld
   const person=await saveResource(store,'people',{name:'Responsable real',requestId:requestId()},actor);
   const account=await saveAccount(store,{name:'Banco real',type:'bank',responsibleId:person.id,openingOn:bogotaDate(),openingBalanceMinor:0,requestId:requestId()},actor);
   await assert.rejects(()=>saveBusinessSettings(store,{version:settings.version,requestId:requestId(),setupCompleted:true,setupPolicyConfirmed:true,defaultReceiptAccountId:account.id,defaultPaymentAccountId:account.id,alertDefaults:{responsibleId:person.id,reminderHours:24}},actor),/producto/);
-  await store.save('products',{...emptyRecord('products'),title:'Producto real',slug:'producto-real',price:1000,stockQuantity:1,orderable:true},null,null,actor);
+  await store.save('products',{...emptyRecord('products'),title:'Producto agotado',slug:'producto-agotado',price:1000,stockQuantity:0,orderable:true},null,null,actor);
+  await assert.rejects(()=>saveBusinessSettings(store,{version:settings.version,requestId:requestId(),setupCompleted:true,setupPolicyConfirmed:true,defaultReceiptAccountId:account.id,defaultPaymentAccountId:account.id,alertDefaults:{responsibleId:person.id,reminderHours:24}},actor),/producto/);
+  await store.save('products',{...emptyRecord('products'),title:'Producto sin contar',slug:'producto-sin-contar',price:1000,stockQuantity:null,orderable:true},null,null,actor);
   settings=await saveBusinessSettings(store,{version:settings.version,requestId:requestId(),setupCompleted:true,setupPolicyConfirmed:true,defaultReceiptAccountId:account.id,defaultPaymentAccountId:account.id,alertDefaults:{responsibleId:person.id,reminderHours:24},automation:{status:'running'}},actor);
   assert.equal(settings.setupCompleted,true);assert.equal(settings.automation,undefined);assert.equal(settings.setupPayrollSkipped,undefined);
   assert.equal((await listResources(store,'people'))[0].salaryAgreements.length,0);
   for(const change of [{reportPeriods:[]},{alertDefaults:{responsibleId:'missing',reminderHours:24}},{alertDefaults:{responsibleId:person.id,reminderHours:0}},{setupPolicyConfirmed:'true'}])await assert.rejects(()=>saveBusinessSettings(store,{version:settings.version,requestId:requestId(),...change},actor),{status:400});
 }));
+
+test('producto inicial admite saldo desconocido, no cero explícito ni referencias no vendibles',()=>{
+  const product={productType:'product',orderable:true,status:'draft',price:1000,stockQuantity:null,stockReserved:5};
+  assert.equal(isOnboardingProduct(product),true);
+  assert.equal(isOnboardingProduct({...product,stockQuantity:0}),false);
+  assert.equal(isOnboardingProduct({...product,stockQuantity:5}),false);
+  assert.equal(isOnboardingProduct({...product,stockQuantity:6}),true);
+  for (const change of [{productType:'gift'},{orderable:false},{status:'archived'},{price:0}]) assert.equal(isOnboardingProduct({...product,...change}),false);
+});
 
 test('personas validan usuario real, convenios sin solape y versiones de comisión únicas',()=>fixture(async store=>{
   await assert.rejects(()=>saveResource(store,'people',{name:'Persona',userId:'missing',requestId:requestId()},actor),{status:400});

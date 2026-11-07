@@ -4,11 +4,12 @@ import { ALERT_TYPES, getBusinessSettings, saveBusinessSettings, saveResource } 
 import { evaluateAlerts, getAlertRule, saveAlertRule, updateAlert, getAlert } from '../lib/business/alerts.mjs';
 import { saveAccount, recordIncome, closeCash, reopenCash, reverseCashEntry } from '../lib/business/cash.mjs';
 import { createShipment, recordShipmentEvent } from '../lib/business/shipments.mjs';
-import { recordCollectionTx } from '../lib/business/collections.mjs';
+import { recordCollectionTx, registerReturn } from '../lib/business/collections.mjs';
 import { confirmSettlement } from '../lib/business/settlements.mjs';
 import { recordExpense } from '../lib/business/expenses.mjs';
 import { entity, runCommand, updateVersioned, audit } from '../lib/business/commands.mjs';
 import { queueJobTx, claimJob } from '../lib/business/job-leases.mjs';
+import { emptyRecord } from '../lib/schema.mjs';
 
 const alerts=async (store,type=null)=> (await store.db.all(`SELECT a.*,r.type FROM ${store.t('alerts')} a JOIN ${store.t('alert_rules')} r ON r.id=a.rule_id${type?' WHERE r.type=?':''} ORDER BY a.entity_id,a.episode`,type?[type]:[])).map(entity);
 const active=rows=>rows.filter(row=>row.state!=='resolved');
@@ -35,11 +36,21 @@ async function observeFileCut(store,f,row,value,precision='instant') {
     return entity(await tx.db.get(`SELECT * FROM ${tx.t('shipments')} WHERE id=?`,[row.id]));
   });
 }
+async function availableStock(store,f,product,quantity) {
+  const current=await store.get('products',product.id);
+  return store.save('products',{...current,stockQuantity:quantity+(current.stockReserved || 0)},current.id,current.version,f.actorId);
+}
+async function demandOrder(store,f,product,quantity,extra={}) {
+  const input=businessOrderInput(product,{year:f.year,items:[{lineId:requestId(),kind:'products',itemId:product.id,quantity,unitPriceMinor:product.price*100,discountMinor:0}],...extra});
+  const order=await store.saveOrder(input,f.actorId);
+  assert.equal((await store.saveOrder(input,f.actorId)).id,order.id,'Un reintento no duplica la demanda.');
+  return order;
+}
 
 // Parent appends these to businessContracts: the existing SQLite and guarded PG
 // factories own setup/reset/close. This module never starts or resets a database.
 export const alertContracts=[
-  ['las diez reglas persistentes requieren hechos reales y conservan responsables',async store=>{
+  ['las reglas persistentes requieren hechos reales y conservan responsables',async store=>{
     const f=await createBusinessFixture(store);
     const label=await shipment(store,f,{status:'label_created',occurredAt:at(f,'09-01'),estimatedDeliveryOn:`${f.year}-09-02`,carrier:'Transportadora sintética',tracking:'ALERT-LABEL'});
     await observeFileCut(store,f,label,at(f,'09-01'));
@@ -47,6 +58,7 @@ export const alertContracts=[
     await event(store,f,incident,'incident','09-02');
     const cash=await saveAccount(store,{requestId:requestId(),name:'Caja sintética de alertas',type:'cash',openingOn:`${f.year}-09-01`,openingBalanceMinor:100000,responsibleId:f.person.id,minimumMinor:100001,closingEnabled:true,closingTime:'17:00',toleranceMinor:0},f.actorId);
     const closing=await closeCash(store,{requestId:requestId(),accountId:cash.id,closingOn:`${f.year}-09-01`,countedMinor:99999},f.actorId);
+    await availableStock(store,f,f.a,0);
     const result=await evaluateAlerts(store,{now:new Date(at(f,'09-12','23:00:00.000'))});
     assert.equal(result.stale,false);
     const rows=active(await alerts(store));
@@ -238,6 +250,128 @@ export const alertContracts=[
     await setRule(store,f,'shipment_incident',{enabled:true});
     await evaluateAlerts(store,{now:at(f,'09-02','16:00:00.000')});
     assert.deepEqual((await alerts(store,'shipment_incident')).map(row=>row.state),['resolved','open']);
+  }],
+  ['existencias: límites inclusivos exactos de días, semanas y meses aproximados',async store=>{
+    const f=await createBusinessBasics(store);
+    await demandOrder(store,f,f.a,30);
+    for (const [unit,days] of [['day',1],['week',7],['month',30]]) {
+      await setRule(store,f,'stock_low',{thresholds:{amount:1,unit}});
+      await availableStock(store,f,f.a,days);
+      await evaluateAlerts(store,{now:at(f,'10-01')});
+      let rows=active(await alerts(store,'stock_low')).filter(row=>row.entityId===f.a.id);
+      assert.equal(rows.length,1,unit);
+      assert.equal(rows[0].orderedUnits,'30');assert.equal(rows[0].availableUnits,String(days));
+      assert.equal(rows[0].estimatedDays,String(days));
+      await availableStock(store,f,f.a,days+1);
+      await evaluateAlerts(store,{now:at(f,'10-01')});
+      assert.equal(active(await alerts(store,'stock_low')).some(row=>row.entityId===f.a.id),false,unit);
+    }
+  }],
+  ['existencias: desconocido no es cero; cero avisa sin historia y positivo sin demanda no inventa agotamiento',async store=>{
+    const f=await createBusinessBasics(store);
+    const unknown=await store.save('products',{...emptyRecord('products'),title:'Sin conteo',slug:'alert-unknown-stock',price:1000,stockQuantity:null,orderable:true},null,null,f.actorId);
+    await demandOrder(store,f,unknown,30);
+    await availableStock(store,f,f.a,0);
+    await evaluateAlerts(store,{now:at(f,'09-20')});
+    const rows=active(await alerts(store,'stock_low'));
+    assert.deepEqual(rows.map(row=>row.entityId),[f.a.id]);
+    assert.equal(rows[0].orderedUnits,'0');assert.equal(rows[0].estimatedDays,null);
+    assert.match(rows[0].reason,/sin inventar una fecha/);
+    assert.equal((await store.get('products',unknown.id)).stockQuantity,null);
+    assert.deepEqual((await getAlert(store,rows[0].id)).action.view,{section:'products',record:f.a.id});
+  }],
+  ['existencias: demanda neta usa líneas y componentes reales, no guías, eventos ni reintentos',async store=>{
+    const f=await createBusinessBasics(store);
+    const order=await demandOrder(store,f,f.a,10),lineId=order.items[0].lineId;
+    let first=await shipment(store,f,{orderId:order.id,assignments:[{lineId,quantity:5}]});
+    const second=await shipment(store,f,{orderId:order.id,assignments:[{lineId,quantity:5}]});
+    first=await event(store,f,first,'collected','09-02');
+    await event(store,f,first,'in_transit','09-03');
+    await event(store,f,second,'collected','09-02');
+    let current=await store.order(order.id);
+    const returned=await registerReturn(store,{requestId:requestId(),orderId:order.id,version:current.version,occurredOn:`${f.year}-09-04`,reason:'Retorno parcial real',lines:[{lineId,quantity:3,condition:'recoverable'}]},f.actorId);
+    await registerReturn(store,{requestId:requestId(),orderId:order.id,version:returned.order.version,occurredOn:`${f.year}-09-05`,reason:'Unidades no recuperables cerradas',lines:[{lineId,quantity:2,condition:'non_recoverable'}]},f.actorId);
+    current=await demandOrder(store,f,f.a,20);
+    await store.saveOrder({...current,status:'cancelled',cancellationOn:`${f.year}-09-06`,statusReason:'No se vendió'},f.actorId,current.id,current.version);
+    const combo=await store.save('combos',{...emptyRecord('combos'),title:'Componentes históricos',slug:'alert-real-components',status:'published',price:100000,items:[{productId:f.a.id,quantity:3},{productId:f.b.id,quantity:2}]},null,null,f.actorId);
+    await demandOrder(store,f,combo,2,{items:[{lineId:requestId(),kind:'combos',itemId:combo.id,quantity:2,unitPriceMinor:combo.price*100,discountMinor:0}]});
+    await demandOrder(store,f,f.gift,1);
+    await store.save('combos',{...combo,items:[{productId:f.b.id,quantity:9}]},combo.id,combo.version,f.actorId);
+    await availableStock(store,f,f.a,1);await availableStock(store,f,f.b,1);
+    await evaluateAlerts(store,{now:at(f,'09-20')});
+    const rows=active(await alerts(store,'stock_low'));
+    assert.equal(rows.find(row=>row.entityId===f.a.id).orderedUnits,'11');
+    assert.equal(rows.find(row=>row.entityId===f.b.id).orderedUnits,'6');
+    assert.equal(rows.length,2,'Combos y obsequios no reciben saldos físicos inventados.');
+    current=await store.order(order.id);
+    await registerReturn(store,{requestId:requestId(),orderId:order.id,version:current.version,occurredOn:`${f.year}-09-06`,reason:'Cierre de las unidades restantes',lines:[{lineId,quantity:5,condition:'recoverable'}]},f.actorId);
+    await availableStock(store,f,f.a,1);
+    await evaluateAlerts(store,{now:at(f,'09-20')});
+    assert.equal(active(await alerts(store,'stock_low')).find(row=>row.entityId===f.a.id).orderedUnits,'6','Una devolución completa elimina solo la demanda del pedido devuelto.');
+  }],
+  ['existencias: ventana usa placedOn y días completos de Bogotá, nunca creación o carga',async store=>{
+    const f=await createBusinessBasics(store);
+    await demandOrder(store,f,f.a,2,{placedOn:`${f.year}-09-01`});
+    await demandOrder(store,f,f.a,3,{placedOn:`${f.year}-09-30`});
+    await demandOrder(store,f,f.a,100,{placedOn:`${f.year}-08-31`});
+    await demandOrder(store,f,f.a,100,{placedOn:`${f.year}-10-01`});
+    await demandOrder(store,f,f.a,100,{placedOn:`${f.year}-10-02`});
+    await setRule(store,f,'stock_low',{thresholds:{amount:30,unit:'day'}});
+    await availableStock(store,f,f.a,1);
+    await evaluateAlerts(store,{now:at(f,'10-01','04:59:59.999')});
+    let row=active(await alerts(store,'stock_low'))[0];
+    assert.equal(row.orderedUnits,'102');assert.equal(row.demandStartOn,`${f.year}-08-31`);assert.equal(row.demandEndOnExclusive,`${f.year}-09-30`);
+    await evaluateAlerts(store,{now:at(f,'10-01','05:00:00.000')});
+    row=active(await alerts(store,'stock_low'))[0];
+    assert.equal(row.orderedUnits,'5');assert.equal(row.demandStartOn,`${f.year}-09-01`);assert.equal(row.demandEndOnExclusive,`${f.year}-10-01`);
+    assert.match(row.reason,/estimación, no una garantía/);
+  }],
+  ['existencias: fecha comercial ausente o derivada de creación no aporta demanda ficticia',async store=>{
+    const f=await createBusinessBasics(store);
+    const undated=await demandOrder(store,f,f.a,30),legacy=await demandOrder(store,f,f.b,30);
+    await runCommand(store,{scope:'alert-fixture:legacy-dates',requestId:requestId(),payload:{},actorId:f.actorId},async tx=>{
+      for (const [order,placedOn] of [[undated,null],[legacy,legacy.placedOn]]) {
+        const raw=await tx.db.get(`SELECT * FROM ${tx.t('orders')} WHERE id=?`,[order.id]);
+        await updateVersioned(tx,'orders',order.id,raw.version,{data:JSON.stringify({...JSON.parse(raw.data),placedOn,dateSource:'legacy_record'})});
+      }
+      return {orderIds:[undated.id,legacy.id]};
+    });
+    await availableStock(store,f,f.a,1);await availableStock(store,f,f.b,1);
+    await evaluateAlerts(store,{now:at(f,'09-20')});
+    assert.equal((await alerts(store,'stock_low')).length,0);
+  }],
+  ['existencias: un episodio y recordatorios hasta reponer; reaparece sin perder el historial',async store=>{
+    const f=await createBusinessBasics(store);
+    await availableStock(store,f,f.a,0);
+    await setRule(store,f,'stock_low',{responsibleId:f.person.id,reminderHours:12});
+    const now=at(f,'09-20');
+    await Promise.all([evaluateAlerts(store,{now}),evaluateAlerts(store,{now})]);
+    let rows=await alerts(store,'stock_low');
+    assert.equal(rows.length,1);assert.equal(rows[0].responsibleId,f.person.id);
+    const acknowledged=await updateAlert(store,{requestId:requestId(),version:rows[0].version,state:'acknowledged',responsibleId:null},f.actorId,rows[0].id);
+    await evaluateAlerts(store,{now:at(f,'09-20','13:00:00.000')});
+    assert.equal((await getAlert(store,acknowledged.id)).version,acknowledged.version);
+    await evaluateAlerts(store,{now:at(f,'09-21','00:00:00.000')});
+    rows=await alerts(store,'stock_low');
+    assert.equal(rows.length,1);assert.equal(rows[0].reminderCount,1);assert.equal(rows[0].state,'acknowledged');assert.equal(rows[0].responsibleId,null);
+    await availableStock(store,f,f.a,5);
+    await evaluateAlerts(store,{now:at(f,'09-21','01:00:00.000')});
+    assert.equal((await alerts(store,'stock_low'))[0].state,'resolved');
+    await availableStock(store,f,f.a,0);
+    await evaluateAlerts(store,{now:at(f,'09-21','02:00:00.000')});
+    rows=await alerts(store,'stock_low');
+    assert.deepEqual(rows.map(row=>[row.episode,row.state]),[[1,'resolved'],[2,'open']]);
+    assert.equal(rows[1].responsibleId,f.person.id);
+  }],
+  ['existencias: cambio de catálogo invalida la instantánea antes de guardar avisos',async store=>{
+    const f=await createBusinessBasics(store);
+    await availableStock(store,f,f.a,0);
+    const changing={readSnapshot:async fn=>{const result=await store.readSnapshot(fn);await availableStock(store,f,f.a,5);return result;},transaction:fn=>store.transaction(fn)};
+    const result=await evaluateAlerts(changing,{now:at(f,'09-20')});
+    assert.equal(result.stale,true);assert.equal(result.opened+result.updated+result.resolved,0);
+    assert.equal((await alerts(store)).length,0);
+    await evaluateAlerts(store,{now:at(f,'09-20')});
+    assert.equal((await alerts(store,'stock_low')).length,0);
   }],
   ['evaluaciones obsoletas o sin lease vigente no escriben hechos parciales',async store=>{
     const f=await createBusinessBasics(store);
