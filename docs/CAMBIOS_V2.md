@@ -1,5 +1,30 @@
 # Cambios — administración v3 y antecedentes
 
+## Caja clara y guiada · actualización local, sin publicación
+
+- Resumen separado en disponible actual, por recibir, gastos por pagar (incluidos sueldos) y créditos. Acciones del día visibles, requisitos explicados y cuentas archivadas consultables sin perder su saldo del consolidado.
+- Filtros de Caja aplicables por vista: cuenta solo en resumen/movimientos, persona en gastos/sueldos y origen en liquidaciones. Chips, período, detalle e historial mantienen los callbacks y la URL existentes; las consultas en curso ocultan los datos anteriores en vez de presentarlos como actuales.
+- Catálogo compartido de etiquetas en español y guía opcional nativa, sin guardar progreso, ejecutar operaciones ni incorporar bibliotecas. La ayuda de formularios distingue obligación, pago, declaración, recepción, anticipo y reversión.
+- Gasto pendiente por defecto, también en Pedidos. El pago inmediato requiere elegirlo; volver a pendiente omite cuenta/fecha/referencia del envío. Corregir conserva identidad e historial sin añadir otro pago. Revisión previa accesible y selección de cuentas activas; traslados exigen destinos distintos.
+- Consulta de cierre de solo lectura para cuenta/fecha con las mismas validaciones de guardado. Respuestas antiguas no sustituyen la selección nueva, los fallos conservan el conteo y guardar recalcula el esperado de forma autoritativa. Cerrar no ajusta dinero ni acepta saldos enviados por el cliente.
+- Sin migración, cambios contables ni publicación remota. Comprobaciones locales sobre SQLite en memoria y PostgreSQL descartable; evidencia y límites en [VERIFICACION.md](VERIFICACION.md).
+
+## Flete / costo de envío visible y corregible desde el pedido
+
+- El detalle del pedido muestra los gastos `shipping_out` ya asociados, incluidos los importados, en **Acuerdo → Flete / costo de envío**. Permite registrar costos faltantes por guía o para un pedido sin guía y corregir el mismo gasto aunque el acuerdo esté cerrado.
+- Usa el ID y la versión del gasto, no la versión del pedido. Conserva su identidad, pagos y fuente; las correcciones importadas exigen motivo y confirmación explícita de revisión. Una observación importada sin importe también se revisa antes de completarla.
+- Este flujo registra solo el costo: no suma otro cobro al cliente, no selecciona una cuenta de pago ni inventa fecha. El cobro de envío acordado con el cliente sigue siendo un dato separado. La identidad estable evita duplicar el costo de un pedido sin guía.
+- Sin migración ni nueva representación de costos: reutiliza la acción de gastos existente. Humo real de escritorio/móvil e invariantes de caja documentados en [VERIFICACION.md](VERIFICACION.md).
+- Publicado el **7 de noviembre de 2026 (Bogotá)** como `allnutrition:release-206306367028`, misma imagen aceptada en web/scheduler. Aceptación nativa nueva: 1258 contratos y 48 E2E sin fallos/omisiones. Recuperación real de 56 tablas y edición compilada sobre clon comprobadas; interfaz productiva de escritorio/móvil y los 300 fletes cotejados con el original. Sin reimportación, migración ni cambios de caja. Los dos fixtures de temporización corregidos y el pase nativo rechazado permanecen documentados.
+
+## Existencias desconocidas, cero explícito y avisos de agotamiento
+
+- Pedidos manuales, guía inicial e importaciones permiten referencias sin conteo físico: conservan cantidades desconocidas y no descuentan un saldo supuesto. Un conteo positivo mantiene reservas/salidas; cero bloquea ventas nuevas hasta actualizar existencias. Contar después no vuelve a descontar hechos anteriores.
+- La apertura física de importación es opcional. La revisión muestra correctamente el saldo guardado y el proyectado, sin descontar las salidas dos veces en pantalla.
+- Avisos persistentes de agotamiento con anticipación configurable en días, semanas o meses de 30 días. Demanda neta de componentes de los últimos 30 días completos de Bogotá y disponibles conocidos; cero avisa inmediatamente, sin conteo o demanda no se inventa una fecha. Recordatorios independientes, sin correo/WhatsApp.
+- Migración v9 amplía `alert_rules` y añade solo el default `stock_low` faltante, sin sobrescribir configuración. Respaldos v3 conservan reglas/acciones de producto y completan únicamente ese default al restaurar un respaldo anterior. Evidencia local y límites en [VERIFICACION.md](VERIFICACION.md); corte coordinado en [DESPLIEGUE.md](DESPLIEGUE.md).
+- Publicado el 6 de noviembre de 2026 (Bogotá) como `allnutrition:release-f2b3aefc3393`, con migración v9 y la misma imagen aceptada en web/scheduler. Aceptación nativa íntegra: 1258 contratos y 48 E2E sin fallos/omisiones. Historial real aplicado: 300 pedidos/guías, 329 unidades y 19.321.000 COP, cero rechazos/omisiones, sin cambiar caja/recaudos ni la vigencia global de la política. Recuperación real, respaldo final y comprobación de 27.361 aserciones documentados en [VERIFICACION.md](VERIFICACION.md).
+
 ## Entrega integral publicada · 6 de noviembre de 2026
 
 - Aplicación `cc37247` publicada como `allnutrition:release-b39d48b56e34`, sin reconstrucción tras la aceptación. El commit `16c78c9` sólo corrige el arnés E2E y documenta su procedencia.
