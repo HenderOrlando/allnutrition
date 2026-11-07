@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openStore } from '../lib/db/index.mjs';
 import { businessInventoryContracts } from './business-inventory-contract.mjs';
-import { inventoryState } from '../lib/business/inventory.mjs';
+import { inventoryState, previewInventoryChanges } from '../lib/business/inventory.mjs';
 
 export { businessInventoryContracts };
 for(const [name,execute] of businessInventoryContracts) {
@@ -36,4 +36,19 @@ test('conservar asignaciones de devolución no permite eliminar su evidencia de 
   const shipments=[{id:'shipment',status:'label_created',assignments:[{lineId:'line',quantity:1}]}];
   const returns=[{id:'returned',recordedAt:'2026-09-03T12:00:00.000Z',lines:[{lineId:'line',quantity:1,condition:'non_recoverable'}]}];
   assert.throws(()=>inventoryState(order,shipments,new Map(),returns),{status:409});
+});
+
+test('preview permite reservas y consumo sin conteo, distingue cero y conserva los límites conocidos',()=>{
+  const next={version:1,products:[{productId:'product',reserved:1,consumed:2}],returns:[]};
+  const project=stockQuantity=>previewInventoryChanges([{next}],[{id:'product',stockQuantity,stockReserved:0}])[0];
+  assert.deepEqual(project(null),{productId:'product',reservationDelta:1,consumptionDelta:2,stockQuantity:null,stockReserved:1,available:null,issue:null});
+  assert.equal(project(0).issue,'Existencias insuficientes.');
+  assert.equal(project(2).issue,'Existencias insuficientes.');
+  assert.deepEqual(project(3),{productId:'product',reservationDelta:1,consumptionDelta:2,stockQuantity:1,stockReserved:1,available:0,issue:null});
+  const missingCount=previewInventoryChanges([{next}],[{id:'product'}])[0];
+  assert.equal(missingCount.stockQuantity,null);
+  assert.equal(missingCount.issue,null);
+  const unchanged={version:1,products:[{productId:'product',reserved:0,consumed:2}],returns:[]};
+  assert.equal(previewInventoryChanges([{previous:unchanged,next:unchanged}],[{id:'product',stockQuantity:0,stockReserved:0}])[0].issue,null);
+  assert.equal(previewInventoryChanges([{next}],[])[0].issue,'Producto inexistente.');
 });

@@ -906,3 +906,45 @@ test('reanudación usa la señal de seguro congelada por envío y revisiones ant
   assert.equal(Object.hasOwn(after.costObservations,'shipping_insurance'),false);assert.equal(after.costStatus,'known');
   assert.equal((await insuranceExpenses(store)).length,1);
 }));
+
+test('importación permite conteos ausentes y descuenta solo saldos conocidos sin duplicar al reimportar',()=>fixture(async(store,f)=>{
+  const template=await store.get('products',f.a.id),b=await store.get('products',f.b.id);
+  const a=await store.save('products',{...template,slug:'uncounted-import-a',stockQuantity:null},null,null,actor);
+  await store.save('products',{...b,stockQuantity:5},b.id,b.version,actor);
+  const rows=[
+    basicRow({collectedAmount:'',collectionDate:'',collectionExternalId:''}),
+    basicRow({externalOrderId:'COUNTED-2',externalShipmentId:'COUNTED-S2',tracking:'000COUNTED2',productExternalKey:'SKU-B',quantity:2,unitPrice:'10.000',collectedAmount:'',collectionDate:'',collectionExternalId:''})
+  ];
+  const resolutions=[{action:'link_product',externalKey:'SKU-A',internalId:a.id},{action:'link_product',externalKey:'SKU-B',internalId:b.id}];
+  let batch=await preview(store,await upload(store,f,rows,{resolutions}));
+  assert.equal(batch.preview.summary.valid,2);assert.equal(batch.preview.summary.rejected,0);
+  const cashBefore=await tableCount(store,'cash_entries');
+  batch=await finish(store,batch);assert.equal(batch.state,'completed');
+  const assertBalances=async()=>{
+    const unknown=await store.get('products',a.id),known=await store.get('products',b.id);
+    assert.equal(unknown.stockQuantity,null);assert.equal(unknown.stockReserved,0);
+    assert.equal(known.stockQuantity,3);assert.equal(known.stockReserved,0);
+    assert.equal(await tableCount(store,'order_collections'),0);assert.equal(await tableCount(store,'cash_entries'),cashBefore);
+  };
+  await assertBalances();
+  assert.equal((await linkedOrder(store,f.source.id)).inventory.products[0].consumed,1);
+  const repeated=await preview(store,await upload(store,f,rows,{resolutions}));
+  assert.equal(repeated.preview.summary.valid,2);await finish(store,repeated);
+  assert.equal(await tableCount(store,'orders'),2);assert.equal(await tableCount(store,'shipments'),2);
+  await assertBalances();
+}));
+
+test('importación con conteo cero se bloquea hasta guardar existencias reales y revisar de nuevo',()=>fixture(async(store,f)=>{
+  const a=await store.get('products',f.a.id);
+  await store.save('products',{...a,stockQuantity:0},a.id,a.version,actor);
+  let batch=await preview(store,await upload(store,f,[basicRow({collectedAmount:'',collectionDate:'',collectionExternalId:''})]));
+  assert.equal(batch.preview.summary.valid,0);
+  assert.ok(batch.preview.groups[0].errors.some(error=>error.code==='IMPORT_INVENTORY'));
+  await assert.rejects(()=>accept(store,batch),{status:409});assert.equal(await tableCount(store,'orders'),0);
+  const counted=await store.get('products',a.id);
+  await store.save('products',{...counted,stockQuantity:3},counted.id,counted.version,actor);
+  batch=await preview(store,batch);assert.equal(batch.preview.summary.valid,1);
+  batch=await finish(store,batch);assert.equal(batch.state,'completed');
+  assert.equal((await store.get('products',a.id)).stockQuantity,2);
+  assert.equal(await tableCount(store,'orders'),1);
+}));

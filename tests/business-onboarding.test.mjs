@@ -130,8 +130,8 @@ test('preparación repara defaults archivados sin reactivar ni editar datos exis
   assert.equal(state.readiness.cash, true);
 }));
 
-test('el primer producto requiere precio/conteo reales y queda vendible en panel sin publicar ni inventar costo o imagen', () => fixture(async (store, user) => {
-  for (const fields of [{ price: undefined }, { price: 0 }, { price: 1.5 }, { stockQuantity: undefined }, { stockQuantity: 0 }, { stockQuantity: null }, { stockQuantity: 1.5 }]) {
+test('el primer producto requiere precio real y queda vendible en panel sin publicar ni inventar costo o imagen', () => fixture(async (store, user) => {
+  for (const fields of [{ price: undefined }, { price: 0 }, { price: 1.5 }, { stockQuantity: -1 }, { stockQuantity: 1.5 }]) {
     await assert.rejects(() => product(store, user, fields), { status: 400 });
   }
   const input = { action: 'product', requestId: requestId(), title: 'Primera proteína', price: 55000, stockQuantity: 3 };
@@ -153,6 +153,21 @@ test('el primer producto requiere precio/conteo reales y queda vendible en panel
   const order = await store.saveOrder({ requestId: requestId(), customerName: 'Destinatario real', phone: '3001234567', city: 'Bogotá', placedOn: bogotaDate(), deliveryMethod: 'pickup', items: [{ kind: 'products', itemId: item.id, quantity: 1, unitPriceMinor: 5500000 }] }, user.id);
   assert.equal(order.items[0].itemId, item.id);
   assert.equal((await store.get('products', item.id)).stockReserved, 1);
+}));
+
+test('la puesta en marcha conserva el conteo ausente y permite registrar el primer pedido',()=>fixture(async(store,user)=>{
+  const state=await product(store,user,{stockQuantity:null});
+  const item=state.products[0];
+  assert.equal(item.stockQuantity,null);assert.equal(state.readiness.product,true);
+  await store.saveOrder({requestId:requestId(),customerName:'Destinatario real',phone:'3001234567',city:'Bogotá',placedOn:bogotaDate(),deliveryMethod:'pickup',items:[{kind:'products',itemId:item.id,quantity:1,unitPriceMinor:5500000}]},user.id);
+  const after=await store.get('products',item.id);
+  assert.equal(after.stockQuantity,null);assert.equal(after.stockReserved,1);
+}));
+
+test('un conteo explícito en cero se conserva y no habilita pedidos desde la puesta en marcha',()=>fixture(async(store,user)=>{
+  const state=await product(store,user,{stockQuantity:0}),item=state.products[0];
+  assert.equal(item.stockQuantity,0);assert.equal(state.readiness.product,false);
+  await assert.rejects(()=>store.saveOrder({requestId:requestId(),customerName:'Destinatario real',phone:'3001234567',city:'Bogotá',placedOn:bogotaDate(),deliveryMethod:'pickup',items:[{kind:'products',itemId:item.id,quantity:1,unitPriceMinor:5500000}]},user.id),{status:409});
 }));
 
 test('producto genera slug único y conserva presentación/SKU/costo explícitos', () => fixture(async (store, user) => {

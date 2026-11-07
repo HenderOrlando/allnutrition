@@ -35,7 +35,7 @@ const FILE_RESOLUTIONS=['accept_formulas'];
 const STEP_GUIDANCE=[
  ['Elige el archivo y su origen','Elige un origen existente o crea uno para tus archivos. Guardar el original no incorpora pedidos ni gastos.'],
  ['Confirma las hojas y sus datos','Elige qué contiene cada hoja. Revisa las variantes, sus columnas y el corte real del archivo; las propuestas nunca se aceptan solas.'],
- ['Completa lo que falta y revisa el efecto','Resuelve los vínculos y datos que necesite este archivo. Para pedidos históricos, confirma también sus costos y el conteo físico. Cada cambio exige una revisión nueva.'],
+ ['Completa lo que falta y revisa el efecto','Resuelve los vínculos y datos que necesite este archivo. Confirma los costos históricos y revisa el inventario de cada producto; un conteo físico de apertura es opcional y debe ser real. Cada cambio exige una revisión nueva.'],
  ['Confirma y continúa tu negocio','La importación avanza por operaciones completas y puede retomarse. Las excepciones quedan pendientes; no se fabrica dinero ni stock.']
 ];
 const blankSheetConfig=(sheetName='')=>({sheetName,enabled:true,headerRow:1,dateFormat:'DMY',decimalSeparator:',',groupSeparator:'.',layout:'item_rows',purpose:'orders',columns:[],statusMap:{},oneOrderPerGuide:false,reportAsOf:null,defaults:{},identityMode:'provided',expenseGroupNames:{},expenseCategoryMap:{}});
@@ -674,6 +674,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    </>}
   </>}
   {batch&&step===3&&<>
+   <p>El inventario se revisa por producto. Sin existencias físicas registradas se permiten pedidos y guías, y el saldo sigue desconocido: no se descuenta un saldo supuesto. Con existencias positivas se controlan reservas y salidas. Un saldo físico de cero bloquea una venta nueva hasta actualizar el conteo real. No se inventan cobros, pagos ni fechas de entrega.</p>
    {!hasPreview?<p role="status">{previewing?'El servidor está generando una revisión nueva; espera para confirmar.':'Los cambios guardados necesitan una revisión nueva. Lo ya incorporado se conserva; esta revisión solo prepara lo pendiente.'}</p>:<>
     <h3>Qué falta por resolver</h3><p>Una operación es un pedido con sus envíos, o una fila completa de gastos. Se aplica completa, nunca a medias.</p>
     <dl className={`form-grid ${styles.summaryMetrics}`}><div><dt>Listas</dt><dd>{validCount}</dd></div><div><dt>Por corregir</dt><dd>{invalidCount}</dd></div><div><dt>Ya incorporadas</dt><dd>{Number(summary.applied||0)}</dd></div><div><dt>Excluidas</dt><dd>{Number(summary.skipped||0)}</dd></div></dl>
@@ -699,7 +700,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
     </article>)}</div>
     {filteredGroups.length>20&&<div className="admin-actions"><button type="button" className="button subtle" disabled={groupPage<=1} onClick={()=>setGroupPage(value=>value-1)}>Grupos anteriores</button><span>Grupos · página {groupPage} de {groupPages}</span><button type="button" className="button subtle" disabled={groupPage>=groupPages} onClick={()=>setGroupPage(value=>value+1)}>Más grupos</button></div>}
     {resolutions.length>0&&<details><summary>Resoluciones preparadas ({resolutions.length}){dirty?' · pendientes de validar':''}</summary><ul>{resolutions.map((resolution,index)=><li key={index}>{RESOLUTION_LABELS[resolution.action]||resolution.action} · {resolution.externalKey||resolution.entityKey||'Todo el lote'}{resolution.rowNumber?` · fila ${resolution.rowNumber}`:''}{resolution.reason?` · ${resolution.reason}`:''}</li>)}</ul></details>}
-    <ImportReviewEffects preview={batch.preview} opening={inventoryOpening} disabled={!!busy||!canEditDraft} onEditProduct={editInventoryProduct}/>
+    <ImportReviewEffects preview={batch.preview} opening={batch.inventoryOpening} disabled={!!busy||!canEditDraft} onEditProduct={editInventoryProduct}/>
     <details><summary>Otras opciones de corrección del archivo</summary><ResolutionActions actions={FILE_RESOLUTIONS} disabled={!!busy||!canEditDraft} onResolve={()=>openResolver('accept_formulas')}/></details>
    </>}
    <div className={`admin-actions ${styles.importActions}`}><button type="button" className="button primary" disabled={!!busy||previewing||!canEditDraft||!hasImportable&&hasPreview&&!dirty&&!invalidCount} onClick={dirty||!hasPreview?saveAndPreview:invalidCount?resolveFirstPending:()=>goToStep(4)}>{dirty||!hasPreview?'Guardar cambios y revisar':invalidCount?'Resolver primer pendiente':'Continuar a confirmación'}</button>{hasPreview&&invalidCount>0&&hasImportable&&!dirty&&<button type="button" className="button subtle" onClick={()=>goToStep(4)}>Revisar importación parcial</button>}<button type="button" className="button subtle" disabled={!!busy} onClick={()=>goToStep(2)}>Atrás</button><button type="button" className="button subtle" disabled={!!busy||!canEditDraft} onClick={()=>perform('save',()=>saveDraft())}>Guardar borrador</button><button type="button" className="button subtle" disabled={!!busy} onClick={returnToHistory}>Volver a importaciones</button></div>

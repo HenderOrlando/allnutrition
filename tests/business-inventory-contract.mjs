@@ -28,6 +28,81 @@ async function cancel(store,current) {
 }
 
 export const businessInventoryContracts=[
+  ['existencias sin contar permiten pedidos y hechos logísticos sin inventar un saldo físico',async store=>{
+    const unknown=await product(store,null),payload=orderInput([line(unknown,3)]);
+    let current=await store.saveOrder(payload,actor);
+    assert.equal((await store.saveOrder(payload,actor)).id,current.id);
+    await balance(store,unknown,null,3);
+    assert.deepEqual(current.inventory.products,[{productId:unknown.id,reserved:3,consumed:0}]);
+    let sent=await shipment(store,current.id,{assignments:[{lineId:current.items[0].lineId,quantity:2}]});
+    sent=await event(store,sent,'collected');
+    await balance(store,unknown,null,1);
+    current=await store.order(current.id);
+    assert.deepEqual(current.inventory.products,[{productId:unknown.id,reserved:1,consumed:2}]);
+    const first=await returned(store,current,1);
+    const second=await returned(store,first.order,2,'non_recoverable');
+    assert.deepEqual(second.order.inventory.products,[{productId:unknown.id,reserved:0,consumed:2}]);
+    assert.deepEqual(second.order.inventory.returns.map(value=>value.issuedQuantity).sort(),[1,1]);
+    assert.equal(second.order.financialSummary.netProductsMinor,0,'La devolución conserva su crédito real');
+    await balance(store,unknown,null,0);
+  }],
+  ['corregir y reenviar con existencias sin contar conserva las salidas sin inventar stock',async store=>{
+    const unknown=await product(store,null),current=await order(store,[line(unknown)]);
+    let original=await shipment(store,current.id);
+    original=await event(store,original,'collected');
+    const dispatch=original.events.find(value=>value.status==='collected');
+    original=await event(store,original,'unknown',{correctionOf:dispatch.id,reason:'La recogida no ocurrió'});
+    await balance(store,unknown,null,1);
+    assert.deepEqual((await store.order(current.id)).inventory.products,[{productId:unknown.id,reserved:1,consumed:0}]);
+    const correction=original.events.find(value=>value.correctionOf===dispatch.id);
+    original=await event(store,original,'collected',{correctionOf:correction.id,reason:'Recogida documentada'});
+    const replacement=await shipment(store,current.id,{replacesShipmentId:original.id});
+    await balance(store,unknown,null,1);
+    await event(store,replacement,'collected');
+    await balance(store,unknown,null,0);
+    assert.deepEqual((await store.order(current.id)).inventory.products,[{productId:unknown.id,reserved:0,consumed:2}]);
+  }],
+  ['contar después de despachos desconocidos no descuenta de nuevo el consumo anterior',async store=>{
+    const unknown=await product(store,null);
+    let current=await order(store,[line(unknown,3)]);
+    const first=await shipment(store,current.id,{assignments:[{lineId:current.items[0].lineId,quantity:2}]});
+    await event(store,first,'collected');
+    const uncounted=await balance(store,unknown,null,1);
+    await store.save('products',{...uncounted,stockQuantity:5},unknown.id,uncounted.version);
+    await balance(store,unknown,5,1);
+    current=await store.order(current.id);
+    current=await store.saveOrder({...current,notes:'Nota sin repetir salidas anteriores'},actor,current.id,current.version);
+    await balance(store,unknown,5,1);
+    assert.deepEqual(current.inventory.products,[{productId:unknown.id,reserved:1,consumed:2}]);
+    const remaining=await shipment(store,current.id,{assignments:[{lineId:current.items[0].lineId,quantity:1}]});
+    await event(store,remaining,'collected');
+    await balance(store,unknown,4,0);
+    assert.deepEqual((await store.order(current.id)).inventory.products,[{productId:unknown.id,reserved:0,consumed:3}]);
+  }],
+  ['cero contado bloquea nuevas ventas pero no una nota de un pedido ya despachado',async store=>{
+    const known=await product(store,1);
+    let current=await order(store,[line(known)]);
+    const sent=await shipment(store,current.id);
+    await event(store,sent,'collected');
+    const zero=await balance(store,known,0,0);
+    current=await store.order(current.id);
+    await store.saveOrder({...current,notes:'Actualizar contacto sin vender unidades nuevas'},actor,current.id,current.version);
+    await assert.rejects(order(store,[line(known)]),{status:409});
+    await assert.rejects(store.save('products',{...zero,stockQuantity:null},zero.id,zero.version),/contadas no pueden volver/);
+    assert.deepEqual(await store.get('products',known.id),zero);
+    await balance(store,known,0,0);
+  }],
+  ['componentes sin conteo no ocultan el límite de un componente contado',async store=>{
+    const unknown=await product(store,null),known=await product(store,1);
+    const combo=await store.save('combos',{title:'Combo mixto',slug:'combo-mixto',status:'published',price:200,items:[{productId:unknown.id,quantity:2},{productId:known.id,quantity:1}]});
+    const current=await order(store,[line(combo,1,'combos')]);
+    await balance(store,unknown,null,2);await balance(store,known,1,1);
+    const sent=await shipment(store,current.id);
+    await event(store,sent,'collected');
+    await balance(store,unknown,null,0);await balance(store,known,0,0);
+    await assert.rejects(order(store,[line(combo,1,'combos')]),{status:409});
+    await balance(store,unknown,null,0);await balance(store,known,0,0);
+  }],
   ['la última unidad solo admite un pedido concurrente y el perdedor revierte todo',async store=>{
     const a=await product(store,1);
     const results=await Promise.allSettled([order(store,[line(a)]),order(store,[line(a)])]);
@@ -136,18 +211,20 @@ export const businessInventoryContracts=[
     await returned(store,first.order,1,'non_recoverable');
     await balance(store,a,1,0);
   }],
-  ['existencias desconocidas y cero se distinguen públicamente pero ninguna permite vender',async store=>{
+  ['existencias desconocidas permiten registrar y cero contado sigue bloqueando nuevas ventas',async store=>{
     const unknown=await product(store,null),zero=await product(store,0);
     await balance(store,unknown,null,0);await balance(store,zero,0,0);
     const publicProducts=(await store.publicData()).products;
     assert.equal(publicProducts.find(item=>item.id===unknown.id).availability,'consult');
     assert.equal(publicProducts.find(item=>item.id===zero.id).availability,'soldout');
     for(const item of publicProducts)for(const key of ['stockQuantity','stockReserved','stockAvailable'])assert.equal(Object.hasOwn(item,key),false);
-    await assert.rejects(order(store,[line(unknown)]));await assert.rejects(order(store,[line(zero)]));
-    assert.equal(await count(store,'orders'),0);
-    const counted=await store.save('products',{...unknown,stockQuantity:1},unknown.id,unknown.version);
-    await order(store,[line(counted)]);
+    const saved=await order(store,[line(unknown)]);
+    await assert.rejects(order(store,[line(zero)]),{status:409});
+    assert.equal(await count(store,'orders'),1);
+    const pending=await balance(store,unknown,null,1);
+    const counted=await store.save('products',{...pending,stockQuantity:1},unknown.id,pending.version);
     await balance(store,counted,1,1);
+    assert.equal((await store.order(saved.id)).inventory.products[0].reserved,1);
   }],
   ['despacho y devolución usan la composición histórica aunque cambie el combo y el regalo',async store=>{
     const a=await product(store,10),b=await product(store,10);
