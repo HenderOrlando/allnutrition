@@ -194,9 +194,18 @@ const cases = [
   }],
   ['respuesta perdida se reconcilia por journal y no vuelve a publicar', async (store, t) => {
     const f = await setup(store, t), operation = await f.operation(f.firstDelivery); f.remote.loseResponse = true;
-    assert.equal((await f.turn()).errorCode, 'OPERATION_UNCERTAIN'); assert.equal((await get(store, 'social_operations', operation.id)).state, 'uncertain');
-    assert.equal((await f.turn()).processed, 0); assert.equal(f.remote.objects.size, 1);
-    assert.equal((await f.turn({ now: f.at(61000) })).errorCode, null); assert.equal((await get(store, 'social_operations', operation.id)).state, 'confirmed');
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse(f.base) });
+    assert.equal((await f.turn()).errorCode, 'OPERATION_UNCERTAIN');
+    const uncertain = await get(store, 'social_operations', operation.id);
+    assert.equal(uncertain.state, 'uncertain');
+    const job = await store.db.get(`SELECT data FROM ${store.t('job_runs')} WHERE key=?`, [`social:browser:delivery:${f.firstDelivery.id}`]);
+    const retryAt = Math.max(Date.parse(uncertain.nextAttemptAt), Date.parse(JSON.parse(job.data).nextRunAt));
+    assert.ok(Number.isFinite(retryAt));
+    assert.equal((await f.turn({ now: new Date(retryAt - 1).toISOString() })).processed, 0);
+    assert.equal((await get(store, 'social_operations', operation.id)).state, 'uncertain');
+    assert.equal(f.remote.objects.size, 1); assert.equal(f.remote.reads, 0);
+    assert.equal((await f.turn({ now: new Date(retryAt).toISOString() })).errorCode, null);
+    assert.equal((await get(store, 'social_operations', operation.id)).state, 'confirmed');
     assert.equal(f.remote.writes, 1); assert.equal(f.remote.reads, 1);
   }],
   ['perder lease después del efecto deja sent y reiniciar sólo inspecciona', async (store, t) => {
@@ -468,11 +477,14 @@ const cases = [
     const settings = await getBusinessSettings(store); await saveBusinessSettings(store, { ...settings, reportsStartOn: '2030-01-01', requestId: randomUUID() }, f.actorId);
     await saveResource(store, 'people', { name: 'Empleado independiente', requestId: randomUUID(), salaryAgreements: [{ id: 'worker-isolation', enabled: true, amountPerPeriodMinor: 3100, frequency: 'monthly', effectiveFrom: '2029-12-30', effectiveTo: '2029-12-31', payDayOffset: 0 }] }, f.actorId);
     await f.operation(f.firstDelivery); f.remote.beforeWrite = async () => { entered.resolve(); await release.promise; };
-    const running = f.turn(); await entered.promise;
+    let browserSettled = false, timer, accounting;
+    const running = f.turn().finally(() => { browserSettled = true; }); await entered.promise;
     try {
-      const normal = await Promise.race([runBusinessJobs(store, { now: f.base }), new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('El turno contable quedó esperando navegador')), 2000); timer.unref(); })]);
+      accounting = runBusinessJobs(store, { now: f.base });
+      const normal = await Promise.race([accounting, new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('La prueba de aislamiento excedió su plazo de seguridad')), 30000); })]);
+      assert.equal(browserSettled, false);
       assert.ok(normal.payroll.created > 0); assert.equal(f.remote.writes, 0); assert.equal(normal.social.hasMore, false);
-    } finally { release.resolve(); await running; }
+    } finally { clearTimeout(timer); release.resolve(); await Promise.all([running, accounting]); }
   }],
   ['agregación conserva parcial y validación rechaza claves no autorizadas', async (store, t) => {
     assert.equal(aggregateSocialCampaignState(['published', 'failed'], 'organic'), 'partial'); assert.equal(aggregateSocialCampaignState(['failed', 'queued'], 'organic'), 'needs_attention');
