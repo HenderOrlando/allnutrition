@@ -1,18 +1,54 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Field } from './Fields';
 import useDialog from './useDialog';
 import Icon from './Icons';
-import { bogotaDate } from '@/lib/business/dates.mjs';
+import { bogotaDate, businessDate } from '@/lib/business/dates.mjs';
 import { formatMoneyMinor, MAX_MONEY_MINOR } from '@/lib/business/money.mjs';
 import styles from './FinanceExperience.module.css';
 import OrderLineCosts from './OrderLineCosts';
+import {cashStateLabels,expenseCategoryLabels,cashMovementLabels} from './finance-labels.mjs';
 
 const titles={collection:'Registrar cobro',refund:'Registrar reembolso',return:'Registrar devolución','complete-costs':'Completar o corregir costos','resolve-legacy-payment':'Conciliar pago histórico',expense:'Registrar gasto','expense-recovery':'Recuperar sobrepago','pay-expense':'Pagar gasto',income:'Registrar ingreso',advance:'Registrar anticipo',transfer:'Transferir','cash-close':'Cerrar caja','cash-reopen':'Reabrir cierre','cash-reverse':'Revertir movimiento','document-reverse':'Revertir documento','settlement-save':'Registrar liquidación','settlement-confirm':'Confirmar recepción','payroll-prepare':'Preparar sueldo','payroll-confirm':'Confirmar sueldo','payroll-pay':'Pagar sueldo','link-shipment':'Vincular pedido'};
 titles['account-save']='Configurar cuenta';
-const actionGuidance={ 'account-save':'Identifica la cuenta y su responsable. La apertura requiere un saldo confirmado; no se reescribe al editar.',expense:'Registra primero la obligación. Elegir una cuenta de pago añade una salida real; sin cuenta, el gasto queda pendiente.',income:'Registra dinero recibido no ligado a una venta. Revisa cuenta, importe y fecha antes de guardar.',transfer:'Mueve dinero entre dos cuentas del negocio. La transferencia no es una venta ni un gasto.',advance:'Registra una salida real para una persona; se aplicará a su remuneración sin volver a generar gasto.','cash-close':'Compara el dinero contado con el saldo registrado. Guardar el cierre conserva la diferencia y no ajusta el saldo.','settlement-save':'Declara y vincula los soportes. Registrar la liquidación no confirma todavía dinero recibido.','settlement-confirm':'Confirma solo el bruto, retenciones y neto de este recibo. Puedes registrar una recepción parcial.','payroll-prepare':'1. Selecciona persona y período. 2. Revisa los devengos calculados. 3. Confirma el período; el pago se registra por separado.','payroll-confirm':'Revisa el período y las obligaciones antes de confirmar. Esta acción devenga; no registra un pago.'};
+const actionGuidance={
+  'account-save':'Identifica la cuenta y su responsable. La apertura requiere un saldo confirmado, incluso cero; no se reescribe al editar.',
+  expense:'Registra la obligación. Dejar pendiente no mueve dinero; registrar y pagar ahora añade la salida completa solo si lo eliges.',
+  income:'Registra dinero recibido no ligado a una venta. Para cobrar una venta, abre el pedido.',
+  transfer:'Mueve dinero entre dos cuentas propias distintas. Registra salida y entrada, sin cambiar el total ni crear una venta o gasto.',
+  advance:'Registra una salida real para una persona; se aplicará a su remuneración sin volver a generar gasto.',
+  'pay-expense':'Registra únicamente el dinero que salió: puedes pagar el saldo completo o un abono, con su cuenta y fecha reales.',
+  'expense-recovery':'Registra el dinero recuperado del proveedor como una entrada. Agota el crédito sin reducir el gasto por segunda vez.',
+  'cash-close':'Cuenta el efectivo real y compara el saldo de la cuenta y fecha elegidas. Guardar conserva la diferencia; no ajusta dinero.',
+  'cash-reopen':'Reabre con un motivo para corregir fechas alcanzadas. Primero debes reabrir los cierres posteriores; se conservan las revisiones.',
+  'cash-reverse':'Añade la contrapartida completa con fecha y motivo; no borra el movimiento original.',
+  'document-reverse':'Revierte el documento vinculado completo y sus aplicaciones. No permite borrar un asiento aislado ni una venta.',
+  'settlement-save':'Declara y vincula los soportes. Registrar la liquidación no confirma dinero recibido.',
+  'settlement-confirm':'Confirma solo el bruto, retenciones y neto de este recibo. Puedes registrar una recepción parcial; un neto cero no mueve dinero y uno negativo registra salida.',
+  'payroll-prepare':'Selecciona persona y período, revisa los devengos y después confirma. El pago es una acción separada.',
+  'payroll-confirm':'Revisa las obligaciones antes de confirmar. Esta acción devenga; no registra un pago.',
+  'payroll-pay':'Revisa créditos y anticipos ya considerados. Registra solo el pago nuevo que sale de la cuenta, sin descontar dos veces el anticipo.'
+};
+const actionExamples={
+  expense:'Gasto de 20.000 COP, abono de 5.000 COP y pendiente de 15.000 COP: guarda pendiente y luego usa Pagar saldo o abono.',
+  income:'Un aporte del propietario de 50.000 COP aumenta la cuenta elegida, no las ventas.',
+  transfer:'Trasladar 30.000 COP de Caja a Banco registra −30.000 y +30.000 COP; el total no cambia.',
+  'pay-expense':'Un gasto pendiente de 20.000 COP con un abono de 5.000 COP deja 15.000 COP pendientes.',
+  'expense-recovery':'Si pagaste 5.000 COP por un gasto corregido a 3.000 COP, recuperar los 2.000 COP de crédito registra una entrada real.',
+  'cash-close':'Esperado 95.000 COP y contado 94.000 COP: faltante de 1.000 COP, sin ajuste automático.',
+  'cash-reopen':'Reabre el cierre del viernes antes del jueves si ambos bloquean una corrección del jueves.',
+  'cash-reverse':'Revertir un traslado recupera ambas caras; la entrada y salida originales siguen en la historia.',
+  'document-reverse':'Un recibo de plataforma y sus retenciones se revierten como un documento, no como un depósito aislado.',
+  'settlement-save':'122.000 COP brutos − 17.000 COP retenidos = 105.000 COP netos declarados, todavía sin recepción.',
+  'settlement-confirm':'Confirmar 105.000 COP recibidos de los 105.000 COP declarados registra la recepción real.',
+  'payroll-prepare':'100.000 COP ganados − 20.000 COP de anticipo = 80.000 COP de pago nuevo. El corte del 1 de octubre no incluye ese día.',
+  'payroll-confirm':'Confirmar una obligación de 100.000 COP no retira dinero; pagar es otro paso.',
+  'payroll-pay':'Después de aplicar un anticipo de 20.000 COP a 100.000 COP ganados, el pago nuevo es de 80.000 COP.'
+};
 const display=value=>value==null?'Sin dato':Number.isSafeInteger(value)&&Math.abs(value)<=MAX_MONEY_MINOR?formatMoneyMinor(value):'Revisa el importe';
 const active=rows=>{const reversed=new Set(rows.filter(r=>r.reversalOf).map(r=>r.reversalOf));return rows.filter(r=>!r.reversalOf&&!reversed.has(r.id));};
+const validMoney=value=>Number.isSafeInteger(value)&&Math.abs(value)<=MAX_MONEY_MINOR;
+const validDate=value=>{try{return businessDate(value);}catch{return null;}};
 function ActionMoneyField(props){
   const callback=useRef(props.onDraftInvalid);callback.current=props.onDraftInvalid;
   useEffect(()=>()=>callback.current(false),[]);
@@ -24,13 +60,14 @@ function remainingSettlement(settlement){
 }
 function initial(action,context){
   const {order,expense,settlement,payroll,account,closing,entry,shipment}=context,today=bogotaDate();
+  const contextualAccount=account?.active&&(action!=='cash-close'||account.type==='cash')?account.id:null;
   return {orderId:expense?.id?expense.orderId:order?.id,version:action==='document-reverse'?(context.documentVersion??1):action==='link-shipment'?(shipment?.version??1):expense?.version||order?.version||settlement?.version||payroll?.version||closing?.version||account?.version||1,
     occurredOn:today,effectiveOn:today,receivedOn:today,incurredOn:expense?.id?expense.incurredOn:context.expenseOnly?null:today,closingOn:today,
     amountMinor:action==='expense'?expense?.amountMinor??null:action==='collection'?order?.paymentSummary?.outstandingMinor??null:action==='refund'?order?.paymentSummary?.refundDueMinor??null:action==='pay-expense'?expense?.outstandingMinor??null:action==='expense-recovery'?expense?.creditMinor??null:action==='payroll-pay'?payroll?.amountToPayMinor??null:null,
-    accountId:account?.id||null,holder:'business',shipmentId:shipment?.id||expense?.shipmentId||null,method:'Transferencia',reference:'',reason:'',concept:action==='income'?'owner_funding':expense?.concept||'',description:'',supplier:expense?.supplier||'',category:expense?.category||'other',allowCredit:false,
+    accountId:action==='expense'?null:contextualAccount,expensePaymentMode:'pending',holder:'business',shipmentId:shipment?.id||expense?.shipmentId||null,method:'Transferencia',reference:'',reason:'',concept:action==='income'?'owner_funding':expense?.concept||'',description:'',supplier:expense?.supplier||'',category:expense?.category||'other',allowCredit:false,
     expenseId:expense?.id,sourceKey:expense?.sourceKey,reviewConfirmed:false,settlementId:settlement?.id,payrollId:payroll?.id,personId:payroll?.personId||expense?.personId||null,startOn:payroll?.startOn||today.slice(0,8)+'01',endOnExclusive:payroll?.endOnExclusive||'',
     closingId:closing?.id,cashEntryId:entry?.id,documentId:context.documentId||entry?.sourceId||'',documentType:context.documentType||'collection',
-    fromAccountId:account?.id||null,toAccountId:null,countedMinor:null,shippingCreditMinor:0,mode:'opening_balance',
+    fromAccountId:account?.active?account.id:null,toAccountId:null,countedMinor:null,shippingCreditMinor:0,mode:'opening_balance',
     inventoryOpeningIncluded:'',
     lines:action==='settlement-confirm'?remainingSettlement(settlement):action==='settlement-save'?(settlement?.lines||[]):action==='return'?(order?.items||[]).map(l=>({lineId:l.lineId,quantity:0,condition:'recoverable'})):[],
     assignments:(order?.items||[]).map(l=>({lineId:l.lineId,quantity:order?.shipments?.length?0:l.quantity})),
@@ -47,6 +84,17 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const lastPayload=useRef(null),confirmRequest=useRef({key:null,id:crypto.randomUUID()});
   const personRequestId=useRef(crypto.randomUUID());
   const personName=useRef(null);
+  const fieldId=useId(),expenseAccountSuggestion=useRef(null);
+  const [selectionNotice,setSelectionNotice]=useState('');
+  const [closingPreview,setClosingPreview]=useState({key:'',status:'idle',value:null,error:''}),[closingRetry,setClosingRetry]=useState(0);
+  const closingSequence=useRef(0),closingErrorRef=useRef(null);
+  const closingKey=JSON.stringify([form.accountId,form.closingOn]);
+  const closingCurrent=closingPreview.key===closingKey&&closingPreview.status==='ready'?closingPreview.value:null;
+  const countedValid=validMoney(form.countedMinor)&&form.countedMinor>=0&&!invalid.countedMinor;
+  const differenceCandidate=closingCurrent&&countedValid?form.countedMinor-closingCurrent.expectedMinor:null;
+  const closingDifference=validMoney(differenceCandidate)?differenceCandidate:null;
+  const closingReady=!!closingCurrent&&countedValid&&closingDifference!==null;
+  const expenseEdit=action==='expense'&&!!context.expense?.id;
   const expenseOnly=action==='expense'&&context.expenseOnly===true;
   const expenseReview=action==='expense'&&Boolean(context.expense?.sourceAsOf||context.expense?.importIdentity||expenseOnly&&!context.expense?.id&&context.shipment?.costObservations?.shipping_out?.sourceAsOf);
   const dirty=JSON.stringify(form)!==baseline.current||Object.values(invalid).some(Boolean);
@@ -57,20 +105,59 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
     const seq=++sequence.current;setError('');
     try {
       const needsAccounts=!expenseOnly&&!['return','complete-costs','link-shipment','account-save'].includes(action),needsPeople=!expenseOnly&&['expense','advance','payroll-prepare','payroll-confirm','account-save'].includes(action),needsSources=action==='settlement-save';
-      const [accountData,settings,personData,sourceData]=await Promise.all([needsAccounts?api('/api/admin/business/accounts'):null,needsAccounts?api('/api/admin/business/settings'):null,needsPeople?api('/api/admin/business/people'):null,needsSources?api('/api/admin/business/sources'):null]);
+      const [accountData,settings,personData,sourceData,platformData]=await Promise.all([needsAccounts?api('/api/admin/business/accounts'):null,needsAccounts?api('/api/admin/business/settings'):null,needsPeople?api('/api/admin/business/people'):null,needsSources?api('/api/admin/business/sources'):null,needsSources?api('/api/admin/business/platforms'):null]);
       if(seq!==sequence.current)return;
-      setAccounts(accountData?.records||[]);setPeople(personData?.records||[]);setSources(sourceData?.records||[]);
-      const accountId=['collection','income','settlement-confirm','expense-recovery'].includes(action)?settings?.defaultReceiptAccountId:settings?.defaultPaymentAccountId;
-      if(accountId&&!(action==='expense'&&context.expense?.id))setForm(old=>{if(old.accountId)return old;baseline.current=JSON.stringify({...JSON.parse(baseline.current),accountId});return {...old,accountId};});
+      setAccounts(accountData?.records||[]);setPeople(personData?.records||[]);setSources((sourceData?.records||[]).map(source=>({...source,platformName:platformData?.records?.find(platform=>platform.id===source.platformId)?.name||'Plataforma no disponible'})));
+      const rows=accountData?.records||[],defaultId=['collection','income','settlement-confirm','expense-recovery'].includes(action)?settings?.defaultReceiptAccountId:settings?.defaultPaymentAccountId;
+      const eligible=a=>a.active&&(action!=='cash-close'||a.type==='cash');
+      const suggested=rows.find(a=>a.id===context.account?.id&&eligible(a))||rows.find(a=>a.id===defaultId&&eligible(a));
+      if(action==='expense')expenseAccountSuggestion.current=suggested?.id||null;
+      else if(suggested){
+        const key=action==='transfer'?'fromAccountId':'accountId';
+        setForm(old=>{if(old[key])return old;baseline.current=JSON.stringify({...JSON.parse(baseline.current),[key]:suggested.id});return {...old,[key]:suggested.id};});
+      }
       setLoaded(true);
     }catch(cause){if(seq===sequence.current)setError(cause.message);}
   }
   useEffect(()=>{void load();return()=>{sequence.current++;};},[action,api]);
-  const set=(key,value)=>{if(key==='sourceId'&&form.lines.length){setError('Quita los cobros vinculados antes de cambiar la cuenta de plataforma.');return;}setForm(old=>({...old,[key]:value,...(key==='type'&&value!=='cash'?{closingEnabled:false,closingTime:null}:{})}));setPreview(null);};
-  const input=(key,title,{required=false,type='text',nullable=false,disabled=false}={})=><label className="field" key={key}>{title}{required?' *':''}<input type={type} name={key} value={form[key]??''} required={required} disabled={disabled} maxLength={key==='reason'?2000:300} onChange={e=>set(key,nullable&&!e.target.value?null:e.target.value)}/></label>;
-  const amount=(key,title,value=form[key],onChange=value=>set(key,value),{required=true,signed=false}={})=><ActionMoneyField key={key} field={{name:key,label:title,type:'moneyOptionalMinor',required,signed,description:'Pesos COP. Punto para miles, coma para centavos; no se redondean importes.'}} value={value} onChange={onChange} onDraftInvalid={value=>setInvalid(old=>({...old,[key]:value}))}/>;
-  const select=(key,title,options,{required=true,disabled=false}={})=><label className="field" key={key}>{title}{required?' *':''}<select name={key} value={form[key]??''} required={required} disabled={disabled} onChange={e=>set(key,e.target.value||null)}><option value="">Selecciona una opción</option>{options.map(([id,name])=><option value={id} key={id}>{name}</option>)}</select></label>;
-  const accountSelect=(key='accountId',title='Cuenta',required=true)=>select(key,title,accounts.filter(a=>(a.active||a.id===form[key])&&(action!=='cash-close'||a.type==='cash')).map(a=>[a.id,a.name]),{required});
+  useEffect(()=>{
+    if(action!=='cash-close')return;
+    const current=++closingSequence.current;
+    if(!form.accountId||!validDate(form.closingOn)){setClosingPreview({key:closingKey,status:'idle',value:null,error:''});return;}
+    setClosingPreview({key:closingKey,status:'loading',value:null,error:''});
+    const params=new URLSearchParams({preview:'1',account:form.accountId,closingOn:form.closingOn});
+    api('/api/admin/finance/closings?'+params).then(value=>{
+      if(current===closingSequence.current)setClosingPreview({key:closingKey,status:'ready',value,error:''});
+    }).catch(cause=>{
+      if(current===closingSequence.current)setClosingPreview({key:closingKey,status:'error',value:null,error:cause.message});
+    });
+    return()=>{closingSequence.current++;};
+  },[action,api,closingKey,closingRetry]);
+  useEffect(()=>{if(closingPreview.key===closingKey&&closingPreview.error)closingErrorRef.current?.focus();},[closingPreview.error,closingPreview.key,closingKey]);
+  const set=(key,value)=>{
+    if(key==='sourceId'&&form.lines.length){setError('Quita los cobros vinculados antes de cambiar la cuenta de plataforma.');return;}
+    if(action==='cash-close'&&['accountId','closingOn'].includes(key)){closingSequence.current++;setClosingPreview({key:'',status:'idle',value:null,error:''});}
+    if(key==='fromAccountId'&&value===form.toAccountId)setSelectionNotice('El destino coincidía con el nuevo origen. Elige otra cuenta de destino.');
+    else if(key==='fromAccountId'||key==='toAccountId')setSelectionNotice('');
+    setForm(old=>({...old,[key]:value,
+      ...(key==='expensePaymentMode'&&value==='pay_now'&&!old.accountId?{accountId:expenseAccountSuggestion.current}:{}),
+      ...(key==='fromAccountId'&&value===old.toAccountId?{toAccountId:null}:{}),
+      ...(key==='type'&&value!=='cash'?{closingEnabled:false,closingTime:null}:{})
+    }));setPreview(null);
+  };
+  const input=(key,title,{required=false,type='text',nullable=false,disabled=false,description=''}={})=>{
+    const id=`${fieldId}-${key}`,help=`${id}-help`;
+    return <div className="field" key={key}><label htmlFor={id}>{title}{required?' *':''}</label><input id={id} type={type} name={key} value={form[key]??''} required={required} disabled={disabled} aria-describedby={help} maxLength={key==='reason'?2000:300} onInvalid={e=>e.currentTarget.setAttribute('aria-invalid','true')} onInput={e=>{if(e.currentTarget.validity.valid)e.currentTarget.removeAttribute('aria-invalid');}} onChange={e=>set(key,nullable&&!e.target.value?null:e.target.value)}/><small id={help} className="muted field-description">{required?'Obligatorio.':'Opcional.'} {description}</small></div>;
+  };
+  const amount=(key,title,value=form[key],onChange=value=>set(key,value),{required=true,signed=false}={})=><ActionMoneyField key={key} field={{name:key,label:title,type:'moneyOptionalMinor',required,signed,description:`${required?'Obligatorio.':'Opcional.'} Pesos COP. Punto para miles, coma para centavos; vacío no es cero. No se redondean importes.`}} value={value} onChange={onChange} onDraftInvalid={value=>setInvalid(old=>({...old,[key]:value}))}/>;
+  const select=(key,title,options,{required=true,disabled=false,description=''}={})=>{
+    const id=`${fieldId}-${key}`,help=`${id}-help`;
+    return <div className="field" key={key}><label htmlFor={id}>{title}{required?' *':''}</label><select id={id} name={key} value={form[key]??''} required={required} disabled={disabled} aria-describedby={help} onInvalid={e=>e.currentTarget.setAttribute('aria-invalid','true')} onChange={e=>{e.currentTarget.removeAttribute('aria-invalid');set(key,e.target.value||null);}}><option value="">Selecciona una opción</option>{options.map(([id,name])=><option value={id} key={id}>{name}</option>)}</select><small id={help} className="muted field-description">{required?'Obligatorio.':'Opcional.'} {description}</small></div>;
+  };
+  const accountSelect=(key='accountId',title='Cuenta',required=true)=>{
+    const options=accounts.filter(a=>a.active&&(action!=='cash-close'||a.type==='cash')&&(key!=='toAccountId'||a.id!==form.fromAccountId));
+    return <div>{select(key,title,options.map(a=>[a.id,a.name]),{required,description:key==='fromAccountId'?'Cuenta de donde salió el dinero.':key==='toAccountId'?'Cuenta propia distinta que recibió el dinero.':'Selecciona el lugar real donde entró o salió el dinero.'})}{!options.length&&<p className={styles.queryHelp}>{key==='toAccountId'&&accounts.some(a=>a.active)?'No hay otra cuenta activa distinta del origen.':'No hay cuentas activas elegibles.'} Cancela este formulario y crea o reactiva una cuenta en Configuración → Cuentas; después vuelve a registrar el hecho.</p>}</div>;
+  };
   const personSelect=(required=true)=><>{select('personId','Persona responsable',people.filter(p=>p.active||p.id===form.personId).map(p=>[p.id,p.name]),{required})}<details><summary>Crear persona sin acceso al panel</summary>{input('newPersonName','Nombre de la persona nueva')}<button type="button" className="button subtle" disabled={busy||!form.newPersonName.trim()} onClick={()=>createResponsible('personId')}>Crear persona</button></details></>;
   const reason=()=>input('reason','Motivo',{required:true});
   async function createResponsible(key='responsibleId'){
@@ -115,14 +202,13 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
     if(action==='complete-costs')out.lineCosts=form.lineCosts.filter(l=>l.selected).map(({selected,...line})=>line);
     if(action==='settlement-confirm')out.lines=form.lines.filter(l=>l.grossMinor!==0||l.deductions.some(d=>d.amountMinor!==0));
     if(action==='settlement-save'||action==='settlement-confirm')out.lines=out.lines.map(l=>({collectionId:l.collectionId,grossMinor:l.grossMinor,deductions:l.deductions.filter(d=>d.amountMinor!==0).map(d=>({expenseId:d.expenseId,amountMinor:d.amountMinor}))}));
-    if(expenseOnly){delete out.accountId;delete out.effectiveOn;}
-    if(action==='expense'&&!out.accountId)delete out.effectiveOn;
+    if(action==='expense'&&(expenseOnly||expenseEdit||form.expensePaymentMode==='pending')){delete out.accountId;delete out.effectiveOn;delete out.reference;}
     if(action==='resolve-legacy-payment'&&out.mode==='opening_balance'){delete out.accountId;delete out.occurredOn;delete out.effectiveOn;}
     if(action==='account-save'&&context.account?.id)delete out.openingBalanceMinor;
     return out;
   }
   async function submit(event){
-    event.preventDefault();if(busy||(action==='link-shipment'&&!context.order?.id))return;setBusy(true);setError('');
+    event.preventDefault();if(busy||action==='cash-close'&&!closingReady||(action==='link-shipment'&&!context.order?.id))return;setBusy(true);setError('');
     let committed=false;
     try {
       const accountEdit=action==='account-save'&&context.account?.id;
@@ -139,13 +225,22 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
     try {const body={...payload(),payrollId:preview.id||preview.payrollId,version:preview.version||form.version};const key=JSON.stringify({...body,requestId:undefined});if(confirmRequest.current.key!==key)confirmRequest.current={key,id:crypto.randomUUID()};body.requestId=confirmRequest.current.id;const response=await api('/api/admin/business/actions/payroll-confirm',{method:'POST',body:JSON.stringify(body)});committed=true;baseline.current=JSON.stringify(form);await onSaved(response);}catch(cause){setError(committed?'Guardado; vista pendiente de actualizar. '+cause.message:cause.message);}finally{setBusy(false);}
   }
   const order=context.order;
-  const net=form.lines.reduce((sum,l)=>sum+(l.grossMinor||0)-(l.deductions||[]).reduce((s,d)=>s+(d.amountMinor||0),0),0);
+  const settlementAmountsValid=form.lines.every(l=>validMoney(l.grossMinor)&&(l.deductions||[]).every(d=>validMoney(d.amountMinor)))&&!Object.values(invalid).some(Boolean);
+  const net=settlementAmountsValid?form.lines.reduce((sum,l)=>sum+l.grossMinor-(l.deductions||[]).reduce((s,d)=>s+d.amountMinor,0),0):null;
+  const payingExpense=action==='expense'&&!expenseOnly&&!expenseEdit&&form.expensePaymentMode==='pay_now';
+  const amountValid=validMoney(form.amountMinor)&&!invalid.amountMinor;
+  const reviewEffect=action==='expense'?(expenseEdit?'Corrige la obligación sin mover dinero ni repetir pagos; los sobrepagos quedan como crédito.':payingExpense?'Registra la obligación y el pago completo: sale dinero de la cuenta elegida.':'Registra el gasto pendiente; no se mueve dinero.'):{
+    income:'Entra dinero sin registrar una venta.',transfer:'Sale de la cuenta de origen y entra en la de destino; el total entre cuentas no cambia.',advance:'Sale dinero como anticipo, sin generar otra vez el gasto.','pay-expense':'Sale el importe indicado y se aplica al saldo del gasto.','expense-recovery':'Entra el dinero recuperado sin reducir otra vez el gasto.','settlement-save':'Guarda una declaración; no recibe ni paga dinero.','settlement-confirm':net===null?'Completa los importes para revisar el efecto del recibo.':net>0?'Registra una entrada por el neto confirmado.':net<0?'Registra una salida por el neto confirmado.':'Neto cero: no registra movimiento de dinero.','payroll-prepare':'Primero prepara la revisión; confirmar registra la obligación, no el pago.','payroll-confirm':'Confirma la obligación; no paga ni retira dinero.','payroll-pay':'Sale únicamente el pago nuevo, tras créditos y anticipos revisados.','cash-reopen':'Reabre con motivo, conserva el cierre original y permite una nueva revisión.','cash-reverse':'Añade la contrapartida completa sin borrar el original.','document-reverse':'Revierte el documento y sus aplicaciones completos; conserva la historia.'
+  }[action];
+  const reviewAccount=id=>accounts.find(a=>a.id===id)?.name;
+  const reviewDate=action==='expense'&&!payingExpense?form.incurredOn:action==='settlement-save'?form.reportedOn:action==='settlement-confirm'?form.receivedOn:form.effectiveOn;
   return <form onSubmit={submit} aria-busy={busy} className={`business-action-form ${styles.actionForm}`}>
     {expenseOnly&&<h3>{context.expense?.id?'Corregir':'Registrar'} flete / costo de envío</h3>}
     {error&&<div ref={errorRef} tabIndex={-1} className="error" role="alert">{error}{!loaded&&<button type="button" className="text-button" onClick={load}>Reintentar</button>}</div>}
     {!loaded&&!error&&<p role="status">Cargando datos de la acción…</p>}
     <fieldset className="editor-fieldset" disabled={busy||!loaded}>
       {actionGuidance[action]&&<p className={styles.formGuide}>{expenseOnly?'Registra solo el costo de la transportadora. No cambia el total del cliente ni mueve caja. Los pagos anteriores se conservan y se gestionan por separado.':action==='expense'&&context.expense?.id?'Corrige el gasto con un motivo. Sus pagos anteriores se conservan; un sobrepago permanece como crédito para recuperar.':actionGuidance[action]}</p>}
+      {actionExamples[action]&&<details><summary>Ver ejemplo de esta operación</summary><p><strong>Ejemplo ficticio:</strong> {actionExamples[action]}</p></details>}
       {action==='account-save'&&<>
         <div className="product-form-grid">{input('name','Nombre de cuenta',{required:true})}
           {context.account?.id?<p className="hint">Tipo: {{cash:'Caja en efectivo',bank:'Banco',wallet:'Billetera'}[form.type]}. La apertura y su saldo inicial no se reescriben.</p>:select('type','Tipo de cuenta',[['cash','Caja en efectivo'],['bank','Banco'],['wallet','Billetera']])}
@@ -187,17 +282,41 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         {order?.legacyFinancialReview?.reason==='ambiguous_refund'&&<div className="product-form-grid">{amount('receiptAmountMinor','Cobro histórico comprobado (COP)')}{amount('refundAmountMinor','Reembolso histórico comprobado (COP)')}{input('receiptOn','Fecha del cobro histórico',{required:true,type:'date'})}{input('refundOn','Fecha del reembolso histórico',{required:true,type:'date'})}</div>}
       </>}
       {['expense','pay-expense','expense-recovery','income','advance','transfer'].includes(action)&&<>
-        {action==='expense'&&<fieldset className={styles.fieldGroup}><legend>Datos del gasto</legend><div className="product-form-grid">{select('category','Categoría',[['advertising','Publicidad'],['operating','Operación'],['other','Otro gasto'],['shipping_out','Flete / costo de envío'],['shipping_return','Flete de retorno'],['shipping_insurance','Seguro de envío'],['platform_fee','Cargo de plataforma']],{disabled:expenseOnly||Boolean(context.expense?.id)})}{input('concept','Concepto',{required:true})}{input('supplier','Proveedor (opcional)')}{input('incurredOn','Fecha del gasto',{type:'date',nullable:true})}{Boolean(order?.shipments?.length)&&select('shipmentId','Envío vinculado',order.shipments.map(s=>[s.id,s.tracking||'Entrega local']),{required:false,disabled:expenseOnly||Boolean(context.expense?.id)})}</div></fieldset>}
+        {expenseEdit&&!order?.shipments?.length&&<p>Envío vinculado: {form.shipmentId?'Se conserva el envío ya asociado; consulta su identificación desde el pedido.':'Sin envío asociado.'} La categoría y el envío no se cambian al corregir.</p>}
+        {action==='expense'&&<fieldset className={styles.fieldGroup}><legend>Datos del gasto</legend><div className="product-form-grid">{select('category','Categoría',['advertising','operating','other','shipping_out','shipping_return','shipping_insurance','platform_fee'].map(id=>[id,expenseCategoryLabels[id]]),{disabled:expenseOnly||Boolean(context.expense?.id)})}{input('concept','Concepto',{required:true})}{input('supplier','Proveedor (opcional)')}{input('incurredOn','Fecha del gasto',{type:'date',nullable:true})}{Boolean(order?.shipments?.length)&&select('shipmentId','Envío vinculado',order.shipments.map(s=>[s.id,s.tracking||'Entrega local']),{required:false,disabled:expenseOnly||Boolean(context.expense?.id)})}</div></fieldset>}
         {action==='expense'&&(context.expense?.id||expenseReview)&&<>{reason()}<p>La corrección conserva pagos anteriores; un sobrepago queda como crédito para recuperar, no como ingreso ficticio.</p></>}
         {expenseReview&&<label className="checkbox-field"><input type="checkbox" name="reviewConfirmed" required checked={form.reviewConfirmed} onChange={event=>set('reviewConfirmed',event.target.checked)}/>Confirmo la corrección del costo importado después de revisar su soporte.</label>}
         {action==='expense'&&!context.expense?.id&&!expenseOnly&&<details><summary>Responsable opcional del gasto</summary>{personSelect(false)}</details>}
-        {action==='income'&&<>{select('concept','Concepto',[['owner_funding','Aporte del propietario'],['other_non_sale','Otro ingreso no ligado a venta']])}{input('description','Descripción',{required:true})}<p className="hint">Este ingreso aumenta caja, nunca ventas.</p></>}
+        {action==='income'&&<>{select('concept','Concepto',['owner_funding','other_non_sale'].map(id=>[id,cashMovementLabels[id]]))}{input('description','Descripción',{required:true})}<p className="hint">Este ingreso aumenta caja, nunca ventas.</p></>}
         {action==='advance'&&<>{personSelect()}{input('concept','Concepto del anticipo',{required:true})}<p className="hint">El anticipo reduce deuda de sueldo al aplicarse; no vuelve a generar gasto.</p></>}
-        <fieldset className={styles.fieldGroup}><legend>{expenseOnly?'Costo del envío':action==='expense'?'Importe y pago opcional':'Movimiento de dinero'}</legend>{action==='expense'&&!expenseOnly&&<p className={styles.queryHelp}>{context.expense?.id?'La corrección mantiene el historial de pagos y sus créditos.':'Sin cuenta de pago no se mueve caja. La fecha del gasto y la fecha del pago representan hechos distintos.'}</p>}<div className="product-form-grid">{amount('amountMinor','Importe (COP)')}{!expenseOnly&&<>{input('effectiveOn',action==='expense'?'Fecha del pago, si pagas ahora':'Fecha del movimiento',{required:action!=='expense'||Boolean(form.accountId),type:'date'})}{action==='transfer'?<>{accountSelect('fromAccountId','Desde')}{accountSelect('toAccountId','Hacia')}{input('concept','Concepto',{required:true})}</>:accountSelect('accountId',action==='expense'?'Pagar ahora desde (opcional)':'Cuenta',action!=='expense')}{input('reference','Referencia')}</>}</div></fieldset>
+        <fieldset className={styles.fieldGroup}><legend>{expenseOnly?'Costo del envío':action==='expense'?'Importe del gasto':'Movimiento de dinero'}</legend><div className="product-form-grid">
+          {amount('amountMinor','Importe (COP)')}
+          {action!=='expense'&&<>{input('effectiveOn','Fecha del movimiento',{required:true,type:'date',description:'Usa la fecha en que ocurrió el movimiento, no la fecha de digitación.'})}{action==='transfer'?<>{accountSelect('fromAccountId','Desde')}{accountSelect('toAccountId','Hacia')}{input('concept','Concepto',{required:true,description:'Describe por qué trasladas dinero entre tus cuentas.'})}</>:accountSelect()}{input('reference','Referencia',{description:'Soporte o dato que permite reconocer el movimiento.'})}</>}
+        </div>{selectionNotice&&<p role="status">{selectionNotice}</p>}</fieldset>
+        {action==='expense'&&!expenseOnly&&!expenseEdit&&<fieldset className={styles.fieldGroup} aria-describedby={`${fieldId}-expense-payment-help`}><legend>¿Ya salió el dinero?</legend>
+          <div className={styles.paymentChoices}>
+            <label htmlFor={`${fieldId}-pending`}><input id={`${fieldId}-pending`} type="radio" name="expensePaymentMode" value="pending" checked={form.expensePaymentMode==='pending'} onChange={()=>set('expensePaymentMode','pending')}/>Dejar pendiente</label>
+            <label htmlFor={`${fieldId}-pay-now`}><input id={`${fieldId}-pay-now`} type="radio" name="expensePaymentMode" value="pay_now" checked={form.expensePaymentMode==='pay_now'} disabled={!accounts.some(a=>a.active)} onChange={()=>set('expensePaymentMode','pay_now')}/>Registrar y pagar ahora</label>
+          </div><p id={`${fieldId}-expense-payment-help`} className={styles.queryHelp}>Dejar pendiente no mueve dinero. Pagar ahora registra el pago completo; para un abono, guarda pendiente y después usa «Pagar saldo o abono». La fecha del gasto y la del pago son hechos distintos.</p>
+          {!accounts.some(a=>a.active)&&<p>No hay cuenta activa para pagar. Puedes guardar pendiente, o cancelar y crear/reactivar una cuenta en Configuración → Cuentas.</p>}
+          {payingExpense&&<div className="product-form-grid">{accountSelect('accountId','Cuenta de pago')}{input('effectiveOn','Fecha del pago',{required:true,type:'date',description:'Fecha real en que salió el dinero.'})}{input('reference','Referencia',{description:'Soporte del pago completo; opcional.'})}</div>}
+        </fieldset>}
+        {expenseEdit&&<section className="form-section"><h3>Historial de pagos</h3>{(context.expense.payments||context.expense.activePayments||[]).map(payment=><p key={payment.id}>{payment.effectiveOn||'Fecha del documento'} · {display(payment.amountMinor)} · {cashMovementLabels[payment.kind]||'Movimiento registrado'}{payment.reversalOf?' · Reversión':''}</p>)}{!(context.expense.payments||context.expense.activePayments||[]).length&&<p>Este gasto no tiene pagos registrados.</p>}</section>}
         {action==='expense-recovery'&&<><p>Crédito disponible del proveedor: {display(context.expense?.creditMinor)}. Recuperarlo no reduce el gasto por segunda vez.</p>{reason()}</>}
         {action==='pay-expense'&&<p>Saldo del gasto: {display(context.expense?.outstandingMinor)}.</p>}
       </>}
-      {action==='cash-close'&&<><p>Saldo esperado: {display(context.account?.balanceMinor)}. El cierre guarda la diferencia; no ajusta el saldo.</p>{accountSelect()}{input('closingOn','Fecha de cierre',{required:true,type:'date'})}{amount('countedMinor','Dinero contado (COP)')}</>}
+      {action==='cash-close'&&<>
+        <section className={styles.closingStep}><h3>1. Cuenta y fecha</h3><div className="product-form-grid">{accountSelect()}{input('closingOn','Fecha de cierre',{required:true,type:'date',description:'El esperado se consulta para esta cuenta al terminar la fecha elegida, en Bogotá.'})}</div></section>
+        <section className={styles.closingStep}><h3>2. Dinero contado</h3>{amount('countedMinor','Dinero contado (COP)')}<p className={styles.queryHelp}>Cuenta el efectivo real. Si no hay efectivo, escribe 0; dejar vacío no equivale a cero.</p></section>
+        <section className={`${styles.closingStep} ${styles.closingComparison}`} aria-busy={!!form.accountId&&!!validDate(form.closingOn)&&closingPreview.status!=='error'&&!closingCurrent}>
+          <h3>3. Comparación</h3>
+          {!form.accountId||!validDate(form.closingOn)?<p>Selecciona cuenta y fecha para consultar el saldo esperado.</p>:closingPreview.key===closingKey&&closingPreview.status==='error'?<div role="alert" tabIndex={-1} ref={closingErrorRef} className="error"><p>{closingPreview.error}</p><button type="button" className="button subtle" onClick={()=>{closingSequence.current++;setClosingPreview({key:closingKey,status:'loading',value:null,error:''});setClosingRetry(value=>value+1);}}>Reintentar consulta</button><p>Conserva tu conteo: puedes corregir cuenta o fecha sin registrar ningún cierre.</p></div>:!closingCurrent?<p role="status">Consultando saldo esperado para esta cuenta y fecha…</p>:<>
+            <dl className={styles.closingAmounts}><div><dt>Esperado al {closingCurrent.closingOn}</dt><dd>{display(closingCurrent.expectedMinor)}</dd></div><div><dt>Contado</dt><dd>{countedValid?display(form.countedMinor):'Escribe el conteo real'}</dd></div></dl>
+            <p role="status" className={styles.closingDifference}>{closingDifference===null?(countedValid?'La diferencia excede el límite monetario; revisa los importes.':'La diferencia se calcula al escribir un conteo válido.'):closingDifference<0?'Faltante de '+display(-closingDifference):closingDifference>0?'Sobrante de '+display(closingDifference):'Sin diferencia'}</p>
+          </>}
+          <h4>Al guardar</h4><p>El saldo se vuelve a comprobar al guardar. Cerrar conserva la diferencia, no ajusta el dinero. Las fechas alcanzadas quedan bloqueadas hasta reabrir con motivo.</p>
+        </section>
+      </>}
       {action==='cash-reopen'&&<><p>Reabrir conserva el cierre original. El siguiente cierre tendrá una revisión nueva.</p>{reason()}</>}
       {['cash-reverse','document-reverse'].includes(action)&&<><p className="hint">La reversión añade el movimiento contrario y conserva el original. Las dependencias activas deben deshacerse primero; no se borra una venta.</p>{input('effectiveOn','Fecha de reversión',{required:true,type:'date'})}{reason()}</>}
       {action==='settlement-confirm'&&<>
@@ -207,6 +326,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         <p><strong>Neto de este recibo: {display(net)}</strong></p><p className="hint">Bruto menos retenciones = neto. Neto cero no genera movimiento; neto negativo registra salida real. Retenciones pagan los gastos existentes, no crean otro gasto.</p>
       </>}
       {action==='settlement-save'&&<>
+        {!sources.some(s=>s.active)&&<p>No hay una cuenta de plataforma activa. Cancela y ve a Configuración → Plataformas para crearla o reactivarla antes de declarar.</p>}
         {select('sourceId','Cuenta de plataforma',sources.filter(s=>s.active||s.id===form.sourceId).map(s=>[s.id,[s.platformName,s.name].filter(Boolean).join(' · ')]))}{input('reportedOn','Fecha declarada',{type:'date',nullable:true})}{input('externalKey','Referencia de liquidación',{required:true})}
         <p>Vincula cobros y gastos existentes. Una diferencia sin soporte queda pendiente, no se inventa un gasto para cuadrarla.</p>
         {form.lines.length>0&&<p className="hint">Conserva la cuenta de plataforma de los cobros elegidos. Si cambias de cuenta, quita primero sus líneas.</p>}
@@ -226,12 +346,22 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         <div className="product-form-grid">{personSelect()}{input('startOn','Inicio del período',{required:true,type:'date'})}{input('endOnExclusive','Fecha de corte (este día no se incluye)',{required:true,type:'date'})}{amount('bonusMinor','Bonificación (COP)')}{amount('discountMinor','Descuento interno (COP)')}</div>{form.discountMinor>0&&reason()}
         <p className="hint">Para incluir septiembre completo, usa el 1 de septiembre como inicio y el 1 de octubre como fecha de corte.</p>
         <p className="hint">Control interno, no liquidación laboral legal ni nómina electrónica. Los anticipos no duplican costo; créditos de comisión se compensan antes de pagar.</p>
-        {preview&&<section className="form-section" aria-live="polite"><h4>Revisión del período · {preview.state}</h4><dl className="summary-values">{[['Devengado','earnedMinor'],['Obligaciones pendientes','outstandingMinor'],['Créditos del período','creditMinor'],['Créditos disponibles anteriores','availableCreditMinor'],['Anticipos disponibles','advanceAvailableMinor'],['Anticipos a aplicar','advanceToApplyMinor'],['Anticipos aplicados','advanceAppliedMinor'],['Pago nuevo propuesto','amountToPayMinor']].filter(([,key])=>preview[key]!=null).map(([title,key])=><div key={key}><dt>{title}</dt><dd>{display(preview[key])}</dd></div>)}</dl><p>Días por materializar: {preview.missingDayCount??0}. Confirmar registra devengos una sola vez; pagar es una acción separada.</p>{(preview.obligations||[]).map(e=><p key={e.id}>{e.category||e.concept} · {display(e.amountMinor)}</p>)}{(preview.carriedCredits||[]).map(e=><p key={e.id}>Crédito {e.category} · {display(e.creditMinor)}</p>)}<button className="button primary" type="button" onClick={confirmPrepared}>Confirmar período revisado</button></section>}
+        {preview&&<section className="form-section" aria-live="polite"><h4>Revisión del período · {cashStateLabels[preview.state]||'Estado no disponible'}</h4><dl className="summary-values">{[['Devengado','earnedMinor'],['Obligaciones pendientes','outstandingMinor'],['Créditos del período','creditMinor'],['Créditos disponibles anteriores','availableCreditMinor'],['Anticipos disponibles','advanceAvailableMinor'],['Anticipos a aplicar','advanceToApplyMinor'],['Anticipos aplicados','advanceAppliedMinor'],['Pago nuevo propuesto','amountToPayMinor']].filter(([,key])=>preview[key]!=null).map(([title,key])=><div key={key}><dt>{title}</dt><dd>{display(preview[key])}</dd></div>)}</dl><p>Días por materializar: {preview.missingDayCount??0}. Confirmar registra devengos una sola vez; pagar es una acción separada.</p>{(preview.obligations||[]).map(e=><p key={e.id}>{expenseCategoryLabels[e.category]||e.concept||'Gasto registrado'} · {display(e.amountMinor)}</p>)}{(preview.carriedCredits||[]).map(e=><p key={e.id}>Crédito {expenseCategoryLabels[e.category]||'Gasto registrado'} · {display(e.creditMinor)}</p>)}<button className="button primary" type="button" onClick={confirmPrepared}>Confirmar período revisado</button></section>}
       </>}
       {action==='payroll-pay'&&<><p>Pago nuevo tras créditos y anticipos: {display(context.payroll?.amountToPayMinor)}. Obligaciones pendientes: {display(context.payroll?.outstandingMinor)}; anticipos disponibles: {display(context.payroll?.advanceAvailableMinor)}.</p><div className="product-form-grid">{amount('amountMinor','Pago nuevo (COP)')}{accountSelect()}{input('effectiveOn','Fecha del pago',{required:true,type:'date'})}{input('reference','Referencia')}</div></>}
       {action==='link-shipment'&&<><p>{context.order?.id?`Pedido seleccionado: AN-${context.order.number}`:'Selecciona primero un pedido conocido en la búsqueda.'}</p>{context.order?.id&&<fieldset><legend>Unidades de este envío</legend><p>Asigna solo las unidades de esta guía. El servidor comprueba las cantidades acumuladas entre envíos activos.</p>{context.order.items.map(l=><label className="field" key={l.lineId}>{l.title} · Compradas {l.quantity}<input type="number" min="0" max={l.quantity} step="1" value={form.assignments.find(a=>a.lineId===l.lineId)?.quantity??0} onChange={e=>set('assignments',form.assignments.map(a=>a.lineId===l.lineId?{...a,quantity:Number(e.target.value)}:a))}/></label>)}</fieldset>}{reason()}<p>No se vincula por similitud de nombre o teléfono.</p></>}
+      {reviewEffect&&<section className={styles.saveReview} aria-label="Al guardar"><h3>Al guardar</h3>
+        <dl>
+          {action==='transfer'?<>{reviewAccount(form.fromAccountId)&&<div><dt>Desde</dt><dd>{reviewAccount(form.fromAccountId)}</dd></div>}{reviewAccount(form.toAccountId)&&<div><dt>Hacia</dt><dd>{reviewAccount(form.toAccountId)}</dd></div>}</>:((action!=='expense'||payingExpense)&&reviewAccount(form.accountId))&&<div><dt>Cuenta</dt><dd>{reviewAccount(form.accountId)}</dd></div>}
+          {validDate(reviewDate)&&<div><dt>{action==='expense'&&!payingExpense?'Fecha del gasto':'Fecha'}</dt><dd>{reviewDate}</dd></div>}
+          {amountValid&&<div><dt>Importe</dt><dd>{display(form.amountMinor)}</dd></div>}
+          {['settlement-save','settlement-confirm'].includes(action)&&settlementAmountsValid&&validMoney(net)&&<div><dt>Neto de las líneas revisadas</dt><dd>{display(net)}</dd></div>}
+          {action==='settlement-save'&&validMoney(form.netMinor)&&!invalid.netMinor&&<div><dt>Neto declarado</dt><dd>{display(form.netMinor)}</dd></div>}
+          {['payroll-prepare','payroll-confirm'].includes(action)&&<><div><dt>Persona</dt><dd>{people.find(p=>p.id===form.personId)?.name||'Selecciona una persona'}</dd></div>{validDate(form.startOn)&&validDate(form.endOnExclusive)&&<div><dt>Período</dt><dd>{form.startOn} hasta {form.endOnExclusive} (corte no incluido)</dd></div>}{preview?.amountToPayMinor!=null&&<div><dt>Pago nuevo revisado, todavía sin pagar</dt><dd>{display(preview.amountToPayMinor)}</dd></div>}</>}
+        </dl><p>{reviewEffect}</p><p className={styles.queryHelp}>Revisa el hecho y sus soportes. No se proyectan saldos futuros con el saldo actual.</p>
+      </section>}
     </fieldset>
-    <footer className="editor-footer"><span role="status">{busy?'Guardando…':dirty?'Cambios sin guardar':''}</span>{onCancel&&<button type="button" className="button subtle" disabled={busy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={busy||!loaded||Object.values(invalid).some(Boolean)||(action==='link-shipment'&&!context.order?.id)}>{expenseOnly?'Guardar costo de envío':configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':titles[action]||'Guardar'}</button></footer>
+    <footer className="editor-footer"><span role="status">{busy?'Guardando…':dirty?'Cambios sin guardar':''}</span>{onCancel&&<button type="button" className="button subtle" disabled={busy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={busy||!loaded||Object.values(invalid).some(Boolean)||action==='cash-close'&&!closingReady||(action==='link-shipment'&&!context.order?.id)}>{expenseOnly?'Guardar costo de envío':action==='expense'?(expenseEdit?'Guardar corrección del gasto':payingExpense?'Registrar gasto y pago':'Guardar gasto pendiente'):configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':titles[action]||'Guardar'}</button></footer>
   </form>;
 }
 function candidateLabel(row){return [row.orderNumber?`AN-${row.orderNumber}`:'Sin pedido',row.tracking||row.concept||row.category,row.date||'Fecha desconocida'].filter(Boolean).join(' · ');}

@@ -232,6 +232,24 @@ test('cash period and exact record context survives return without source or for
  assert.equal(adminReturnTo(href),href);assert.equal(href.includes('private'),false);
 });
 
+test('cash filters are scoped to the tab and preserve exact detail across URL round trips',()=>{
+ for(const tab of ['overview','movements','expenses','payroll','settlements']) {
+  const view=readAdminView({section:'cash',tab,period:'month',anchor:'2026-10-01',q:'consulta',page:3,record:'detail:1',account:'account:1',seller:'person:1',source:'source:1',platform:'platform:1',category:'operating',status:'partial',expensePaymentMode:'pay_now',amountMinor:100,reference:'private-reference'});
+  assert.equal(view.account,['overview','movements'].includes(tab)?'account:1':undefined);
+  assert.equal(view.seller,['expenses','payroll'].includes(tab)?'person:1':undefined);
+  assert.equal(view.source,tab==='settlements'?'source:1':undefined);
+  assert.equal(view.platform,undefined);
+  assert.equal(view.category,tab==='expenses'?'operating':undefined);
+  assert.equal(view.record,'detail:1');assert.equal(view.page,3);assert.equal(view.q,'consulta');
+  const href=adminHref(view);
+  assert.deepEqual(readAdminView(new URL(href,'https://example.test').searchParams),view);
+  assert.equal(adminReturnTo(href),href);assert.equal(href.includes('private'),false);assert.equal(href.includes('pay_now'),false);
+  const switched=readAdminView({...view,tab:tab==='settlements'?'movements':'settlements'});
+  assert.equal(switched.account,undefined);assert.equal(switched.seller,undefined);assert.equal(switched.source,undefined);
+  assert.equal(switched.record,'detail:1');
+ }
+});
+
 test('bounded opaque identifiers preserve identity and reject controls across contexts',()=>{
  const contexts=[{section:'orders',tab:'imports',key:'source'},{section:'orders',tab:'imports',key:'batch'},{section:'products',key:'record'},{section:'cash',key:'account'},{section:'business',tab:'people',key:'record'},{section:'orders',key:'seller'}];
  for(const {key,...context} of contexts) {
