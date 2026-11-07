@@ -47,6 +47,8 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
   useEffect(()=>{if(error)errorSummary.current?.focus();},[error]);
   useEffect(()=>{let active=true;setPeopleLoading(true);setPeopleError('');api('/api/admin/business/people').then(result=>{if(active)setPeople(result.records);}).catch(cause=>{if(active)setPeopleError(cause.message);}).finally(()=>{if(active)setPeopleLoading(false);});return()=>{active=false;};},[api,peopleRetry]);
   const products=all.products||[];
+  const shippingExpenses=(detail?.expenses||[]).filter(expense=>expense.category==='shipping_out');
+  const shipmentsWithoutFreight=(detail?.shipments||[]).filter(shipment=>!shippingExpenses.some(expense=>expense.shipmentId===shipment.id));
   const options=useMemo(()=>{
     const ownReservations=new Map((detail?.inventory?.products||[]).map(product=>[product.productId,product.reserved]));
     const forOrder=products.map(product=>({...product,stockReserved:Math.max(0,(product.stockReserved||0)-(ownReservations.get(product.id)||0))}));
@@ -99,6 +101,12 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
     if((factsDirty||Object.values(shipmentInteractions).some(state=>state.dirty)||financialState.dirty)&&!window.confirm('Hay cambios sin guardar. ¿Descartarlos y abrir esta acción?'))return;
     setFactsDirty(false);setShipment(newShipment());setFinancialState({dirty:false,busy:false});setFinancialAction({action,context});
   }
+  function openShippingExpense(expense=null,shipment=null){
+    openFinancial('expense',{expenseOnly:true,shipment,expense:expense||{
+      category:'shipping_out',concept:'Flete / costo de envío',shipmentId:shipment?.id||null,
+      sourceKey:shipment?undefined:`order:${detail.id}:shipping_out`
+    }});
+  }
   function cancelFinancial(){
     if(financialState.busy)return;
     if(financialState.dirty&&!window.confirm('Hay cambios sin guardar. ¿Descartarlos?'))return;
@@ -128,10 +136,10 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
       {detail?.id&&tab==='agreement'&&<section className={styles.quickActions} aria-label="Operaciones del pedido"><p className={styles.sectionLabel}>Registrar un hecho</p><div className="admin-actions order-primary-actions"><button type="button" className="button primary" data-financial-action disabled={interactionBusy||detail.totalMinor===0} onClick={()=>openFinancial('collection')}>Registrar cobro</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>changeTab('shipments')}>Actualizar envío</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>openFinancial('return')}>Registrar devolución</button></div><p className="small muted">El acuerdo, el movimiento de dinero y los eventos de envío se guardan por separado.</p></section>}
       {tab==='agreement'&&<form id="order-agreement" onSubmit={save} aria-busy={busy}><fieldset className="editor-fieldset" disabled={busy}>
         <section className="form-section"><h3>1. Destinatario y fecha</h3><p className="small muted">Datos para identificar y entregar el pedido. Los campos con * son obligatorios.</p><div className="product-form-grid">{input('customerName','Nombre del destinatario',{required:true,maxLength:150})}{input('phone','Celular',{required:true,type:'tel',maxLength:30})}{input('city','Ciudad',{required:true,maxLength:100})}{input('department','Departamento',{maxLength:100})}{input('address','Dirección exacta')}{input('placedOn','Fecha del pedido',{required:true,type:'date',disabled:frozen})}</div></section>
-        <section className="form-section"><h3>2. Productos y valor acordado</h3><p className="small muted">Guardar registra las reservas de todas las líneas y sus componentes. Las referencias sin conteo permiten registrar sin inventar existencias; un saldo contado en cero bloquea nuevas ventas. El servidor valida los saldos conocidos en conjunto.</p>{frozen&&<p className="hint">Acuerdo cerrado: cantidades, precios y flete se corrigen con una devolución o ajuste explícito, no editando el pedido.</p>}
+        <section className="form-section"><h3>2. Productos y valor acordado</h3><p className="small muted">Guardar registra las reservas de todas las líneas y sus componentes. Las referencias sin conteo permiten registrar sin inventar existencias; un saldo contado en cero bloquea nuevas ventas. El servidor valida los saldos conocidos en conjunto.</p>{frozen&&<p className="hint">Acuerdo cerrado: cantidades, precios y cobros al cliente no se editan directamente. El costo de envío se puede completar o corregir abajo, sin cambiar el acuerdo.</p>}
           {!form.items.length&&<p className={styles.emptyPrompt}>Aún no agregas referencias. Usa «Agregar referencia» para elegir un producto, obsequio o combo.</p>}
           {form.items.map((line,index)=><div className={`form-section ${styles.itemCard}`} key={line.lineId}><h4>Línea {index+1}</h4>
-            <label className="field">Referencia {index+1}<select name={`item-${index}`} required disabled={frozen} value={line.itemId?`${line.kind}:${line.itemId}`:''} onChange={e=>{const item=options.find(p=>`${p.kind}:${p.id}`===e.target.value);lineChange(index,{kind:item?.kind||'products',itemId:item?.id||'',title:item?.title||'',productType:item?.productType||'product',unitPriceMinor:(item?.price||0)*100,discountMinor:0});}}><option value="">Selecciona un producto</option>{line.itemId&&!options.some(p=>p.id===line.itemId&&p.kind===line.kind)&&<option value={`${line.kind}:${line.itemId}`}>{line.title} · Referencia histórica</option>}{options.map(p=><option key={p.kind+':'+p.id} value={p.kind+':'+p.id} disabled={p.stockAvailable===0&&!(line.itemId===p.id&&line.kind===p.kind)}>{p.title} · {p.presentation||(p.kind==='combos'?'Combo':'Producto')}{p.productType==='gift'?' · Obsequio':''} · {p.stockAvailable==null?'Existencias sin contar':`${p.stockAvailable} disponibles para este pedido`}</option>)}</select></label>
+            <label className="field">Referencia {index+1}<select name={`item-${index}`} required disabled={frozen} value={line.itemId?`${line.kind}:${line.itemId}`:''} onChange={e=>{const item=options.find(p=>`${p.kind}:${p.id}`===e.target.value);lineChange(index,{kind:item?.kind||'products',itemId:item?.id||'',title:item?.title||'',productType:item?.productType||'product',unitPriceMinor:(item?.price||0)*100,discountMinor:0});}}><option value="">Selecciona un producto</option>{line.itemId&&!options.some(p=>p.id===line.itemId&&p.kind===line.kind)&&<option value={`${line.kind}:${line.itemId}`}>{line.title} · Referencia histórica</option>}{options.map(p=><option key={p.kind+':'+p.id} value={p.kind+':'+p.id} disabled={p.stockAvailable===0&&!(line.itemId===p.id&&line.kind===p.kind)}>{p.title} · {p.presentation||(p.kind==='combos'?'Combo':'Producto')}{p.productType==='gift'?' · Obsequio':''} · {p.stockAvailable==null?'Sin conteo · permite registrar':`${p.stockAvailable} disponibles para este pedido`}</option>)}</select></label>
             <div className="product-form-grid"><label className="field">Cantidad {index+1}<input name={`quantity-${index}`} type="number" min={1} max={999} step={1} required disabled={frozen} value={line.quantity} onChange={e=>lineChange(index,{quantity:Number(e.target.value)})}/></label>{amount(`price-${index}`,`Precio unitario ${index+1} (COP)`,line.unitPriceMinor,value=>lineChange(index,{unitPriceMinor:value}),frozen)}{amount(`discount-${index}`,`Descuento total línea ${index+1} (COP)`,line.discountMinor,value=>lineChange(index,{discountMinor:value}),frozen)}</div>
             <p>Importe: {displayMinor(line.unitPriceMinor==null||line.discountMinor==null||invalidMoney[`price-${index}`]||invalidMoney[`discount-${index}`]?null:line.quantity*line.unitPriceMinor-line.discountMinor)}</p>
             {!frozen&&<button type="button" className="text-button" onClick={()=>removeLine(index)}>Quitar línea {index+1}</button>}
@@ -145,6 +153,23 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
           {input('marketingCampaign','Campaña de origen (opcional)',{maxLength:200})}
           <p className="hint">Atribución comercial del pedido; no registra publicidad, gastos ni pagos.</p>
         </section>
+        {detail?.id&&<section className="form-section" aria-labelledby="order-shipping-costs-title">
+          <h3 id="order-shipping-costs-title">Flete / costo de envío</h3>
+          <p className="small muted">Costo de la transportadora, incluido el importado. Se puede corregir aunque el pedido esté entregado. No se suma otra vez al total del cliente ni registra un pago.</p>
+          {shippingExpenses.map(expense=>{
+            const linkedShipment=detail.shipments.find(shipment=>shipment.id===expense.shipmentId);
+            return <article className="form-section" key={expense.id}>
+              <h4>{linkedShipment?.tracking?`Guía ${linkedShipment.tracking}`:expense.concept||'Costo del pedido'}</h4>
+              <p><strong>{displayMinor(expense.amountMinor)}</strong> · {expense.incurredOn||'Fecha del costo pendiente'}</p>
+              <button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>openShippingExpense(expense,linkedShipment)}>Corregir costo de envío</button>
+            </article>;
+          })}
+          {!shippingExpenses.length&&<p>No hay un costo de envío registrado.</p>}
+          <div className="admin-actions">
+            {shipmentsWithoutFreight.map(shipment=><button type="button" className="button subtle" key={shipment.id} disabled={interactionBusy} onClick={()=>openShippingExpense(null,shipment)}>Registrar costo de envío{shipment.tracking?` · ${shipment.tracking}`:''}</button>)}
+            {!detail.shipments.length&&!shippingExpenses.length&&<button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>openShippingExpense()}>Registrar costo de envío</button>}
+          </div>
+        </section>}
         <section className="form-section"><h3>3. Preparación</h3><label className="field">Estado comercial<select name="status" value={form.status} disabled={frozen} onChange={e=>set('status',e.target.value)}>{orderStates.filter(s=>s.value===form.status||['new','preparing','cancelled'].includes(s.value)).map(s=><option key={s.value} value={s.value}>{s.label}</option>)}</select></label>{form.status === 'cancelled' && <>{input('statusReason','Motivo de cancelación',{required:true})}{input('cancellationOn','Fecha de cancelación',{required:true,type:'date'})}</>}<p className="hint">El despacho y la entrega se registran como eventos en Envíos. Cancelar no inventa un reembolso.</p></section>
         <details className="form-section"><summary>Más detalles · referencias, documento y notas</summary><div className="product-form-grid">{input('addressNotes','Barrio y referencias')}{input('email','Correo del destinatario',{type:'email',maxLength:254})}{input('documentType','Tipo de documento',{maxLength:30})}{input('documentNumber','Número de documento',{maxLength:80})}</div><label className="field">Notas internas<textarea name="notes" value={form.notes||''} maxLength={3000} rows={3} onChange={e=>set('notes',e.target.value)}/></label></details>
         {detail?.id&&<ImportedData record={detail} title="Datos importados del pedido"/>}

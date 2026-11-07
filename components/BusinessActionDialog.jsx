@@ -24,11 +24,11 @@ function remainingSettlement(settlement){
 }
 function initial(action,context){
   const {order,expense,settlement,payroll,account,closing,entry,shipment}=context,today=bogotaDate();
-  return {orderId:order?.id,version:action==='document-reverse'?(context.documentVersion??1):action==='link-shipment'?(shipment?.version??1):order?.version||expense?.version||settlement?.version||payroll?.version||closing?.version||account?.version||1,
-    occurredOn:today,effectiveOn:today,receivedOn:today,incurredOn:expense?expense.incurredOn:today,closingOn:today,
+  return {orderId:expense?.id?expense.orderId:order?.id,version:action==='document-reverse'?(context.documentVersion??1):action==='link-shipment'?(shipment?.version??1):expense?.version||order?.version||settlement?.version||payroll?.version||closing?.version||account?.version||1,
+    occurredOn:today,effectiveOn:today,receivedOn:today,incurredOn:expense?.id?expense.incurredOn:context.expenseOnly?null:today,closingOn:today,
     amountMinor:action==='expense'?expense?.amountMinor??null:action==='collection'?order?.paymentSummary?.outstandingMinor??null:action==='refund'?order?.paymentSummary?.refundDueMinor??null:action==='pay-expense'?expense?.outstandingMinor??null:action==='expense-recovery'?expense?.creditMinor??null:action==='payroll-pay'?payroll?.amountToPayMinor??null:null,
     accountId:account?.id||null,holder:'business',shipmentId:shipment?.id||expense?.shipmentId||null,method:'Transferencia',reference:'',reason:'',concept:action==='income'?'owner_funding':expense?.concept||'',description:'',supplier:expense?.supplier||'',category:expense?.category||'other',allowCredit:false,
-    expenseId:expense?.id,settlementId:settlement?.id,payrollId:payroll?.id,personId:payroll?.personId||expense?.personId||null,startOn:payroll?.startOn||today.slice(0,8)+'01',endOnExclusive:payroll?.endOnExclusive||'',
+    expenseId:expense?.id,sourceKey:expense?.sourceKey,reviewConfirmed:false,settlementId:settlement?.id,payrollId:payroll?.id,personId:payroll?.personId||expense?.personId||null,startOn:payroll?.startOn||today.slice(0,8)+'01',endOnExclusive:payroll?.endOnExclusive||'',
     closingId:closing?.id,cashEntryId:entry?.id,documentId:context.documentId||entry?.sourceId||'',documentType:context.documentType||'collection',
     fromAccountId:account?.id||null,toAccountId:null,countedMinor:null,shippingCreditMinor:0,mode:'opening_balance',
     inventoryOpeningIncluded:'',
@@ -47,6 +47,8 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const lastPayload=useRef(null),confirmRequest=useRef({key:null,id:crypto.randomUUID()});
   const personRequestId=useRef(crypto.randomUUID());
   const personName=useRef(null);
+  const expenseOnly=action==='expense'&&context.expenseOnly===true;
+  const expenseReview=action==='expense'&&Boolean(context.expense?.sourceAsOf||context.expense?.importIdentity||expenseOnly&&!context.expense?.id&&context.shipment?.costObservations?.shipping_out?.sourceAsOf);
   const dirty=JSON.stringify(form)!==baseline.current||Object.values(invalid).some(Boolean);
   useEffect(()=>{onInteractionStateChange({busy,dirty});},[busy,dirty,onInteractionStateChange]);
   useEffect(()=>()=>onInteractionStateChange({busy:false,dirty:false}),[onInteractionStateChange]);
@@ -54,7 +56,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   async function load(){
     const seq=++sequence.current;setError('');
     try {
-      const needsAccounts=!['return','complete-costs','link-shipment','account-save'].includes(action),needsPeople=['expense','advance','payroll-prepare','payroll-confirm','account-save'].includes(action),needsSources=action==='settlement-save';
+      const needsAccounts=!expenseOnly&&!['return','complete-costs','link-shipment','account-save'].includes(action),needsPeople=!expenseOnly&&['expense','advance','payroll-prepare','payroll-confirm','account-save'].includes(action),needsSources=action==='settlement-save';
       const [accountData,settings,personData,sourceData]=await Promise.all([needsAccounts?api('/api/admin/business/accounts'):null,needsAccounts?api('/api/admin/business/settings'):null,needsPeople?api('/api/admin/business/people'):null,needsSources?api('/api/admin/business/sources'):null]);
       if(seq!==sequence.current)return;
       setAccounts(accountData?.records||[]);setPeople(personData?.records||[]);setSources(sourceData?.records||[]);
@@ -67,7 +69,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const set=(key,value)=>{if(key==='sourceId'&&form.lines.length){setError('Quita los cobros vinculados antes de cambiar la cuenta de plataforma.');return;}setForm(old=>({...old,[key]:value,...(key==='type'&&value!=='cash'?{closingEnabled:false,closingTime:null}:{})}));setPreview(null);};
   const input=(key,title,{required=false,type='text',nullable=false,disabled=false}={})=><label className="field" key={key}>{title}{required?' *':''}<input type={type} name={key} value={form[key]??''} required={required} disabled={disabled} maxLength={key==='reason'?2000:300} onChange={e=>set(key,nullable&&!e.target.value?null:e.target.value)}/></label>;
   const amount=(key,title,value=form[key],onChange=value=>set(key,value),{required=true,signed=false}={})=><ActionMoneyField key={key} field={{name:key,label:title,type:'moneyOptionalMinor',required,signed,description:'Pesos COP. Punto para miles, coma para centavos; no se redondean importes.'}} value={value} onChange={onChange} onDraftInvalid={value=>setInvalid(old=>({...old,[key]:value}))}/>;
-  const select=(key,title,options,{required=true}={})=><label className="field" key={key}>{title}{required?' *':''}<select name={key} value={form[key]??''} required={required} onChange={e=>set(key,e.target.value||null)}><option value="">Selecciona una opción</option>{options.map(([id,name])=><option value={id} key={id}>{name}</option>)}</select></label>;
+  const select=(key,title,options,{required=true,disabled=false}={})=><label className="field" key={key}>{title}{required?' *':''}<select name={key} value={form[key]??''} required={required} disabled={disabled} onChange={e=>set(key,e.target.value||null)}><option value="">Selecciona una opción</option>{options.map(([id,name])=><option value={id} key={id}>{name}</option>)}</select></label>;
   const accountSelect=(key='accountId',title='Cuenta',required=true)=>select(key,title,accounts.filter(a=>(a.active||a.id===form[key])&&(action!=='cash-close'||a.type==='cash')).map(a=>[a.id,a.name]),{required});
   const personSelect=(required=true)=><>{select('personId','Persona responsable',people.filter(p=>p.active||p.id===form.personId).map(p=>[p.id,p.name]),{required})}<details><summary>Crear persona sin acceso al panel</summary>{input('newPersonName','Nombre de la persona nueva')}<button type="button" className="button subtle" disabled={busy||!form.newPersonName.trim()} onClick={()=>createResponsible('personId')}>Crear persona</button></details></>;
   const reason=()=>input('reason','Motivo',{required:true});
@@ -88,7 +90,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       return:'orderId version occurredOn reason shippingCreditMinor lines',
       'complete-costs':'orderId version reason',
       'resolve-legacy-payment':'orderId version mode accountId occurredOn method reference reason receiptAmountMinor refundAmountMinor receiptOn refundOn',
-      expense:'expenseId version category amountMinor incurredOn concept supplier personId orderId shipmentId accountId effectiveOn reference reason',
+      expense:'expenseId version category amountMinor incurredOn concept supplier personId orderId shipmentId sourceKey accountId effectiveOn reference reason reviewConfirmed',
       'pay-expense':'expenseId version amountMinor accountId effectiveOn reference',
       'expense-recovery':'expenseId version amountMinor accountId effectiveOn reason reference',
       income:'accountId effectiveOn amountMinor concept description reference',
@@ -113,6 +115,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
     if(action==='complete-costs')out.lineCosts=form.lineCosts.filter(l=>l.selected).map(({selected,...line})=>line);
     if(action==='settlement-confirm')out.lines=form.lines.filter(l=>l.grossMinor!==0||l.deductions.some(d=>d.amountMinor!==0));
     if(action==='settlement-save'||action==='settlement-confirm')out.lines=out.lines.map(l=>({collectionId:l.collectionId,grossMinor:l.grossMinor,deductions:l.deductions.filter(d=>d.amountMinor!==0).map(d=>({expenseId:d.expenseId,amountMinor:d.amountMinor}))}));
+    if(expenseOnly){delete out.accountId;delete out.effectiveOn;}
     if(action==='expense'&&!out.accountId)delete out.effectiveOn;
     if(action==='resolve-legacy-payment'&&out.mode==='opening_balance'){delete out.accountId;delete out.occurredOn;delete out.effectiveOn;}
     if(action==='account-save'&&context.account?.id)delete out.openingBalanceMinor;
@@ -138,10 +141,11 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const order=context.order;
   const net=form.lines.reduce((sum,l)=>sum+(l.grossMinor||0)-(l.deductions||[]).reduce((s,d)=>s+(d.amountMinor||0),0),0);
   return <form onSubmit={submit} aria-busy={busy} className={`business-action-form ${styles.actionForm}`}>
+    {expenseOnly&&<h3>{context.expense?.id?'Corregir':'Registrar'} flete / costo de envío</h3>}
     {error&&<div ref={errorRef} tabIndex={-1} className="error" role="alert">{error}{!loaded&&<button type="button" className="text-button" onClick={load}>Reintentar</button>}</div>}
     {!loaded&&!error&&<p role="status">Cargando datos de la acción…</p>}
     <fieldset className="editor-fieldset" disabled={busy||!loaded}>
-      {actionGuidance[action]&&<p className={styles.formGuide}>{action==='expense'&&context.expense?.id?'Corrige el gasto con un motivo. Sus pagos anteriores se conservan; un sobrepago permanece como crédito para recuperar.':actionGuidance[action]}</p>}
+      {actionGuidance[action]&&<p className={styles.formGuide}>{expenseOnly?'Registra solo el costo de la transportadora. No cambia el total del cliente ni mueve caja. Los pagos anteriores se conservan y se gestionan por separado.':action==='expense'&&context.expense?.id?'Corrige el gasto con un motivo. Sus pagos anteriores se conservan; un sobrepago permanece como crédito para recuperar.':actionGuidance[action]}</p>}
       {action==='account-save'&&<>
         <div className="product-form-grid">{input('name','Nombre de cuenta',{required:true})}
           {context.account?.id?<p className="hint">Tipo: {{cash:'Caja en efectivo',bank:'Banco',wallet:'Billetera'}[form.type]}. La apertura y su saldo inicial no se reescriben.</p>:select('type','Tipo de cuenta',[['cash','Caja en efectivo'],['bank','Banco'],['wallet','Billetera']])}
@@ -183,12 +187,13 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         {order?.legacyFinancialReview?.reason==='ambiguous_refund'&&<div className="product-form-grid">{amount('receiptAmountMinor','Cobro histórico comprobado (COP)')}{amount('refundAmountMinor','Reembolso histórico comprobado (COP)')}{input('receiptOn','Fecha del cobro histórico',{required:true,type:'date'})}{input('refundOn','Fecha del reembolso histórico',{required:true,type:'date'})}</div>}
       </>}
       {['expense','pay-expense','expense-recovery','income','advance','transfer'].includes(action)&&<>
-        {action==='expense'&&<fieldset className={styles.fieldGroup}><legend>Datos del gasto</legend><div className="product-form-grid">{select('category','Categoría',[['advertising','Publicidad'],['operating','Operación'],['other','Otro gasto'],['shipping_out','Flete de ida'],['shipping_return','Flete de retorno'],['shipping_insurance','Seguro de envío'],['platform_fee','Cargo de plataforma']])}{input('concept','Concepto',{required:true})}{input('supplier','Proveedor (opcional)')}{<>{input('incurredOn','Fecha del gasto',{type:'date',nullable:true})}{Boolean(order?.shipments?.length)&&select('shipmentId','Envío vinculado',order.shipments.map(s=>[s.id,s.tracking||'Entrega local']),{required:false})}</>}</div></fieldset>}
-        {action==='expense'&&context.expense?.id&&<>{reason()}<p>La corrección conserva pagos anteriores; un sobrepago queda como crédito para recuperar, no como ingreso ficticio.</p></>}
-        {action==='expense'&&!context.expense?.id&&<details><summary>Responsable opcional del gasto</summary>{personSelect(false)}</details>}
+        {action==='expense'&&<fieldset className={styles.fieldGroup}><legend>Datos del gasto</legend><div className="product-form-grid">{select('category','Categoría',[['advertising','Publicidad'],['operating','Operación'],['other','Otro gasto'],['shipping_out','Flete / costo de envío'],['shipping_return','Flete de retorno'],['shipping_insurance','Seguro de envío'],['platform_fee','Cargo de plataforma']],{disabled:expenseOnly||Boolean(context.expense?.id)})}{input('concept','Concepto',{required:true})}{input('supplier','Proveedor (opcional)')}{input('incurredOn','Fecha del gasto',{type:'date',nullable:true})}{Boolean(order?.shipments?.length)&&select('shipmentId','Envío vinculado',order.shipments.map(s=>[s.id,s.tracking||'Entrega local']),{required:false,disabled:expenseOnly||Boolean(context.expense?.id)})}</div></fieldset>}
+        {action==='expense'&&(context.expense?.id||expenseReview)&&<>{reason()}<p>La corrección conserva pagos anteriores; un sobrepago queda como crédito para recuperar, no como ingreso ficticio.</p></>}
+        {expenseReview&&<label className="checkbox-field"><input type="checkbox" name="reviewConfirmed" required checked={form.reviewConfirmed} onChange={event=>set('reviewConfirmed',event.target.checked)}/>Confirmo la corrección del costo importado después de revisar su soporte.</label>}
+        {action==='expense'&&!context.expense?.id&&!expenseOnly&&<details><summary>Responsable opcional del gasto</summary>{personSelect(false)}</details>}
         {action==='income'&&<>{select('concept','Concepto',[['owner_funding','Aporte del propietario'],['other_non_sale','Otro ingreso no ligado a venta']])}{input('description','Descripción',{required:true})}<p className="hint">Este ingreso aumenta caja, nunca ventas.</p></>}
         {action==='advance'&&<>{personSelect()}{input('concept','Concepto del anticipo',{required:true})}<p className="hint">El anticipo reduce deuda de sueldo al aplicarse; no vuelve a generar gasto.</p></>}
-        <fieldset className={styles.fieldGroup}><legend>{action==='expense'?'Importe y pago opcional':'Movimiento de dinero'}</legend>{action==='expense'&&<p className={styles.queryHelp}>{context.expense?.id?'La corrección mantiene el historial de pagos y sus créditos.':'Sin cuenta de pago no se mueve caja. La fecha del gasto y la fecha del pago representan hechos distintos.'}</p>}<div className="product-form-grid">{amount('amountMinor','Importe (COP)')}{input('effectiveOn',action==='expense'?'Fecha del pago, si pagas ahora':'Fecha del movimiento',{required:action!=='expense'||Boolean(form.accountId),type:'date'})}{action==='transfer'?<>{accountSelect('fromAccountId','Desde')}{accountSelect('toAccountId','Hacia')}{input('concept','Concepto',{required:true})}</>:accountSelect('accountId',action==='expense'?'Pagar ahora desde (opcional)':'Cuenta',action!=='expense')}{input('reference','Referencia')}</div></fieldset>
+        <fieldset className={styles.fieldGroup}><legend>{expenseOnly?'Costo del envío':action==='expense'?'Importe y pago opcional':'Movimiento de dinero'}</legend>{action==='expense'&&!expenseOnly&&<p className={styles.queryHelp}>{context.expense?.id?'La corrección mantiene el historial de pagos y sus créditos.':'Sin cuenta de pago no se mueve caja. La fecha del gasto y la fecha del pago representan hechos distintos.'}</p>}<div className="product-form-grid">{amount('amountMinor','Importe (COP)')}{!expenseOnly&&<>{input('effectiveOn',action==='expense'?'Fecha del pago, si pagas ahora':'Fecha del movimiento',{required:action!=='expense'||Boolean(form.accountId),type:'date'})}{action==='transfer'?<>{accountSelect('fromAccountId','Desde')}{accountSelect('toAccountId','Hacia')}{input('concept','Concepto',{required:true})}</>:accountSelect('accountId',action==='expense'?'Pagar ahora desde (opcional)':'Cuenta',action!=='expense')}{input('reference','Referencia')}</>}</div></fieldset>
         {action==='expense-recovery'&&<><p>Crédito disponible del proveedor: {display(context.expense?.creditMinor)}. Recuperarlo no reduce el gasto por segunda vez.</p>{reason()}</>}
         {action==='pay-expense'&&<p>Saldo del gasto: {display(context.expense?.outstandingMinor)}.</p>}
       </>}
@@ -226,7 +231,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       {action==='payroll-pay'&&<><p>Pago nuevo tras créditos y anticipos: {display(context.payroll?.amountToPayMinor)}. Obligaciones pendientes: {display(context.payroll?.outstandingMinor)}; anticipos disponibles: {display(context.payroll?.advanceAvailableMinor)}.</p><div className="product-form-grid">{amount('amountMinor','Pago nuevo (COP)')}{accountSelect()}{input('effectiveOn','Fecha del pago',{required:true,type:'date'})}{input('reference','Referencia')}</div></>}
       {action==='link-shipment'&&<><p>{context.order?.id?`Pedido seleccionado: AN-${context.order.number}`:'Selecciona primero un pedido conocido en la búsqueda.'}</p>{context.order?.id&&<fieldset><legend>Unidades de este envío</legend><p>Asigna solo las unidades de esta guía. El servidor comprueba las cantidades acumuladas entre envíos activos.</p>{context.order.items.map(l=><label className="field" key={l.lineId}>{l.title} · Compradas {l.quantity}<input type="number" min="0" max={l.quantity} step="1" value={form.assignments.find(a=>a.lineId===l.lineId)?.quantity??0} onChange={e=>set('assignments',form.assignments.map(a=>a.lineId===l.lineId?{...a,quantity:Number(e.target.value)}:a))}/></label>)}</fieldset>}{reason()}<p>No se vincula por similitud de nombre o teléfono.</p></>}
     </fieldset>
-    <footer className="editor-footer"><span role="status">{busy?'Guardando…':dirty?'Cambios sin guardar':''}</span>{onCancel&&<button type="button" className="button subtle" disabled={busy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={busy||!loaded||Object.values(invalid).some(Boolean)||(action==='link-shipment'&&!context.order?.id)}>{configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':titles[action]||'Guardar'}</button></footer>
+    <footer className="editor-footer"><span role="status">{busy?'Guardando…':dirty?'Cambios sin guardar':''}</span>{onCancel&&<button type="button" className="button subtle" disabled={busy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={busy||!loaded||Object.values(invalid).some(Boolean)||(action==='link-shipment'&&!context.order?.id)}>{expenseOnly?'Guardar costo de envío':configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':titles[action]||'Guardar'}</button></footer>
   </form>;
 }
 function candidateLabel(row){return [row.orderNumber?`AN-${row.orderNumber}`:'Sin pedido',row.tracking||row.concept||row.category,row.date||'Fecha desconocida'].filter(Boolean).join(' · ');}
