@@ -5,7 +5,7 @@ import { saveResource } from '../lib/business/settings.mjs';
 import { runCommand } from '../lib/business/commands.mjs';
 import { bogotaDate, addDays } from '../lib/business/dates.mjs';
 import { MAX_MONEY_MINOR } from '../lib/business/money.mjs';
-import { saveAccount, accountBalance, postCashEntryTx, reverseLinkedCashTx, recordIncome, recordAdvance, transferMoney, closeCash, reopenCash, reverseCashEntry } from '../lib/business/cash.mjs';
+import { saveAccount, accountBalance, postCashEntryTx, reverseLinkedCashTx, recordIncome, recordAdvance, transferMoney, getCashClosingPreview, closeCash, reopenCash, reverseCashEntry } from '../lib/business/cash.mjs';
 
 async function fixture(fn) {
   const store = await openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' });
@@ -109,7 +109,11 @@ test('cierres comparan sin ajustar caja; reapertura auditada conserva revisión 
   const bank = await account();
   const closingOn = addDays(openingOn, 2);
   await income(cash.id, 100, closingOn);
-  const closed = await closeCash(store, { accountId: cash.id, closingOn, countedMinor: 1090, requestId: request() }, actor);
+  const preview = await getCashClosingPreview(store, { accountId: cash.id, closingOn });
+  const closeInput = { accountId: cash.id, closingOn, countedMinor: 1090, requestId: request() };
+  const closed = await closeCash(store, closeInput, actor);
+  assert.equal(closed.expectedMinor, preview.expectedMinor);
+  assert.deepEqual(await closeCash(store, closeInput, actor), closed);
   assert.equal(closed.expectedMinor, 1100);
   assert.equal(closed.countedMinor, 1090);
   assert.equal(closed.differenceMinor, -10);
@@ -128,13 +132,41 @@ test('cierres comparan sin ajustar caja; reapertura auditada conserva revisión 
   assert.equal(reopened.revision, 1);
   assert.equal(reopened.version, 2);
   await income(cash.id, 20, closingOn);
+  const revisedPreview = await getCashClosingPreview(store, { accountId: cash.id, closingOn });
   const closedAgain = await closeCash(store, { accountId: cash.id, closingOn, countedMinor: 1120, requestId: request() }, actor);
   assert.equal(closedAgain.revision, 2);
   assert.equal(closedAgain.expectedMinor, 1120);
+  assert.equal(closedAgain.expectedMinor, revisedPreview.expectedMinor);
+  assert.equal(closedAgain.differenceMinor, 0);
+  const history = await store.db.all(`SELECT id,state,revision,expected_minor,counted_minor,difference_minor FROM ${store.t('cash_closings')} WHERE account_id=? ORDER BY revision`, [cash.id]);
+  assert.deepEqual(history.map(row => ({ ...row })), [
+    { id: closed.id, state: 'reopened', revision: 1, expected_minor: 1100, counted_minor: 1090, difference_minor: -10 },
+    { id: closedAgain.id, state: 'closed', revision: 2, expected_minor: 1120, counted_minor: 1120, difference_minor: 0 }
+  ]);
   assert.equal(await accountBalance(store, cash.id), 1130);
   assert.equal(await count(store, 'cash_closings'), 2);
   const audits = await store.db.all(`SELECT data FROM ${store.t('business_audit')} WHERE entity_type='cash_closing' AND entity_id=?`, [closed.id]);
   assert.ok(audits.some(row => JSON.parse(row.data).previous?.state === 'closed' && JSON.parse(row.data).next.state === 'reopened'));
+}));
+
+test('guardar cierre recalcula el esperado tras un ingreso y descarta saldos enviados por el cliente', () => fixture(async ({ store, account, income, request, actor, today }) => {
+  const closingOn = addDays(today, -1);
+  const cash = await account({ type: 'cash', openingBalanceMinor: 10000000 });
+  await income(cash.id, 1000000, closingOn);
+  const preview = await getCashClosingPreview(store, { accountId: cash.id, closingOn });
+  assert.equal(preview.expectedMinor, 11000000);
+  await income(cash.id, 2000000, closingOn);
+  const entriesBefore = await count(store, 'cash_entries');
+  const closed = await closeCash(store, {
+    accountId: cash.id, closingOn, countedMinor: 12900000,
+    expectedMinor: preview.expectedMinor, differenceMinor: 0, requestId: request()
+  }, actor);
+  assert.equal(closed.expectedMinor, 13000000);
+  assert.equal(closed.countedMinor, 12900000);
+  assert.equal(closed.differenceMinor, -100000);
+  assert.equal(await accountBalance(store, cash.id), 13000000);
+  assert.equal(await count(store, 'cash_entries'), entriesBefore);
+  assert.equal(await count(store, 'cash_closings'), 1);
 }));
 
 test('cierres posteriores y archivo protegen transferencias/reversiones sin dejar una sola cara', () => fixture(async ({ store, account, request, actor, openingOn, today, income }) => {
