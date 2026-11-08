@@ -106,7 +106,7 @@ test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privada
 
 test('descargar informe usa bytes privados y una sesión vencida no descarga JSON como Excel',async({page,context})=>{
   await login(page);await navigate(page,'Informes');
-  const exportButton=page.getByRole('button',{name:'Exportar XLSX',exact:true});
+  const exportButton=page.getByRole('button',{name:'Descargar Excel',exact:true});
   await expect(exportButton).toBeEnabled();
   const responsePromise=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/admin/reports/export');
   const downloadPromise=page.waitForEvent('download');

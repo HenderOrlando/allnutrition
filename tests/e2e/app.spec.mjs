@@ -920,3 +920,120 @@ test('caja guiada: filtros efectivos, chips, historial y guía de teclado sin es
  await expect(page.getByRole('combobox',{name:'Persona',exact:true})).toBeVisible();
  await selectWorkspace(page,'Vistas de caja','Resumen y cuentas');await expect(guide).toBeVisible();
 });
+
+test('informes guiados: filtros, modo e historial conservan la consulta y la guía no escribe',async({page},info)=>{
+ test.setTimeout(120000);
+ const f=await guidedCashFixture(page,info),writes=[],dialogs=[];
+ const watch=request=>{if(new URL(request.url()).pathname.startsWith('/api/admin/')&&!['GET','HEAD'].includes(request.method()))writes.push(request.url());};
+ const dismiss=async dialog=>{dialogs.push(dialog.message());await dialog.dismiss();};
+ page.on('request',watch);page.on('dialog',dismiss);
+ try{
+  await navigate(page,'Informes');await selectWorkspace(page,'Áreas del informe','Caja');
+  await page.getByRole('combobox',{name:'Frecuencia',exact:true}).selectOption('day');
+  await page.getByLabel('Fecha de referencia',{exact:true}).fill(f.today);
+  await openDisclosure(page,/^Filtrar resultados(?: \(\d+ activos\))?$/);
+  await page.getByRole('combobox',{name:'Cuenta de caja o banco',exact:true}).selectOption(f.account.id);
+  const chip=page.getByRole('button',{name:`Quitar filtro: Cuenta de caja o banco: ${f.account.name}`,exact:true});
+  const available=page.locator('article').filter({has:page.getByRole('heading',{name:'Disponible al corte',exact:true})});
+  await expect(chip).toBeVisible();await expect(available.getByText(money(100000),{exact:true})).toBeVisible();
+  await expect(page).toHaveURL(url=>url.searchParams.get('section')==='reports'&&url.searchParams.get('tab')==='cash'&&url.searchParams.get('period')==='day'&&url.searchParams.get('anchor')===f.today&&url.searchParams.get('account')===f.account.id);
+  const filteredURL=page.url(),guide=page.locator('summary').filter({hasText:/^Cómo usar Informes$/});
+  await expect(guide.locator('..')).not.toHaveAttribute('open','');
+  await guide.focus();await page.keyboard.press('Enter');await expect(guide.locator('..')).toHaveAttribute('open','');
+  await page.keyboard.press('Space');await expect(guide.locator('..')).not.toHaveAttribute('open','');
+  await expect(guide).toBeFocused();await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(dialogs).toEqual([]);expect(writes).toEqual([]);
+  await page.reload();await expect(page).toHaveURL(filteredURL);await expect(chip).toBeVisible();
+  await expect(available.getByText(money(100000),{exact:true})).toBeVisible();
+  const withoutAccount=new URL(filteredURL);withoutAccount.searchParams.delete('account');
+  let releaseOptions,optionsStarted,optionsDelivered;
+  const optionsGate=new Promise(resolve=>{releaseOptions=resolve;}),optionsReading=new Promise(resolve=>{optionsStarted=resolve;}),optionsDone=new Promise(resolve=>{optionsDelivered=resolve;});
+  const holdOptions=async route=>{const response=await route.fetch();optionsStarted();await optionsGate;await route.fulfill({response});optionsDelivered();};
+  await page.route('**/api/admin/business/accounts',holdOptions);
+  try{
+   await page.reload({waitUntil:'domcontentloaded'});await optionsReading;
+   await page.getByRole('button',{name:/^Quitar filtro: Cuenta de caja o banco:/}).click();
+   await expect(page).toHaveURL(withoutAccount.href);await expect(chip).toHaveCount(0);
+   await expect(page.locator('summary').filter({hasText:/^Filtrar resultados(?: \(\d+ activos\))?$/})).toBeFocused();
+   await expect(page.getByRole('region',{name:'Consulta del informe',exact:true}).getByRole('status')).toHaveCount(0);
+  }finally{releaseOptions();await optionsDone;await page.unroute('**/api/admin/business/accounts',holdOptions);}
+  await page.goBack();await expect(page).toHaveURL(filteredURL);await expect(chip).toBeVisible();
+  await expect(available.getByText(money(100000),{exact:true})).toBeVisible();
+  const saved=page.getByRole('button',{name:'Informes guardados',exact:true}),live=page.getByRole('button',{name:'Datos actuales',exact:true});
+  await saved.click();await expect(saved).toHaveAttribute('aria-pressed','true');
+  await expect(page).toHaveURL(url=>url.searchParams.get('mode')==='saved'&&url.searchParams.get('tab')==='cash'&&url.searchParams.get('period')==='day'&&url.searchParams.get('anchor')===f.today&&url.searchParams.get('account')===f.account.id);
+  const savedURL=page.url();
+  await page.reload();await expect(page).toHaveURL(savedURL);await expect(saved).toHaveAttribute('aria-pressed','true');await expect(chip).toBeVisible();
+  await expect(page.getByRole('combobox',{name:'Frecuencia',exact:true})).toHaveValue('day');
+  await expect(page.getByLabel('Fecha de referencia',{exact:true})).toHaveValue(f.today);
+  await expect(page.getByRole('button',{name:'Guardar copia',exact:true})).toHaveCount(0);
+  await page.goBack();await expect(page).toHaveURL(filteredURL);await expect(live).toHaveAttribute('aria-pressed','true');
+  await expect(chip).toBeVisible();await expect(available.getByText(money(100000),{exact:true})).toBeVisible();
+  await page.goForward();await expect(page).toHaveURL(savedURL);await expect(saved).toHaveAttribute('aria-pressed','true');await expect(chip).toBeVisible();
+  expect(dialogs).toEqual([]);expect(writes).toEqual([]);
+ }finally{page.off('request',watch);page.off('dialog',dismiss);}
+});
+
+test('informes guiados: un dato desconocido no es cero y los registros devuelven el foco sin modificar el negocio',async({page},info)=>{
+ test.setTimeout(120000);
+ const f=await guidedCashFixture(page,info),products=await f.get('/api/admin/products'),product=products.records.find(row=>row.slug==='creatina-vital-force-70-servicios');
+ expect(product).toBeTruthy();
+ const platform=await f.post('/api/admin/business/platforms',{name:`Informes ${f.marker}`});
+ const source=(await f.get('/api/admin/business/sources')).records.find(row=>row.platformId===platform.id);
+ expect(source).toBeTruthy();
+ const order=await f.post('/api/admin/orders',{placedOn:f.today,customerName:`Informes ${f.marker}`,phone:'3001234567',city:'Bogotá',department:'Cundinamarca',address:'Dirección sintética',status:'preparing',deliveryMethod:'carrier',shippingChargeMinor:0,items:[{lineId:crypto.randomUUID(),kind:'products',itemId:product.id,quantity:1,unitPriceMinor:Math.round(product.price*100),discountMinor:0}]});
+ let shipment=await f.post('/api/admin/business/shipments',{orderId:order.id,platformId:platform.id,sourceId:source.id,externalId:`${f.marker}-informe`,carrier:'Transportadora sintética',tracking:`${f.marker}-guia`});
+ for(const status of ['collected','delivered'])shipment=await f.post(`/api/admin/business/shipments/${shipment.id}/events`,{version:shipment.version,status,occurredOn:f.today,externalKey:`${f.marker}-informe-${status}`});
+ const orderBefore=await f.get(`/api/admin/orders/${order.id}`);
+ expect(orderBefore.collections).toEqual([]);
+ expect(orderBefore.shipments.find(row=>row.id===shipment.id).estimatedDeliveryOn||null).toBeNull();
+ const cashState=async()=>({account:(await f.get('/api/admin/finance/overview')).accounts.find(row=>row.id===f.account.id),movements:await f.get(`/api/admin/finance/movements?account=${encodeURIComponent(f.account.id)}`)});
+ const cashBefore=await cashState(),writes=[];
+ const watch=request=>{if(new URL(request.url()).pathname.startsWith('/api/admin/')&&!['GET','HEAD'].includes(request.method()))writes.push(request.url());};
+ page.on('request',watch);
+ try{
+  await navigate(page,'Informes');await selectWorkspace(page,'Áreas del informe','Envíos');
+  await page.getByRole('combobox',{name:'Frecuencia',exact:true}).selectOption('day');
+  await page.getByLabel('Fecha de referencia',{exact:true}).fill(f.today);
+  await openDisclosure(page,/^Filtrar resultados(?: \(\d+ activos\))?$/);
+  const reading=page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/admin/reports'&&url.searchParams.get('platform')===platform.id&&url.searchParams.get('period')==='day'&&url.searchParams.get('anchor')===f.today&&!url.searchParams.has('metric');});
+  await page.getByRole('combobox',{name:'Plataforma',exact:true}).selectOption(platform.id);
+  const response=await reading;expect(response.ok()).toBe(true);const report=await response.json();
+  expect(report.metrics.onTimeDeliveries).toMatchObject({value:null,complete:false,eligibleCount:1,knownCount:0,excludedCount:1,denominator:0,noComparisonBase:true});
+  expect(report.metrics.onTimeDeliveries.exclusionReasons).toContainEqual(expect.objectContaining({code:'estimated_delivery_unknown',count:1}));
+  expect(report.metrics.shipmentReturnRate).toMatchObject({value:0,complete:true,eligibleCount:1,knownCount:1,excludedCount:0,denominator:1});
+  const onTime=page.locator('article').filter({has:page.getByRole('heading',{name:'Entregas a tiempo',exact:true})});
+  const returns=page.locator('article').filter({has:page.getByRole('heading',{name:'Devoluciones de envíos resueltos',exact:true})});
+  await expect(onTime.getByText('Sin dato',{exact:true})).toBeVisible();
+  await expect(onTime.getByText('Sin base de comparación',{exact:true})).toBeVisible();
+  await expect(onTime).toContainText('0 de 1 registros con datos · 1 excluidos');
+  await expect(returns.getByText('0 %',{exact:true})).toBeVisible();await expect(returns).not.toContainText('Por completar');
+  await expect(returns).toContainText('1 de 1 registros con datos · 0 excluidos');
+  await openDisclosure(page,/^Datos por completar \(\d+ conceptos\)$/);
+  const pending=page.locator('[data-report-detail-trigger^="pending:estimated_delivery_unknown:onTimeDeliveries:"]');
+  await expect(pending).toHaveCount(1);
+  const queryURL=page.url(),detail=page.getByRole('region',{name:'Registros exactos de la métrica',exact:true});
+  const assertMissingDetail=async()=>{
+   await expect(page).toHaveURL(url=>url.searchParams.get('record')==='onTimeDeliveries'&&url.searchParams.get('issue')==='missing'&&url.searchParams.get('platform')===platform.id&&url.searchParams.get('period')==='day'&&url.searchParams.get('anchor')===f.today);
+   const row=detail.getByRole('row').filter({hasText:shipment.tracking});
+   await expect(row).toHaveCount(1);await expect(row).toContainText('Excluido:');
+   await expect(detail).toContainText('Fecha estimada de entrega pendiente');
+  };
+  await pending.click();await assertMissingDetail();
+  await detail.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+  await expect(page).toHaveURL(queryURL);await expect(pending).toBeFocused();
+  await pending.click();await assertMissingDetail();
+  await detail.getByRole('heading').focus();await page.keyboard.press('Escape');
+  await expect(page).toHaveURL(queryURL);await expect(pending).toBeFocused();
+  const records=onTime.getByRole('button',{name:'Ver registros de Entregas a tiempo',exact:true});
+  await records.click();
+  await expect(page).toHaveURL(url=>url.searchParams.get('record')==='onTimeDeliveries'&&!url.searchParams.has('issue')&&url.searchParams.get('platform')===platform.id);
+  await expect(detail.getByRole('row').filter({hasText:shipment.tracking})).toContainText('Excluido:');
+  await expect(detail).toContainText('Fecha estimada de entrega pendiente');
+  await detail.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+  await expect(page).toHaveURL(queryURL);await expect(records).toBeFocused();
+  expect(await f.get(`/api/admin/orders/${order.id}`)).toEqual(orderBefore);
+  expect(await cashState()).toEqual(cashBefore);
+  expect(writes).toEqual([]);
+ }finally{page.off('request',watch);}
+});

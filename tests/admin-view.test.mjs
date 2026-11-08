@@ -113,6 +113,31 @@ test('report periods, filters and exact drilldowns survive URL and login return 
  }
 });
 
+test('saved reports preserve their exact query and snapshot through reload and login',()=>{
+ const view=readAdminView({section:'reports',mode:'saved',tab:'cash',period:'day',anchor:'2026-11-01',seller:'seller-1',product:'product-1',platform:'platform-1',carrier:'Empresa + A',status:'delivered',account:'bank-1',page:3,record:'snapshot:historical/1',source:'unsupported'});
+ const href=adminHref(view),params=new URL(href,'https://example.test').searchParams;
+ assert.equal(params.get('mode'),'saved');
+ assert.equal(params.get('page'),'3');assert.equal(params.get('record'),'snapshot:historical/1');
+ for(const key of ['period','anchor','seller','product','platform','carrier','status','account'])assert.equal(params.get(key),view[key]);
+ assert.equal(params.has('source'),false);
+ assert.deepEqual(readAdminView(params),view);
+ assert.equal(adminReturnTo(`${href}#ignored`),href);
+});
+
+test('report and advertising modes never bleed between sections',()=>{
+ for(const mode of ['live','organic','paid','SAVED','invalid',undefined]) {
+  assert.equal(Object.hasOwn(readAdminView({section:'reports',mode}),'mode'),false);
+  assert.equal(new URL(adminHref({section:'reports',mode}),'https://example.test').searchParams.has('mode'),false);
+ }
+ for(const mode of ['organic','paid']) {
+  const view=readAdminView({section:'advertising',mode});
+  assert.equal(view.mode,mode);
+  assert.deepEqual(readAdminView(new URL(adminHref(view),'https://example.test').searchParams),view);
+ }
+ assert.equal(readAdminView({section:'advertising',mode:'saved'}).mode,undefined);
+ for(const section of ['home','orders','cash','business','products'])assert.equal(readAdminView({section,mode:'saved'}).mode,undefined);
+});
+
 test('report query rejects invalid calendar dates, unknown states and oversized identifiers',()=>{
  const view=readAdminView({section:'reports',tab:'unknown',period:'decade',anchor:'2026-02-30',status:'made_up',seller:'x'.repeat(101),record:'bad\nrecord',carrier:'x'.repeat(151),page:'100001'});
  for(const key of ['tab','period','anchor','seller','record','carrier'])assert.equal(Object.hasOwn(view,key),false,key);

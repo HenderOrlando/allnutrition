@@ -145,6 +145,82 @@
   margin: 0;
 }
 
+.reportsWorkspace .reportHelp {
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-surface);
+}
+
+.reportsWorkspace .reportHelp > summary {
+  min-height: 44px;
+  cursor: pointer;
+  align-content: center;
+  font-weight: 600;
+}
+
+.reportsWorkspace .queryPanel {
+  display: grid;
+  gap: 16px;
+}
+
+.reportsWorkspace .queryPanel > h2,
+.reportsWorkspace .contextHeading p {
+  margin: 0;
+}
+
+.reportsWorkspace .contextHeading {
+  display: grid;
+  gap: 8px;
+}
+
+.reportsWorkspace :global(.admin-heading) > div,
+.reportsWorkspace :global(.report-mode),
+.reportsWorkspace .operationBar > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.reportsWorkspace :is(p, h2, h3, button, summary, td, dd) {
+  overflow-wrap: anywhere;
+}
+
+.reportsWorkspace :global(.report-mode) > span {
+  flex-basis: 100%;
+  font-weight: 600;
+}
+
+.reportsWorkspace :is(button, select, input, summary) {
+  min-height: 44px;
+}
+
+.reportsWorkspace :is(button, summary, select, input):focus-visible {
+  outline: 3px solid var(--admin-accent);
+  outline-offset: 3px;
+}
+
+.reportsWorkspace :global(.active-filters) {
+  padding: 8px 0;
+  background: transparent;
+}
+
+@media (max-width: 767px) {
+  .reportsWorkspace .operationBar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .reportsWorkspace .queryPanel {
+    padding: 16px;
+  }
+
+  .reportsWorkspace :global(.report-mode) > button {
+    flex: 1 1 100%;
+  }
+}
+
 @media (max-width: 767px) {
   .cashWorkspace.cashWorkspace {
     gap: 8px;
