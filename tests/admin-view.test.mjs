@@ -297,3 +297,60 @@ test('expense category links retain advertising and operating filters without le
  }
  for(const view of [{section:'cash',tab:'expenses',category:'unknown'},{section:'cash',tab:'movements',category:'advertising'},{section:'orders',category:'operating'}])assert.equal(readAdminView(view).category,undefined);
 });
+
+test('advertising results preserve their exact query through URLs and login returns',()=>{
+ const input={section:'advertising',tab:'results',record:'12345678-1234-4234-8234-123456789abc',from:'2026-11-01',to:'2026-11-07',integrationMethod:'browser',scope:'paid',dimension:'daily',page:2};
+ const view=readAdminView(input);
+ for(const [key,value] of Object.entries(input))assert.equal(view[key],value);
+ const href=adminHref(view),params=new URL(href,'https://example.test').searchParams;
+ assert.deepEqual(readAdminView(params),view);
+ const returned=adminReturnTo(`${href}#ignored`);
+ assert.deepEqual(readAdminView(new URL(returned,'https://example.test').searchParams),view);
+ assert.equal(returned,href);
+});
+
+test('advertising results accept only supported filters and use the first repeated value',()=>{
+ const choices={integrationMethod:['api','browser'],scope:['paid','organic','mixed'],dimension:['aggregate','daily','placement','age_gender','country']};
+ for(const [key,values] of Object.entries(choices)) {
+  for(const value of values) {
+   const view=readAdminView({section:'advertising',tab:'results',[key]:value});
+   assert.equal(view[key],value);
+   assert.deepEqual(readAdminView(new URL(adminHref(view),'https://example.test').searchParams),view);
+  }
+  for(const value of [undefined,'','invalid',values[0].toUpperCase(),` ${values[0]} `,17,{}]) {
+   const input={section:'advertising',tab:'results',[key]:value};
+   assert.equal(Object.hasOwn(readAdminView(input),key),false);
+   assert.equal(new URL(adminHref(input),'https://example.test').searchParams.has(key),false);
+  }
+  for(const firstValue of [values[0],'','invalid']) {
+   const expected=values.includes(firstValue)?firstValue:undefined;
+   assert.equal(readAdminView({section:'advertising',tab:'results',[key]:[firstValue,values[1]]})[key],expected);
+   const params=new URLSearchParams({section:'advertising',tab:'results'});
+   params.append(key,firstValue);params.append(key,values[1]);
+   assert.equal(readAdminView(params)[key],expected);
+   const returned=adminReturnTo(`/admin?${params}`);
+   assert.equal(readAdminView(new URL(returned,'https://example.test').searchParams)[key],expected);
+  }
+ }
+});
+
+test('results-only advertising filters cannot leak into other tabs or sections',()=>{
+ const filters={integrationMethod:'browser',scope:'paid',dimension:'daily'};
+ const contexts=[{section:'advertising'},...['campaigns','assets','connections'].map(tab=>({section:'advertising',tab})),...adminSections.filter(({id})=>id!=='advertising').map(({id})=>({section:id})),...['overview','sales','cash'].map(tab=>({section:'reports',tab})),...['overview','movements','expenses','payroll','settlements'].map(tab=>({section:'cash',tab}))];
+ for(const context of contexts) {
+  const input={...context,...filters},view=readAdminView(input),href=adminHref(input),params=new URL(href,'https://example.test').searchParams;
+  for(const key of Object.keys(filters)) {
+   assert.equal(Object.hasOwn(view,key),false);
+   assert.equal(params.has(key),false);
+  }
+  assert.deepEqual(readAdminView(params),view);
+  assert.equal(adminReturnTo(href),href);
+ }
+ for(const mode of ['organic','paid']) {
+  const view=readAdminView({section:'advertising',tab:'results',mode,...filters});
+  assert.equal(view.mode,mode);
+  assert.deepEqual(readAdminView(new URL(adminHref(view),'https://example.test').searchParams),view);
+ }
+ assert.equal(readAdminView({section:'advertising',tab:'results',mode:'saved',...filters}).mode,undefined);
+ assert.equal(readAdminView({section:'reports',mode:'saved',...filters}).mode,'saved');
+});

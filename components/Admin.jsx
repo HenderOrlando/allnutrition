@@ -192,7 +192,7 @@ export default function Admin({csrf,user}) {
  function setQuery(value){setQueryInput(value);cancelSearch();const generation=searchGeneration.current;searchTimer.current=setTimeout(()=>{if(searchGeneration.current===generation)acceptView({...accepted.current,q:value,page:1},{replace:true,check:false});},200);}
  function changeView(patch){
   if(Object.keys(patch).length===1&&Object.hasOwn(patch,'q')){setQuery(patch.q);return;}
-  const resetsPage=query!==accepted.current.q||['q','status','paymentStatus','period','anchor','issue','tab','seller','platform','source','carrier','account','product','productType','category','mode','network','objective','from','to'].some(key=>Object.hasOwn(patch,key));
+  const resetsPage=query!==accepted.current.q||['q','status','paymentStatus','period','anchor','issue','tab','seller','platform','source','carrier','account','product','productType','category','mode','network','objective','from','to','integrationMethod','scope','dimension'].some(key=>Object.hasOwn(patch,key));
   acceptView({...accepted.current,q:query,...patch,...(resetsPage?{page:1}:{})});
  }
  async function openEditor(kind,record){
