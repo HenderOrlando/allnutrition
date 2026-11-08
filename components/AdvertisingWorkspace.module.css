@@ -1,5 +1,19 @@
-.workspace, .workspace * { box-sizing: border-box; }
+.workspace, .workspace *, .dialog, .dialog * { box-sizing: border-box; }
 .workspace { min-width: 0; max-width: 100%; display: grid; gap: 20px; }
+.workspace :is(h1, h2, h3, h4, h5, p, li, dt, dd, label, button, summary), .dialog :is(h2, p, li, dt, dd, label, button, summary) { min-width: 0; overflow-wrap: anywhere; }
+.workspace button, .dialog button { min-height: 44px; white-space: normal; }
+.workspace summary, .dialog summary { min-height: 44px; padding-block: 10px; cursor: pointer; font-weight: 600; }
+.workspace :is(input:not([type='checkbox']):not([type='radio']), select), .dialog :is(input:not([type='checkbox']):not([type='radio']), select) { min-height: 44px; width: 100%; }
+.workspace :is(button, summary, input, select, textarea, [tabindex]):focus-visible, .dialog :is(button, summary, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.guide, .queryPanel { min-width: 0; padding: 20px; border: 1px solid var(--admin-line); border-radius: 16px; background: var(--admin-surface); }
+.queryPanel { display: grid; gap: 16px; }
+.guide > summary { padding-block: 4px; align-content: center; }
+.taskIntro { margin: 0; line-height: 1.6; max-width: 80ch; }
+.filterDetails, .technicalDetails { min-width: 0; max-width: 100%; border: 1px solid var(--admin-line); border-radius: 12px; padding-inline: 14px; overflow-wrap: anywhere; }
+.filterDetails > div, .technicalDetails > :not(summary) { margin-block: 12px; }
+.stepIntro { padding: 16px; border-inline-start: 4px solid var(--admin-line); }
+.stepIntro h3, .stepIntro p { margin: 0; }
+.stepIntro p { margin-top: 8px; }
 .heading, .toolbar, .actions, .dialogHeader, .pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .heading, .dialogHeader { justify-content: space-between; }
 .heading h1, .heading h2, .dialogHeader h2 { margin: 0; }
@@ -23,7 +37,7 @@ small.help { display: block; margin-top: 4px; font-weight: 400; overflow-wrap: a
 .fullWidth { grid-column: 1 / -1; }
 .workspace input:not([type='checkbox']):not([type='radio']), .workspace select, .workspace textarea, .dialog input:not([type='checkbox']):not([type='radio']), .dialog select, .dialog textarea { max-width: 100%; min-width: 0; }
 .workspace textarea, .dialog textarea { resize: vertical; }
-.checkRow { display: flex; align-items: start; gap: 10px; line-height: 1.5; }
+.checkRow { display: flex; align-items: start; gap: 10px; min-height: 44px; line-height: 1.5; }
 .checkRow input { flex: 0 0 auto; margin-top: 5px; }
 .choiceList { display: grid; gap: 12px; padding: 0; list-style: none; }
 .choiceList > label, .choiceList > li, .choiceList > button { border: 1px solid var(--admin-control-border); border-radius: 12px; padding: 12px; min-width: 0; text-align: start; }
@@ -54,11 +68,15 @@ small.help { display: block; margin-top: 4px; font-weight: 400; overflow-wrap: a
 .visuallyHidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 600px) {
   .workspace { gap: 16px; }
-  .card, .panel, .detail, .dialogHeader, .dialogBody { padding: 16px; }
+  .card, .panel, .detail, .dialogHeader, .dialogBody, .guide, .queryPanel { padding: 16px; }
   .fieldGrid, .filterBar { grid-template-columns: minmax(0, 1fr); }
   .steps { display: grid; grid-template-columns: minmax(0, 1fr); }
   .stepButton { width: 100%; }
-  .actions > button { flex: 1 1 160px; }
+  .actions { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; width: 100%; }
+  .actions > button { width: 100%; }
+  .pagination { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
+  .heading, .dialogHeader { align-items: stretch; }
+  .heading > *, .dialogHeader > * { width: 100%; }
   .table th, .table td { padding: 10px; }
   .toolbar { align-items: stretch; }
   .toolbar > label, .toolbar > input, .toolbar > select { flex: 1 1 100%; }

@@ -29,12 +29,12 @@ export const adminTaskGroups = [
     { id: 'payroll-report', label: 'Informe de sueldos', description: 'Devengos, pagos y saldos por persona.', view: { section: 'reports', tab: 'payroll' } },
     { id: 'cash-report', label: 'Informe de caja', description: 'Saldos y movimientos al corte del informe.', view: { section: 'reports', tab: 'cash' } },
   ] },
-  { id: 'advertising', label: 'Publicidad', icon: 'chart', description: 'Prepara publicaciones propias, autoriza pauta y consulta su evidencia.', tasks: [
-    { id: 'prepare-publication', label: 'Preparar publicación', description: 'Guardar un borrador con pieza, cuenta y objetivo, sin publicar ni invertir.', view: { section: 'advertising', tab: 'campaigns', record: 'new' } },
-    { id: 'advertising-campaigns', label: 'Revisar publicaciones y pauta', description: 'Consultar estados por destino, programación y operaciones pendientes.', view: { section: 'advertising', tab: 'campaigns' } },
-    { id: 'advertising-assets', label: 'Subir piezas', description: 'Cargar imágenes y videos propios en el almacenamiento privado.', view: { section: 'advertising', tab: 'assets' } },
-    { id: 'advertising-results', label: 'Analizar resultados', description: 'Contrastar estimaciones, métricas y vínculos comerciales declarados.', view: { section: 'advertising', tab: 'results' } },
-    { id: 'advertising-connections', label: 'Conectar redes', description: 'Elegir API oficial o navegador y comprobar sus requisitos independientes.', view: { section: 'advertising', tab: 'connections' } },
+  { id: 'advertising', label: 'Publicidad', icon: 'chart', description: 'Prepara publicaciones, organiza imágenes y videos y revisa sus resultados.', tasks: [
+    { id: 'prepare-publication', label: 'Crear publicación', description: 'Basta un nombre para guardar un borrador y retomarlo; guardar no publica ni autoriza gasto.', view: { section: 'advertising', tab: 'campaigns', record: 'new' } },
+    { id: 'advertising-campaigns', label: 'Revisar publicaciones', description: 'Buscar borradores y revisar estados por red, fechas y solicitudes pendientes.', view: { section: 'advertising', tab: 'campaigns' } },
+    { id: 'advertising-assets', label: 'Subir imágenes y videos', description: 'Cargar archivos propios, esperar su preparación y revisar la vista previa privada.', view: { section: 'advertising', tab: 'assets' } },
+    { id: 'advertising-results', label: 'Revisar resultados', description: 'Revisar lo informado por cada red, datos faltantes y registros del negocio por separado.', view: { section: 'advertising', tab: 'results' } },
+    { id: 'advertising-connections', label: 'Conectar cuentas de Meta', description: 'Elegir la conexión oficial de Meta (API) o el acceso asistido por navegador y comprobar sus permisos.', view: { section: 'advertising', tab: 'connections' } },
   ] },
   { id: 'business', label: 'Negocio y acceso', icon: 'settings', description: 'Personas, plataformas y reglas de operación.', tasks: [
     { id: 'setup', label: 'Guía de inicio', action: 'Abrir guía de inicio', description: 'Preparar caja, primer producto y pedidos; práctica opcional sin cobro real.', view: { section: 'business', tab: 'setup' } },
