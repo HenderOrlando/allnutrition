@@ -1,5 +1,11 @@
 # Cambios — administración v3 y antecedentes
 
+## Informes y Publicidad guiados · publicados el 8 de noviembre de 2026
+
+- Publicados como `allnutrition:release-f0474580c564`, con la misma imagen Linux/amd64 aceptada en web y scheduler, sin rebuild ni migración. Aceptación nativa nueva: 1268 contratos sin fallos/omisiones, 64 E2E aprobadas y las 17 compuertas oficiales.
+- Recuperación real con ambos runtimes y humo compilado en clon: tablas/esquema, exportación completa y medios conservados. Respaldo final con escritores detenidos y copia fuera de la VM verificada antes de promover.
+- En el dominio real se comprobaron guía de teclado, consulta persistente de Resultados, modo guardado de Informes, escritorio/móvil, sesión anterior y logout. Se conservaron los 300 pedidos, sus fletes y los cuatro medios; no se guardaron operaciones comerciales, reimportaron datos ni habilitó Meta. Evidencia y recuperación en [VERIFICACION.md](VERIFICACION.md) y [DESPLIEGUE.md](DESPLIEGUE.md).
+
 ## Publicidad sencilla y guiada
 
 - Áreas y tareas con nombres consistentes: Publicaciones, Imágenes y videos, Resultados y Cuentas conectadas. Guía opcional contextual, ejemplos ficticios y glosario; leerla no guarda, publica ni autoriza inversión.
