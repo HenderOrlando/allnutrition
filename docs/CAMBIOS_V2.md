@@ -1,5 +1,23 @@
 # Cambios — administración v3 y antecedentes
 
+## Publicidad sencilla y guiada
+
+- Áreas y tareas con nombres consistentes: Publicaciones, Imágenes y videos, Resultados y Cuentas conectadas. Guía opcional contextual, ejemplos ficticios y glosario; leerla no guarda, publica ni autoriza inversión.
+- Crear un borrador requiere solo un nombre. Los cinco pasos distinguen publicación sin inversión de anuncio pagado, explican objetivos, archivos, ubicaciones, fechas y presupuesto total. Continuar no guarda; aprobar orgánico autoriza publicar, mientras preparar pauta no activa gasto.
+- Búsqueda, filtros principales y chips visibles; criterios adicionales desplegables. Los filtros de Resultados sobreviven a URL, recarga, historial y retorno de login sin contaminar otras áreas. Las consultas anteriores quedan identificadas e inactivas mientras se actualiza la selección.
+- Biblioteca buscable por nombre y estado, con etiquetas propias de archivos, procesamiento real y vista previa privada. Archivar conserva bytes e historia, no libera espacio ni cambia contenido publicado.
+- Conexión oficial y acceso asistido con requisitos independientes; capacidades, bloqueos y pausas pendientes visibles. Evidencia técnica disponible bajo demanda y cantidades de eliminación local traducidas sin cambiar sus confirmaciones.
+- Resultados antes que evidencia técnica: estado por red, cifras con fuente/cobertura, pedidos y gastos vinculados, ideas para otro borrador y configuración aprobada de solo lectura. Cero, ausencia, captura parcial, presupuesto autorizado, gasto Meta, gastos de Caja y pagos siguen siendo distintos.
+- Estilos locales y controles de teclado/móvil, sin dependencias, endpoints, migraciones ni cambios de contratos de publicación. Aceptación y límites en [VERIFICACION.md](VERIFICACION.md); no implica publicación ni gasto efectivos en Meta.
+
+## Informes sencillos y guiados · consulta y copias históricas
+
+- Consulta organizada por origen, área, período y filtros visibles. «Guardar copia» conserva una versión en el panel; «Descargar Excel» incluye todas las áreas, registros y definiciones, también desde un detalle.
+- El modo guardado, la consulta y los detalles sobreviven a recarga, historial y retorno de login. Abrir una copia usa sus filtros históricos de solo lectura; volver al listado o consultar datos actuales recupera su período y los seis filtros disponibles. Una copia con filtro de origen no admite ampliar la consulta actual desde esta interfaz.
+- Explicaciones breves junto a las cifras, cobertura vacía distinta de completa y pendientes antes de las tarjetas. Los registros conservan exclusiones, paginación y tramo comparado; cerrar el detalle devuelve el foco después de cargar el resultado.
+- Versiones explícitas y estados de preparación reales: una solicitud aceptada todavía no es una copia lista. El seguimiento conserva la consulta solicitada aunque se cambie de período; cerrarlo no cancela el trabajo del servidor.
+- Guía opcional de teclado con ejemplos ficticios y glosario, sin escrituras ni progreso guardado. Sin dependencias, endpoints, migraciones ni cambios de reglas financieras.
+
 ## Caja clara y guiada · publicada el 7 de noviembre de 2026
 
 - Resumen separado en disponible actual, por recibir, gastos por pagar (incluidos sueldos) y créditos. Acciones del día visibles, requisitos explicados y cuentas archivadas consultables sin perder su saldo del consolidado.
