@@ -30,9 +30,9 @@ const topics = [
   {
     id: 'connect', title: 'Conectar una cuenta',
     steps: [
-      'En Cuentas conectadas, elige un método disponible: Conectar con Facebook autoriza desde Facebook sin introducir la contraseña en este panel.',
-      'Para acceso asistido se necesita permiso previo de Meta: usa Crear conexión y abrir acceso, inicia sesión personalmente en el visor privado y resuelve los desafíos; la sesión se conserva cifrada.',
-      'Elige página y cuenta de anuncios y comprueba sus capacidades; si falta configuración, debe revisarla el administrador y puedes guardar borradores mientras tanto, sin sustitución automática de método.',
+      'En Configuración → Redes sociales, guarda las opciones de Meta y elige un método disponible: Conectar con Facebook autoriza desde Facebook sin introducir la contraseña en este panel.',
+      'En esa misma configuración, el acceso asistido requiere permiso previo de Meta: usa Crear conexión y abrir acceso, inicia sesión personalmente en el visor privado y resuelve los desafíos; la sesión se conserva cifrada.',
+      'Elige página y cuenta de anuncios y comprueba sus capacidades en Redes sociales; puedes guardar borradores mientras tanto, sin sustitución automática de método. Deshabilitar publicación no confirma detener gasto remoto.',
     ],
   },
   {
@@ -54,7 +54,7 @@ const topics = [
   },
 ];
 
-const firstTopic = { assets: 'organize', connections: 'connect', results: 'results' };
+const firstTopic = { assets: 'organize', results: 'results' };
 
 export default function AdvertisingGuide({ tab = 'campaigns' }) {
   const first = firstTopic[tab];

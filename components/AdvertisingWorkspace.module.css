@@ -34,6 +34,8 @@ small.help { display: block; margin-top: 4px; font-weight: 400; overflow-wrap: a
 .empty { text-align: start; padding-block: 28px; }
 .fieldGrid, .filterBar { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 16px; min-width: 0; }
 .fieldGrid > *, .filterBar > *, .fullWidth { min-width: 0; }
+.connectionFieldset { display: grid; gap: 20px; min-width: 0; max-width: 100%; padding: 0; margin: 0; border: 0; }
+.connectionFieldset > legend { padding-block: 8px; font-weight: 600; }
 .fullWidth { grid-column: 1 / -1; }
 .workspace input:not([type='checkbox']):not([type='radio']), .workspace select, .workspace textarea, .dialog input:not([type='checkbox']):not([type='radio']), .dialog select, .dialog textarea { max-width: 100%; min-width: 0; }
 .workspace textarea, .dialog textarea { resize: vertical; }

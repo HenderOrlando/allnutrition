@@ -1,0 +1,44 @@
+.scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-block: 1rem;
+}
+
+.scroll:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.table caption {
+  text-align: left;
+  font-weight: 600;
+  padding-block: .5rem;
+}
+
+.table th,
+.table td {
+  padding: .65rem;
+  border-bottom: 1px solid currentColor;
+  vertical-align: top;
+  min-width: 8rem;
+}
+
+.identifier {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.secret {
+  display: block;
+  font-family: monospace;
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+  margin-block: 1rem;
+}

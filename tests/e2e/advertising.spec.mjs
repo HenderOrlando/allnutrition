@@ -93,6 +93,10 @@ test('publicidad guiada: guardar y organizar sin publicar', async ({ page }, inf
   const f = await advertisingFixture(page, info);
   const name = `${f.marker} idea`, unsavedName = `${f.marker} cambio sin guardar`;
   await navigate(page, 'Publicidad');
+  const advertisingTabs = page.getByRole('navigation', { name: 'Vistas de publicidad', exact: true });
+  await expect(advertisingTabs.getByRole('button', { name: 'Cuentas conectadas', exact: true })).toHaveCount(0);
+  await expect(advertisingTabs.locator('option[value="connections"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Conectar con Facebook', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Crear publicación', exact: true }).first().click();
   const nameInput = page.locator('input[name="name"]');
   await nameInput.fill(name);
@@ -389,6 +393,9 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
     const results = await refreshed.json();
     expect(results.measurements).toEqual([]);
     expect(results.deliveries).toEqual([]);
+    await page.getByRole('button', { name: 'Redes sociales', exact: true }).click();
+    await expectView(page, { section: 'business', tab: 'social', record: null });
+    await expect(page.getByRole('form', { name: 'Opciones de Meta', exact: true })).toBeVisible();
     expect(await f.campaign(draft.id)).toEqual(baseline);
     expect(reading.writes).toEqual([]);
   } finally {

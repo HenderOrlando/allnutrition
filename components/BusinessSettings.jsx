@@ -4,6 +4,8 @@ import { Field } from './Fields';
 import useDialog from './useDialog';
 import BusinessActionDialog from './BusinessActionDialog';
 import BusinessOnboarding from './BusinessOnboarding';
+import SocialConnectionsSettings from './SocialConnectionsSettings';
+import ShippingIntegrationSettings from './ShippingIntegrationSettings';
 import { bogotaDate } from '@/lib/business/dates.mjs';
 import { formatMoneyMinor, parseMoneyMinor } from '@/lib/business/money.mjs';
 import { shipmentStates } from '@/lib/schema.mjs';
@@ -120,6 +122,8 @@ function SettingsEditor({editor,data:loadedData,api,onClose,onSaved,onInteractio
 }
 
 export default function BusinessSettings(props) {
+  if(props.view.tab==='social')return <SocialConnectionsSettings {...props}/>;
+  if(props.view.tab==='shipping')return <ShippingIntegrationSettings {...props}/>;
   return (props.view.tab||'setup')==='setup'?<BusinessOnboarding {...props}/>:<SettingsWorkspace {...props}/>;
 }
 function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInteractionStateChange=noop,onMutation=noop,revision}) {

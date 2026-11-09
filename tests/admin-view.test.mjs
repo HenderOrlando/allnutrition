@@ -193,7 +193,7 @@ test('gift filtering is a real product-only URL context that survives login and 
 });
 
 test('each URL tab is section-specific and round trips without a second local state',()=>{
- const tabs={orders:['list','shipments','imports'],cash:['overview','movements','settlements','expenses','payroll'],business:['setup','people','accounts','platforms','rules','alerts'],reports:['overview','sales','shipping','returns','costs','payroll','cash']};
+ const tabs={orders:['list','shipments','imports'],cash:['overview','movements','settlements','expenses','payroll'],business:['setup','people','accounts','platforms','rules','alerts','social','shipping'],reports:['overview','sales','shipping','returns','costs','payroll','cash']};
  for(const [section,values] of Object.entries(tabs)) {
   for(const tab of values) {
    const view=readAdminView({section,tab,record:'opaque:record.1',page:2});
@@ -336,7 +336,7 @@ test('advertising results accept only supported filters and use the first repeat
 
 test('results-only advertising filters cannot leak into other tabs or sections',()=>{
  const filters={integrationMethod:'browser',scope:'paid',dimension:'daily'};
- const contexts=[{section:'advertising'},...['campaigns','assets','connections'].map(tab=>({section:'advertising',tab})),...adminSections.filter(({id})=>id!=='advertising').map(({id})=>({section:id})),...['overview','sales','cash'].map(tab=>({section:'reports',tab})),...['overview','movements','expenses','payroll','settlements'].map(tab=>({section:'cash',tab}))];
+ const contexts=[{section:'advertising'},...['campaigns','assets'].map(tab=>({section:'advertising',tab})),...adminSections.filter(({id})=>id!=='advertising').map(({id})=>({section:id})),...['social','shipping'].map(tab=>({section:'business',tab})),...['overview','sales','cash'].map(tab=>({section:'reports',tab})),...['overview','movements','expenses','payroll','settlements'].map(tab=>({section:'cash',tab}))];
  for(const context of contexts) {
   const input={...context,...filters},view=readAdminView(input),href=adminHref(input),params=new URL(href,'https://example.test').searchParams;
   for(const key of Object.keys(filters)) {
@@ -353,4 +353,24 @@ test('results-only advertising filters cannot leak into other tabs or sections',
  }
  assert.equal(readAdminView({section:'advertising',tab:'results',mode:'saved',...filters}).mode,undefined);
  assert.equal(readAdminView({section:'reports',mode:'saved',...filters}).mode,'saved');
+});
+
+test('integration settings have independent business destinations with exact login returns',()=>{
+ const record='12345678-1234-4234-8234-123456789abc';
+ for(const tab of ['social','shipping']) {
+  const input={section:'business',tab,record},view=readAdminView(input),href=adminHref(input);
+  assert.equal(view.tab,tab);assert.equal(view.record,record);
+  assert.equal(href,`/admin?section=business&tab=${tab}&record=${record}`);
+  assert.equal(adminReturnTo(href),href);
+  assert.deepEqual(readAdminView(new URL(href,'https://example.test').searchParams),view);
+ }
+});
+
+test('removed advertising connection tab is not a settings alias',()=>{
+ const input={section:'advertising',tab:'connections',status:'connected'};
+ const view=readAdminView(input);
+ assert.equal(view.section,'advertising');
+ assert.equal(view.tab,undefined);assert.equal(view.status,'');
+ assert.equal(adminHref(input),'/admin?section=advertising');
+ assert.equal(adminReturnTo('/admin?section=advertising&tab=connections'),'/admin?section=advertising');
 });
