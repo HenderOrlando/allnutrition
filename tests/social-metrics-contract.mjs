@@ -8,6 +8,8 @@ import { createMetaMetricsProvider } from './social-meta-metrics-provider.mjs';
 import { socialAccountNotBefore } from '../lib/business/social-schedule.mjs';
 import { prepareCommercialBundle } from '../lib/business-backup.mjs';
 import { socialCampaignAction } from '../lib/business/social.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
+import { loadSocialRuntime } from '../lib/social/config.mjs';
 
 const NOW = '2026-11-03T02:00:00.000Z';
 const START = '2026-11-01T05:00:00.000Z';
@@ -21,10 +23,11 @@ async function setup(store, t, { mode = 'paid', channel = 'meta_ads' } = {}) {
   const provider = await createMetaMetricsProvider(); t.after(() => provider.close());
   const actorId = randomUUID(), connectionId = randomUUID(), assetId = randomUUID(), campaignId = randomUUID(), deliveryId = randomUUID(), assetHash = hash('metric-private-image');
   const env = {}; for (const key of ['SOCIAL_TOKEN_ENCRYPTION_KEY', 'SOCIAL_MEDIA_SIGNING_KEY', 'SOCIAL_BROWSER_CONTROL_KEY', 'SOCIAL_BROWSER_SESSION_KEY']) env[key] = randomBytes(32).toString('base64');
+  await configureSocialTestRuntime(store, { env, settings: { appId: '42', appSecret: 'SYNTHETIC-SECRET-CANARY' } });
   await insertRow(store, 'users', { id: actorId, email: `${actorId}@example.test`, password: 'synthetic-unused', active: 1 });
   const identities = { userId: '100', businessId: '500', pageId: '200', instagramId: '300', adAccountId: 'act_400' };
   await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: 'api', state: 'connected', ...editable({ identities, currency: 'COP', timeZone: 'America/Bogota', sessionEpoch: 0, capabilities: { insights: true, facebookPublish: false, instagramPublish: false, adsPublish: false, whatsappAds: false } }) });
-  await saveCredentials(store, connectionId, { accessToken: 'SYNTHETIC-PRIVATE-TOKEN-CANARY', userId: '100' }, { env });
+  await saveCredentials(store, connectionId, { accessToken: 'SYNTHETIC-PRIVATE-TOKEN-CANARY', userId: '100' }, { runtime: (await configureSocialTestRuntime(store, { env })).runtime });
   await insertRow(store, 'social_assets', { id: assetId, state: 'missing_file', sha256: assetHash, bytes: 0, ...editable({ kind: 'image', name: 'Private image unavailable for publishing', contentType: 'image/jpeg', expectedBytes: 1, reservedBytes: 0, originalKey: `${assetId}/original.jpg`, originalSha256: hash('metric-original'), originalBytes: 1, derivativeKey: `${assetId}/derivative.jpg`, derivativeSha256: assetHash, derivativeBytes: 1, derivativeContentType: 'image/jpeg' }) });
   const spec = { name: 'Canonical measurements', integrationMethod: 'api', connectionId, assetId, assetHash, assetType: 'image', identities, mode, objective: mode === 'paid' ? 'whatsapp' : 'engagement', currency: 'COP', timeZone: 'America/Bogota', budgetMinor: mode === 'paid' ? 5000000 : null, startAt: mode === 'paid' ? START : null, endAt: mode === 'paid' ? '2026-11-08T05:00:00.000Z' : null, publishAt: mode === 'organic' ? START : null, observationDays: 7, platforms: mode === 'paid' ? ['facebook', 'instagram'] : [channel], placements: mode === 'paid' ? ['facebook_feed', 'instagram_feed'] : [`${channel}_feed`], caption: 'Owned text', headline: '', destinationUrl: '', whatsappNumber: mode === 'paid' ? '+573001234567' : '', whatsappGreeting: mode === 'paid' ? 'Consulta propia' : '', audience: { countries: ['CO'], regions: [], cities: [], ageMin: 18, ageMax: 65, genders: [], interests: [] }, aiDisclosure: false };
   await insertRow(store, 'social_campaigns', { id: campaignId, connection_id: connectionId, asset_id: assetId, name: spec.name, mode, objective: spec.objective, state: mode === 'paid' ? 'active' : 'published', ...editable(spec) });
@@ -34,7 +37,7 @@ async function setup(store, t, { mode = 'paid', channel = 'meta_ads' } = {}) {
   await insertRow(store, 'social_deliveries', { id: deliveryId, campaign_id: campaignId, revision: 1, channel, state: mode === 'paid' ? 'active' : 'published', remote_id: remoteId, next_sync_at: NOW,
     ...editable({ integrationMethod: 'api', remoteRefs, everActivated: mode === 'paid', ...(mode === 'paid' ? { activatedAt: START } : { publishedAt: START, publicationTimeSource: 'provider_reported' }) }) });
   const connection = await get(store, 'social_connections', connectionId);
-  const api = createMetaApiConnector({ connection, credentials: { accessToken: 'SYNTHETIC-PRIVATE-TOKEN-CANARY', userId: '100' }, transport: { appId: '42', appSecret: 'SYNTHETIC-SECRET-CANARY', fetchImpl: provider.fetchImpl, now: provider.now } });
+  const api = createMetaApiConnector({ connection, credentials: { accessToken: 'SYNTHETIC-PRIVATE-TOKEN-CANARY', userId: '100' }, runtime: await loadSocialRuntime(store, { env }), transport: { fetchImpl: provider.fetchImpl, now: provider.now } });
   const f = { ...provider, store, env, actorId, connectionId, assetId, campaignId, deliveryId, spec, api, at: NOW };
   f.delivery = () => get(store, 'social_deliveries', deliveryId);
   f.read = (options = {}) => syncSocialDelivery(store, deliveryId, { now: f.at, connector: api, configurationEvidence: { verifiedAt: f.at, differences: [] }, ...options });

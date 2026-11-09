@@ -54,8 +54,18 @@ function provider(options = {}) {
 }
 function connector(options = {}, identities = { userId: '100', businessId: '500', pageId: '200', instagramId: '300', adAccountId: 'act_400' }) {
   const fixture = provider(options);
-  return { ...fixture, api: createMetaApiConnector({ connection: { integrationMethod: 'api', identities }, credentials: { accessToken: TOKEN, userId: '100' }, transport: { ...fixture, appId: '42', appSecret: SECRET, now: NOW } }) };
+  return { ...fixture, api: createMetaApiConnector({ connection: { integrationMethod: 'api', identities }, credentials: { accessToken: TOKEN, userId: '100' }, runtime: { appId: '42', appSecret: SECRET }, transport: { ...fixture, now: NOW } }) };
 }
+
+test('Meta connector requires explicit runtime and ignores transport app credential overrides', async () => {
+  const connection = { integrationMethod: 'api' }, credentials = { accessToken: TOKEN, userId: '100' };
+  assert.throws(() => createMetaApiConnector({ connection, credentials, transport: { appId: '42', appSecret: SECRET } }), error => error.status === 409);
+  const fixture = provider();
+  const api = createMetaApiConnector({ connection, credentials, runtime: { appId: '42', appSecret: SECRET, graphVersion: 'v0.0' }, transport: { fetchImpl: fixture.fetchImpl, appId: 'wrong-app', appSecret: 'wrong-secret', graphVersion: 'v0.0', now: NOW } });
+  await api.validateConnection();
+  assert.equal(fixture.calls[0].init.headers.Authorization, `Bearer 42|${SECRET}`);
+  assert.ok(fixture.calls.every(({ url }) => url.pathname.startsWith('/v26.0/')));
+});
 
 test('Meta uses server headers, proof and form encoding without token query parameters', async () => {
   const calls = [];

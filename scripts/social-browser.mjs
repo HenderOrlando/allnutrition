@@ -1,7 +1,8 @@
 import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 import { createBrowserRuntime } from '../lib/social/browser-runtime.mjs';
-import { secretKey, socialConfig } from '../lib/social/config.mjs';
+import { socialConfig } from '../lib/social/config.mjs';
+import { createIntegrationKeyring } from '../lib/integrations/keyring.mjs';
 
 let runtime, server, stopping = false;
 async function stop() {
@@ -13,8 +14,7 @@ async function stop() {
 try {
   if (process.argv.length !== 2) throw new Error('INVALID_ARGUMENTS');
   const config = socialConfig();
-  if (!config.browserEnabled) throw new Error('SOCIAL_BROWSER_DISABLED');
-  runtime = await createBrowserRuntime({ chromium, controlKey: secretKey('SOCIAL_BROWSER_CONTROL_KEY'), mediaRoot: config.mediaRoot, maxContexts: config.browserMaxContexts });
+  runtime = await createBrowserRuntime({ chromium, keyring: createIntegrationKeyring(), mediaRoot: config.mediaRoot, maxContexts: config.browserMaxContexts });
   server = createServer(runtime.handle);
   server.requestTimeout = 310000;
   server.headersTimeout = 10000;

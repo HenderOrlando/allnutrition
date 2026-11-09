@@ -8,6 +8,7 @@ import { getSocialConnection } from '../lib/business/social.mjs';
 import { socialConnectionAction } from '../lib/business/social-connections.mjs';
 import { BrowserControlError } from '../lib/social/browser-client.mjs';
 import { exportCommercialData } from '../lib/business-backup.mjs';
+import { configureSocialTestRuntime, runtimeFromTestEnv } from './social-runtime-fixture.mjs';
 
 export const socialTestEnv = () => Object.fromEntries(['SOCIAL_TOKEN_ENCRYPTION_KEY', 'SOCIAL_MEDIA_SIGNING_KEY', 'SOCIAL_BROWSER_CONTROL_KEY', 'SOCIAL_BROWSER_SESSION_KEY'].map(key => [key, randomBytes(32).toString('base64')]));
 export async function socialConnection(store, { method = 'api', state = 'connected', data = {} } = {}) {
@@ -58,10 +59,11 @@ function browserTransport() {
 }
 async function browserSetup(store, extra = {}) {
   const env = { ...socialTestEnv(), SOCIAL_BROWSER_ENABLED: 'true' }, fixture = browserTransport();
+  const { runtime } = await configureSocialTestRuntime(store, { env, settings: { publishingEnabled: false } });
   const session = await browserAdmin(store, extra), connection = await socialConnection(store, { method: 'browser', state: 'login_required' });
   const options = { env, client: fixture.client };
   const action = (name, input = {}, administrative = session, changes = {}) => socialBrowserAction(store, connection.id, name, input, administrative, { ...options, ...changes });
-  return { env, fixture, session, connection, options, action };
+  return { env, runtime, fixture, session, connection, options, action, requests: await store.db.all(`SELECT * FROM ${store.t('business_requests')}`) };
 }
 async function finishBrowserLogin(setup) {
   const control = await setup.action('start-login');
@@ -122,7 +124,7 @@ const cases = [
     const disconnected = await getSocialConnection(store, current.id);
     assert.equal(disconnected.state, 'disconnected');
     assert.equal(disconnected.sessionEpoch, current.sessionEpoch + 1);
-    assert.equal(await loadCredentials(store, disconnected, setup.env), null);
+    assert.equal(await loadCredentials(store, disconnected, setup.runtime), null);
     assert.equal((await store.db.get(`SELECT state FROM ${store.t('social_browser_controls')} WHERE id=?`, [control.controlId])).state, 'cancelled');
     assert.equal(setup.fixture.session, null);
     await assert.rejects(() => setup.action('read-frame', { controlId: control.controlId }), { status: 409 });
@@ -187,14 +189,14 @@ const cases = [
     await setup.action('send-input', { controlId: control.controlId, sequence: 3, input: { kind: 'key', key: 'Tab', shift: true } });
     setup.fixture.authenticated = true;
     await setup.action('finish-login', { controlId: control.controlId });
-    const connection = await getSocialConnection(store, setup.connection.id), saved = await loadCredentials(store, connection, setup.env);
+    const connection = await getSocialConnection(store, setup.connection.id), saved = await loadCredentials(store, connection, setup.runtime);
     assert.equal(saved.storageState.cookies[0].value, 'COOKIE-CANARIO-SOCIAL');
     const persisted = JSON.stringify(await Promise.all(['social_connections', 'social_credentials', 'social_browser_controls', 'job_runs', 'business_audit', 'business_requests'].map(table => store.db.all(`SELECT * FROM ${store.t(table)}`))));
     for (const canary of [...canaries, 'COOKIE-CANARIO-SOCIAL']) {
       assert.equal(persisted.includes(canary), false);
       assert.equal(persisted.includes(hash(canary)), false);
     }
-    assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('business_requests')}`), []);
+    assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('business_requests')}`), setup.requests);
     const backup = JSON.stringify(await store.readSnapshot(exportCommercialData));
     for (const canary of [...canaries, 'COOKIE-CANARIO-SOCIAL']) assert.equal(backup.includes(canary), false);
     await assert.rejects(() => setup.action('read-frame', { controlId: control.controlId }), { status: 409 });
@@ -254,12 +256,12 @@ const cases = [
       if (change === 'epoch') {
         const current = await getSocialConnection(store, setup.connection.id);
         await store.db.run(`UPDATE ${store.t('social_connections')} SET data=?,version=version+1 WHERE id=?`, [JSON.stringify({ name: current.name, sessionEpoch: 1 }), current.id]);
-      } else await saveCredentials(store, setup.connection.id, { storageState: { cookies: [], origins: [] } }, { env: setup.env });
+      } else await saveCredentials(store, setup.connection.id, { storageState: { cookies: [], origins: [] } }, { runtime: setup.runtime });
       proceed.resolve();
       await assert.rejects(() => finish, { status: 409 });
       const saved = await store.db.get(`SELECT * FROM ${store.t('social_credentials')} WHERE connection_id=?`, [setup.connection.id]);
       if (change === 'epoch') assert.equal(saved, null);
-      else assert.deepEqual((await loadCredentials(store, await getSocialConnection(store, setup.connection.id), setup.env)).storageState, { cookies: [], origins: [] });
+      else assert.deepEqual((await loadCredentials(store, await getSocialConnection(store, setup.connection.id), setup.runtime)).storageState, { cookies: [], origins: [] });
       if (change === 'credential') await setup.action('cancel-login', { controlId: control.controlId });
     }
   }],
@@ -276,31 +278,33 @@ const cases = [
     assert.equal((await getSocialConnection(store, current.id)).state, 'reconnect_required');
   }],
   ['las credenciales cifradas no son portables entre conexiones, vías ni épocas', async store => {
-    const env = socialTestEnv(), connection = await socialConnection(store), secret = { accessToken: 'TOKEN-CANARIO-NO-PERSISTIR', expiresAt: '2027-01-01T00:00:00.000Z' };
-    const first = encryptCredentials(connection, secret, env), second = encryptCredentials(connection, secret, env);
+    const runtime = runtimeFromTestEnv(socialTestEnv()), connection = await socialConnection(store), secret = { accessToken: 'TOKEN-CANARIO-NO-PERSISTIR', expiresAt: '2027-01-01T00:00:00.000Z' };
+    const first = encryptCredentials(connection, secret, runtime), second = encryptCredentials(connection, secret, runtime);
     assert.notEqual(first.iv, second.iv);
-    assert.deepEqual(decryptCredentials(connection, first, env), secret);
-    assert.throws(() => decryptCredentials({ ...connection, id: randomUUID() }, first, env), { status: 409 });
-    assert.throws(() => decryptCredentials({ ...connection, integrationMethod: 'browser' }, first, env), { status: 409 });
-    const browser = { ...connection, integrationMethod: 'browser' }, sealed = encryptCredentials(browser, { storageState: { cookies: [], origins: [] } }, env);
-    assert.throws(() => decryptCredentials({ ...browser, sessionEpoch: 1 }, sealed, env), { status: 409 });
+    assert.deepEqual(decryptCredentials(connection, first, runtime), secret);
+    assert.throws(() => decryptCredentials({ ...connection, id: randomUUID() }, first, runtime), { status: 409 });
+    assert.throws(() => decryptCredentials({ ...connection, integrationMethod: 'browser' }, first, runtime), { status: 409 });
+    const browser = { ...connection, integrationMethod: 'browser' }, sealed = encryptCredentials(browser, { storageState: { cookies: [], origins: [] } }, runtime);
+    assert.throws(() => decryptCredentials({ ...browser, sessionEpoch: 1 }, sealed, runtime), { status: 409 });
     assert.equal(JSON.stringify(first).includes(secret.accessToken), false);
   }],
   ['CAS y época impiden sobrescribir una reconexión y no invalidan contabilidad', async store => {
-    const env = socialTestEnv(), connection = await socialConnection(store), before = await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`);
-    await saveCredentials(store, connection.id, { accessToken: 'TOKEN-CANARIO-PRIMERO' }, { env });
-    const writes = await Promise.allSettled(['SEGUNDO', 'TERCERO'].map(value => saveCredentials(store, connection.id, { accessToken: `TOKEN-CANARIO-${value}` }, { env, expectedVersion: 1 })));
+    const { runtime } = await configureSocialTestRuntime(store, { env: socialTestEnv() });
+    const requests = await store.db.all(`SELECT * FROM ${store.t('business_requests')}`), audits = await store.db.all(`SELECT * FROM ${store.t('business_audit')}`);
+    const connection = await socialConnection(store), before = await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`);
+    await saveCredentials(store, connection.id, { accessToken: 'TOKEN-CANARIO-PRIMERO' }, { runtime });
+    const writes = await Promise.allSettled(['SEGUNDO', 'TERCERO'].map(value => saveCredentials(store, connection.id, { accessToken: `TOKEN-CANARIO-${value}` }, { runtime, expectedVersion: 1 })));
     assert.equal(writes.filter(result => result.status === 'fulfilled').length, 1);
     assert.equal(writes.find(result => result.status === 'rejected').reason.status, 409);
-    const current = await loadCredentials(store, connection, env);
+    const current = await loadCredentials(store, connection, runtime);
     assert.ok(['TOKEN-CANARIO-SEGUNDO', 'TOKEN-CANARIO-TERCERO'].includes(current.accessToken));
     await store.db.run(`UPDATE ${store.t('social_connections')} SET data=? WHERE id=?`, [JSON.stringify({ sessionEpoch: 1 }), connection.id]);
-    await assert.rejects(() => saveCredentials(store, connection.id, { accessToken: 'TARDIO' }, { expectedVersion: 2, sessionEpoch: 0, env }), { status: 409 });
+    await assert.rejects(() => saveCredentials(store, connection.id, { accessToken: 'TARDIO' }, { expectedVersion: 2, sessionEpoch: 0, runtime }), { status: 409 });
     assert.deepEqual(await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`), before);
     const persisted = JSON.stringify(await store.db.all(`SELECT * FROM ${store.t('social_credentials')}`));
     assert.equal(persisted.includes('TOKEN-CANARIO'), false);
-    assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('business_requests')}`), []);
-    assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('business_audit')}`), []);
+    assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('business_requests')}`), requests);
+    assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('business_audit')}`), audits);
   }],
   ['custodia del navegador descarta dominios ajenos e IndexedDB', async () => {
     const cookie = { name: 'auth', value: 'COOKIE-CANARIO', domain: '.facebook.com', path: '/', expires: -1, httpOnly: true, secure: true, sameSite: 'Lax' };
@@ -309,11 +313,11 @@ const cases = [
     assert.deepEqual(state.origins, [{ origin: 'https://www.facebook.com', localStorage: [{ name: 'auth', value: 'SINTETICO' }] }]);
   }],
   ['requisitos de API no bloquean la configuración independiente del navegador', async () => {
-    const env = { ...socialTestEnv(), SOCIAL_BROWSER_ENABLED: 'true' };
-    assert.equal(integrationRequirements('browser', env).configured, true);
-    assert.deepEqual(integrationRequirements('api', env).missing.sort(), ['APP_URL', 'META_APP_ID', 'META_APP_SECRET', 'META_LOGIN_CONFIG_ID'].sort());
-    env.SOCIAL_BROWSER_SESSION_KEY = env.SOCIAL_TOKEN_ENCRYPTION_KEY;
-    assert.equal(integrationRequirements('browser', env).configured, false);
+    const runtime = runtimeFromTestEnv(socialTestEnv(), { publicBaseUrl: '', appId: '', appSecret: '', loginConfigId: '' });
+    assert.equal(integrationRequirements('browser', runtime).configured, true);
+    assert.deepEqual(integrationRequirements('api', runtime).missing.sort(), ['publicBaseUrl', 'appId', 'appSecret', 'loginConfigId'].sort());
+    runtime.keys.sessions = runtime.keys.tokens;
+    assert.equal(integrationRequirements('browser', runtime).configured, false);
   }]
 ];
 export async function runSocialContracts(t, factory) {

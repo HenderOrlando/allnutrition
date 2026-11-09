@@ -13,6 +13,8 @@ import { insertRow } from '../lib/business/commands.mjs';
 import { backupSocialMedia, restoreSocialMedia, resetSocialAfterPhysicalRestore } from '../lib/social/media-backup.mjs';
 import { createSocialAsset, uploadSocialAsset, getSocialAsset, processSocialAssetTurn, socialAssetAction, openSocialAssetContent, verifySocialMediaFiles } from '../lib/business/social-media.mjs';
 import { createBusinessBasics, businessOrderInput } from './business-fixtures.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
+import { createSocialMediaUrl, verifySocialMediaUrl } from '../lib/social/media-http.mjs';
 
 const now = '2026-11-02T12:00:00.000Z';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -20,7 +22,8 @@ const editable = { version: 1, created_at: now, updated_at: now };
 async function fixture(t) {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'social-media-recovery-'));
   const store = await openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' });
-  const env = { SOCIAL_MEDIA_DIR: join(root, 'media'), SOCIAL_PUBLISHING_ENABLED: 'false', SOCIAL_BROWSER_ENABLED: 'false' };
+  const env = { SOCIAL_MEDIA_DIR: join(root, 'media') };
+  const { keyring, runtime } = await configureSocialTestRuntime(store, { env, settings: { publishingEnabled: false, browserEnabled: false } });
   await mkdir(env.SOCIAL_MEDIA_DIR, { mode: 0o700 });
   t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }); });
   const id = randomUUID(), original = Buffer.from('synthetic-original-private'), derivative = Buffer.from('synthetic-jpeg-private');
@@ -29,9 +32,30 @@ async function fixture(t) {
   await writeFile(join(env.SOCIAL_MEDIA_DIR, data.originalKey), original, { mode: 0o600 });
   await writeFile(join(env.SOCIAL_MEDIA_DIR, data.derivativeKey), derivative, { mode: 0o600 });
   await store.transaction(tx => insertRow(tx, 'social_assets', { id, state: 'ready', sha256: data.derivativeSha256, bytes: original.length + derivative.length, data: JSON.stringify(data), ...editable }));
-  return { root, store, env, id, data, original, derivative, backup: join(root, 'copy') };
+  return { root, store, env, keyring, runtime, id, data, original, derivative, backup: join(root, 'copy') };
 }
 const asset = async f => f.store.db.get(`SELECT * FROM ${f.store.t('social_assets')} WHERE id=?`, [f.id]);
+
+test('persisted settings changes preserve the private media signing key and existing URLs', async t => {
+  const f = await fixture(t), record = { id: f.id, state: 'ready', kind: 'image', sha256: f.data.derivativeSha256 };
+  const at = Date.parse(now), url = createSocialMediaUrl(record, { runtime: f.runtime, now: at });
+  const changed = await configureSocialTestRuntime(f.store, { env: f.env, settings: { publicBaseUrl: 'https://changed.example.test', appSecret: 'changed-synthetic-secret', publishingEnabled: true, browserEnabled: false } });
+  assert.notEqual(changed.runtime.configurationVersion, f.runtime.configurationVersion);
+  assert.deepEqual(changed.runtime.keys.media, f.runtime.keys.media);
+  assert.equal(verifySocialMediaUrl(record, url, { runtime: changed.runtime, now: at }), true);
+});
+
+test('media restore requires both persisted flags disabled regardless of deployment flags', async t => {
+  const f = await fixture(t);
+  await backupSocialMedia(f.store, f.backup, { env: f.env, now });
+  for (const flags of [{ publishingEnabled: true, browserEnabled: false }, { publishingEnabled: false, browserEnabled: true }]) {
+    await configureSocialTestRuntime(f.store, { env: f.env, settings: flags });
+    await assert.rejects(() => restoreSocialMedia(f.store, f.backup, { env: { ...f.env, SOCIAL_PUBLISHING_ENABLED: 'false', SOCIAL_BROWSER_ENABLED: 'false' }, now }));
+    await assert.rejects(() => resetSocialAfterPhysicalRestore(f.store, { env: f.env, now }));
+  }
+  await configureSocialTestRuntime(f.store, { env: f.env, settings: { publishingEnabled: false, browserEnabled: false } });
+  assert.equal((await restoreSocialMedia(f.store, f.backup, { env: { ...f.env, SOCIAL_PUBLISHING_ENABLED: 'true', SOCIAL_BROWSER_ENABLED: 'true' }, now })).unchanged, 2);
+});
 
 test('a failed original remains recoverable through commercial backup, volume restore and explicit processing retry', async t => {
   const f = await fixture(t), actor = 'media-recovery-admin';
@@ -158,7 +182,9 @@ test('physical reset revokes browser custody and social jobs but preserves busin
   });
   const deliveryBefore = await f.store.db.get(`SELECT * FROM ${f.store.t('social_deliveries')} WHERE id=?`, [deliveryId]);
   const operationBefore = await f.store.db.get(`SELECT * FROM ${f.store.t('social_operations')} WHERE id=?`, [operationId]);
-  await assert.rejects(() => resetSocialAfterPhysicalRestore(f.store, { env: { ...f.env, SOCIAL_BROWSER_ENABLED: 'true' } }));
+  await configureSocialTestRuntime(f.store, { env: f.env, settings: { publishingEnabled: false, browserEnabled: true } });
+  await assert.rejects(() => resetSocialAfterPhysicalRestore(f.store, { env: f.env }));
+  await configureSocialTestRuntime(f.store, { env: f.env, settings: { publishingEnabled: false, browserEnabled: false } });
   const counts = await resetSocialAfterPhysicalRestore(f.store, { env: f.env, now, requestId: 'physical-restore-contract' });
   assert.equal(counts.jobs, 2);
   assert.equal(counts.browserCredentials, 1);
@@ -194,9 +220,14 @@ test('CLI rejects malformed commands before opening a database and performs a di
   const bad = await cli(['restore'], env);
   assert.equal(bad.code, 1);
   await assert.rejects(() => readFile(env.SQLITE_PATH), /ENOENT/);
-  const unsafe = await cli(['reset-after-physical-restore'], { ...env, SOCIAL_PUBLISHING_ENABLED: 'true' });
+  const discarded = await openStore(env);
+  await configureSocialTestRuntime(discarded, { env, settings: { publishingEnabled: true, browserEnabled: false } });
+  await discarded.close();
+  const unsafe = await cli(['reset-after-physical-restore'], env);
   assert.equal(unsafe.code, 1);
-  await assert.rejects(() => readFile(env.SQLITE_PATH), /ENOENT/);
+  const disabled = await openStore(env);
+  await configureSocialTestRuntime(disabled, { env, settings: { publishingEnabled: false, browserEnabled: false } });
+  await disabled.close();
   const reset = await cli(['reset-after-physical-restore'], env);
   assert.equal(reset.code, 0, reset.stderr);
   assert.equal(JSON.parse(reset.stdout).command, 'reset-after-physical-restore');

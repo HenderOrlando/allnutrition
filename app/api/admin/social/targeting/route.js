@@ -3,6 +3,7 @@ import { fail, text } from '@/lib/validation-core.mjs';
 import { getSocialConnection } from '@/lib/business/social.mjs';
 import { loadCredentials } from '@/lib/social/credentials.mjs';
 import { createSocialConnector } from '@/lib/social/connectors.mjs';
+import { loadSocialRuntime } from '@/lib/social/config.mjs';
 
 export const runtime = 'nodejs';
 export async function GET(request) {
@@ -13,7 +14,8 @@ export async function GET(request) {
     const store = await db(), connection = await getSocialConnection(store, url.searchParams.get('connection'));
     if (connection.integrationMethod !== 'api') fail('La vía navegador busca candidatos mediante el preflight del borrador.', 409);
     if (connection.state !== 'connected') fail('Reconecta la cuenta antes de buscar audiencia.', 409);
-    const connector = await createSocialConnector({ connection, credentials: await loadCredentials(store, connection) });
+    const socialRuntime = await loadSocialRuntime(store);
+    const connector = await createSocialConnector({ connection, runtime: socialRuntime, credentials: await loadCredentials(store, connection, socialRuntime) });
     return json({ candidates: await connector.searchTargeting({ kind, q, signal: request.signal }) });
   } catch (error) { return errorResponse(error); }
 }

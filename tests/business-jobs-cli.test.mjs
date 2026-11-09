@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,15 +13,16 @@ const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
 const script = fileURLToPath(new URL('../scripts/business-jobs.mjs', import.meta.url));
 async function environment(t) {
-  const directory = await mkdtemp(join(tmpdir(), 'allnutrition-jobs-cli-'));
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'allnutrition-jobs-cli-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  return {
+  const env = {
     ...process.env,
-    DB_DRIVER: 'sqlite', SQLITE_PATH: join(directory, 'jobs.sqlite'),
-    NODE_OPTIONS: '', SOCIAL_BROWSER_ENABLED: 'false', SOCIAL_PUBLISHING_ENABLED: 'false',
-    META_APP_ID: '', META_APP_SECRET: '', META_LOGIN_CONFIG_ID: '',
+    DB_DRIVER: 'sqlite', SQLITE_PATH: join(directory, 'jobs.sqlite'), NODE_OPTIONS: '',
     SOCIAL_MEDIA_DIR: join(directory, 'social-media'), IMPORT_FILES_DIR: join(directory, 'imports'),
+    INTEGRATION_SECRETS_DIR: join(directory, 'secrets'), SOCIAL_BROWSER_CONTROL_DIR: join(directory, 'control')
   };
+  for (const name of Object.keys(env)) if (/^META_|^SOCIAL_(?:TOKEN_ENCRYPTION_KEY|MEDIA_SIGNING_KEY|BROWSER_CONTROL_KEY|BROWSER_SESSION_KEY|PUBLISHING_ENABLED|BROWSER_ENABLED)$/.test(name)) delete env[name];
+  return env;
 }
 const run = (args, env) => execute(process.execPath, [script, ...args], { cwd: root, env, timeout: 30000, maxBuffer: 1024 * 1024 });
 const heartbeat = (store, key) => store.db.get(`SELECT * FROM ${store.t('job_runs')} WHERE key=?`, [key]);

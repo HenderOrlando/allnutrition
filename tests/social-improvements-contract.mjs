@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { hash, insertRow } from '../lib/business/commands.mjs';
 import { analyzeSocialCampaign, prepareSocialAnalysisRequest, getSocialAnalysis, buildSocialHistoricalForecast, readSocialComparableSamplesTx } from '../lib/business/social-analysis.mjs';
 import { processSocialAnalysisTurn } from '../lib/business/social-analysis-jobs.mjs';
@@ -219,9 +219,8 @@ const cases = [
       assert.equal(await commercialFingerprint(store), before);
       // All normal approval inputs are valid. These two refusals isolate the
       // recipe/acknowledgment guard before any media/provider work is allowed.
-      const env = { APP_URL: 'https://example.test', META_APP_ID: '42', META_APP_SECRET: 'SYNTHETIC-IMPROVEMENTS-SECRET', META_LOGIN_CONFIG_ID: 'synthetic-login',
-        META_GRAPH_VERSION: 'v26.0', SOCIAL_PUBLISHING_ENABLED: 'true', SOCIAL_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'), SOCIAL_MEDIA_SIGNING_KEY: randomBytes(32).toString('base64') };
-      await saveCredentials(store, f.connectionId, { accessToken: 'SYNTHETIC-IMPROVEMENTS-TOKEN', userId: '100' }, { env });
+      const env = f.env;
+      await saveCredentials(store, f.connectionId, { accessToken: 'SYNTHETIC-IMPROVEMENTS-TOKEN', userId: '100' }, { runtime: f.runtime });
       let saved = await saveSocialCampaign(store, { id: child.id, version: child.version, requestId: id(), caption: f.spec.caption, assetId: f.assetId,
         startAt: '2026-11-21T05:00:00.000Z', endAt: '2026-11-28T05:00:00.000Z' }, f.actorId, { now: CLOCK });
       const approval = async recommendationAccepted => {

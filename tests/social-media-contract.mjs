@@ -14,6 +14,7 @@ import { queueJobTx, claimJob } from '../lib/business/job-leases.mjs';
 import { openSocialMediaFile, stageSocialMediaFile } from '../lib/social/media-files.mjs';
 import { socialConnection } from './social-contract.mjs';
 import { getSocialCampaign } from '../lib/business/social.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
 
 const execute = promisify(execFile), actor = 'social-media-test-admin', at = '2026-11-01T12:00:00.000Z';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -348,6 +349,7 @@ export async function runSocialMediaContracts(t, factory) {
   for (const [name, scenario] of cases) await t.test(name, async () => {
     const store = await factory(), directory = await mkdtemp(join(tmpdir(), 'allnutrition-social-media-'));
     const env = { SOCIAL_MEDIA_DIR: join(directory, 'private') };
+    await configureSocialTestRuntime(store, { env });
     try { await scenario(store, env, directory); }
     finally { await store.close(); await rm(directory, { recursive: true, force: true }); }
   });

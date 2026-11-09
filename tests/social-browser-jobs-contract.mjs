@@ -16,6 +16,8 @@ import { BrowserControlError } from '../lib/social/browser-client.mjs';
 import { socialConnection, socialTestEnv } from './social-contract.mjs';
 import { socialConnectionAction, previewSocialConnectionDeletion } from '../lib/business/social-connections.mjs';
 import { getSocialConnection, listSocialConnections } from '../lib/business/social.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
+import { loadSocialRuntime } from '../lib/social/config.mjs';
 
 const NOW = '2030-01-01T14:00:00.000Z';
 const ids = { userId: '101', businessId: '202', pageId: '303', instagramId: '404', adAccountId: '505' };
@@ -116,11 +118,12 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
     clocks.set(store, { now: Date.parse(NOW) - 1000 });
   }
   const { root, env: deploymentEnv } = installations.get(store), env = { ...deploymentEnv }, clock = clocks.get(store);
+  await configureSocialTestRuntime(store, { env });
   const base = new Date(clock.now + 1000).toISOString(), at = milliseconds => new Date(Date.parse(base) + milliseconds).toISOString();
   const actorId = randomUUID(), approverId = randomUUID();
   for (const id of [actorId, approverId]) await insertRow(store, 'users', { id, email: `${id}@example.test`, password: 'unused-synthetic', active: 1 });
   const connection = await socialConnection(store, { method: 'browser', data: { identities: ids, currency: 'COP', timeZone: 'America/Bogota', capabilities: { facebookPublish: true, instagramPublish: true, adsPublish: true, insights: true, whatsappAds: true } } });
-  await saveCredentials(store, connection.id, { storageState: cookieState }, { env });
+  await saveCredentials(store, connection.id, { storageState: cookieState }, { runtime: (await configureSocialTestRuntime(store, { env })).runtime });
   const assetId = randomUUID(), bytes = await sharp({ create: { width: 540, height: 675, channels: 3, background: '#336699' } }).jpeg().toBuffer(), assetHash = createHash('sha256').update(bytes).digest('hex');
   await mkdir(join(root, assetId)); await writeFile(join(root, assetId, 'derivative.jpg'), bytes);
   await insertRow(store, 'social_assets', { id: assetId, state: 'ready', sha256: assetHash, bytes: bytes.length, ...editable({ kind: 'image', derivativeSha256: assetHash, derivativeBytes: bytes.length }) });
@@ -128,7 +131,8 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
   spec.assetType = 'image';
   const campaignId = randomUUID(); remote ||= provider(base);
   await insertRow(store, 'social_campaigns', { id: campaignId, connection_id: connection.id, asset_id: assetId, name: 'Campaña aislada del worker', mode, objective: 'traffic', state: withDelivery ? 'publishing' : 'draft', ...editable(spec) });
-  const revision = () => ({ spec, rightsAccepted: true, acceptedWarnings: [], forecast: { specHash: hash(spec), source: 'insufficient', metricRanges: {} } });
+  const runtime = await loadSocialRuntime(store, { env });
+  const revision = () => ({ spec, configurationFingerprint: runtime.fingerprint, rightsAccepted: true, acceptedWarnings: [], forecast: { specHash: hash(spec), source: 'insufficient', metricRanges: {} } });
   if (withDelivery) await insertRow(store, 'social_revisions', { campaign_id: campaignId, revision: 1, spec_hash: hash(spec), approved_at: base, actor_id: approverId, data: JSON.stringify(revision()) });
   const f = { store, env, root, base, at, actorId, approverId, connection, assetId, assetHash, spec, campaignId, remote, transport: { browserClient: remote.client } };
   f.now = () => new Date(clock.now).toISOString();
@@ -143,7 +147,7 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
     const controlId = ['activate', 'pause', 'resume'].includes(kind) ? step.slice(kind.length + 1) : null;
     const consent = campaign.preflight?.privateDraftAuthorization || { actorId, acceptedAt: base, requestId: randomUUID() };
     await insertRow(store, 'social_operations', { id, campaign_id: campaignId, delivery_id: delivery?.id || null, operation_key: delivery ? `delivery:${delivery.id}:${step}` : `preflight:${campaignId}:${randomUUID()}`, step, state: 'prepared', next_attempt_at: null,
-      ...editable({ integrationMethod: 'browser', actorId, specHash: hash(spec), ...(delivery ? { channel: delivery.channel } : { campaignVersion: campaign.version, spec, kind, acceptPrivateDraft: true, privateDraftAuthorization: consent }),
+      ...editable({ integrationMethod: 'browser', configurationFingerprint: runtime.fingerprint, actorId, specHash: hash(spec), ...(delivery ? { channel: delivery.channel } : { campaignVersion: campaign.version, spec, kind, acceptPrivateDraft: true, privateDraftAuthorization: consent }),
         ...(controlId ? { controlId, investmentAccepted: kind !== 'pause', preparedRefs: current.preparedRefs, remoteDraftRef: current.remoteRefs?.remoteDraftRef || current.preparedRefs?.remoteDraftRef,
           budgetConfirmation: { remainingMinor: current.budgetSnapshot?.remainingMinor, originalBudgetMinor: spec.budgetMinor, currency: spec.currency, startAt: spec.startAt, endAt: spec.endAt } } : {}), ...extra }) });
     if (controlId) await patch(store, 'social_deliveries', delivery.id, { controlIntent: { id: controlId, kind, actorId: extra.actorId || actorId, requestedAt: f.now() } });
@@ -163,6 +167,40 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
 }
 
 const cases = [
+  ['una sesión ya abierta observa flags persistidos antes del envío y en el siguiente comando firmado', async (store, t) => {
+    const f = await setup(store, t), operation = await f.operation(f.firstDelivery);
+    const inspect = f.remote.client.inspect, close = f.remote.client.close;
+    let changed = false, closingRuntime = null;
+    f.remote.client.inspect = async options => {
+      const result = await inspect(options);
+      if (!changed && options.payload.kind === 'connection') {
+        changed = true;
+        await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
+      }
+      return result;
+    };
+    f.remote.client.close = async options => { closingRuntime = options.runtime; return close(options); };
+    assert.equal((await f.turn()).errorCode, 'PUBLISHING_DISABLED');
+    assert.equal(f.remote.writes, 0);
+    assert.equal((await get(store, 'social_operations', operation.id)).sentAt, undefined);
+    assert.equal(closingRuntime.publishingEnabled, false);
+    assert.ok(closingRuntime.configurationVersion > 1);
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } });
+    assert.equal((await f.turn()).errorCode, null); assert.equal(f.remote.writes, 1);
+  }],
+  ['deshabilitar ambas opciones conserva lectura y pausa de gasto remoto sin habilitar envíos nuevos', async (store, t) => {
+    const f = await setup(store, t, { mode: 'paid' }), object = await f.seedPaid('active');
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false, browserEnabled: false } });
+    const operation = await f.control('pause');
+    assert.equal((await f.turn()).errorCode, null); assert.equal(object.state, 'paused');
+    assert.equal((await get(store, 'social_operations', operation.id)).state, 'confirmed');
+    const writes = f.remote.writes;
+    await f.patch('social_deliveries', f.firstDelivery.id, { stateReadRequestedAt: f.now(), lastStateReadAt: null });
+    assert.equal((await f.sync()).errorCode, null); assert.equal(f.remote.writes, writes);
+    const before = f.remote.writes;
+    await f.control('resume');
+    assert.equal((await f.turn()).processed, 0); assert.equal(f.remote.writes, before);
+  }],
   ['reclama sólo UUID ejecutables, conserva locks/colas ajenas y no cambia finanzas', async (store, t) => {
     const f = await setup(store, t); await f.operation(f.firstDelivery);
     const untouched = ['import:worker-contract', `social:delivery:${randomUUID()}`, `social:browser-lock:${randomUUID()}`, `social:browser:lock:${randomUUID()}`, 'social:browser:delivery:not-a-uuid', `social:browser:other:${randomUUID()}`];
@@ -186,9 +224,9 @@ const cases = [
   ['agenda futura y flags/hold no generan spin ni consumen intenciones', async (store, t) => {
     const f = await setup(store, t); f.spec.publishAt = f.at(300000); await f.refreshSpec(); const operation = await f.operation(f.firstDelivery);
     assert.equal((await f.turn()).processed, 0); assert.equal((await f.turn()).hasMore, false); assert.equal(f.remote.writes, 0);
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false'; assert.equal((await f.turn({ now: f.at(301000) })).processed, 0);
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } }); assert.equal((await f.turn({ now: f.at(301000) })).processed, 0);
     assert.equal((await get(store, 'social_operations', operation.id)).state, 'prepared');
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'true'; await f.patch('social_campaigns', f.campaignId, { restore_hold: true });
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } }); await f.patch('social_campaigns', f.campaignId, { restore_hold: true });
     assert.equal((await f.turn()).hasMore, false); await f.patch('social_campaigns', f.campaignId, { restore_hold: false });
     assert.equal((await f.turn()).errorCode, null); assert.equal(f.remote.writes, 1);
   }],
@@ -250,7 +288,7 @@ const cases = [
       await store.db.run(`UPDATE ${store.t('social_revisions')} SET data='{}' WHERE campaign_id=?`, [f.campaignId]);
       await f.patch('social_connections', f.connection.id, { identities: { userId: ids.userId, adAccountId: ids.adAccountId } });
       await store.db.run(`UPDATE ${store.t('social_connections')} SET state=? WHERE id=?`, [state, f.connection.id]);
-      await f.patch('social_campaigns', f.campaignId, { restore_hold: true }); f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+      await f.patch('social_campaigns', f.campaignId, { restore_hold: true }); await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
       const operation = await f.control('pause', { cancelAfterPause: true });
       assert.equal((await f.turn()).errorCode, null); assert.equal(object.state, 'paused');
       const delivery = await get(store, 'social_deliveries', f.firstDelivery.id);
@@ -327,13 +365,14 @@ const cases = [
     const prepare = await f.operation(null, 'prepare', { spec: partial, specHash: hash(partial) }); assert.equal((await f.turn()).errorCode, null);
     let campaign = await get(store, 'social_campaigns', f.campaignId); const ref = campaign.preflight.remoteDraftRef, authorization = campaign.preflight.privateDraftAuthorization;
     assert.equal(f.remote.drafts, 1); assert.equal((await get(store, 'social_operations', prepare.id)).state, 'confirmed'); assert.equal(campaign.version, 2);
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     await f.operation(null, 'targeting', { remoteDraftRef: ref, query: { kind: 'location', q: 'Bogotá' } }); assert.equal((await f.turn()).errorCode, null);
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'true';
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } });
     campaign = await get(store, 'social_campaigns', f.campaignId); assert.deepEqual(campaign.preflight.candidates, [city()]); assert.deepEqual(campaign.preflight.privateDraftAuthorization, authorization);
     await f.operation(null, 'validate', { remoteDraftRef: ref }); assert.equal((await f.turn()).errorCode, null);
     campaign = await get(store, 'social_campaigns', f.campaignId); assert.equal(campaign.preflight.mediaEvidence.sha256, f.assetHash); assert.equal(campaign.preflight.adapterVersion, 'meta-ui-v2');
-    await insertRow(store, 'social_revisions', { campaign_id: f.campaignId, revision: 1, spec_hash: hash(f.spec), approved_at: f.base, actor_id: f.approverId, data: JSON.stringify({ spec: f.spec, rightsAccepted: true, forecast: { specHash: hash(f.spec) } }) });
+    const runtime = await loadSocialRuntime(store, { env: f.env });
+    await insertRow(store, 'social_revisions', { campaign_id: f.campaignId, revision: 1, spec_hash: hash(f.spec), approved_at: f.base, actor_id: f.approverId, data: JSON.stringify({ spec: f.spec, configurationFingerprint: runtime.fingerprint, rightsAccepted: true, forecast: { specHash: hash(f.spec) } }) });
     await store.db.run(`UPDATE ${store.t('social_campaigns')} SET state='publishing' WHERE id=?`, [f.campaignId]);
     const delivery = await f.delivery(); await f.operation(delivery, 'prepare-paid', { remoteDraftRef: ref, mediaEvidence: campaign.preflight.mediaEvidence });
     assert.equal((await f.turn()).errorCode, null); const adopted = await get(store, 'social_deliveries', delivery.id);
@@ -437,7 +476,7 @@ const cases = [
     const f = await setup(store, t); let foreign;
     await assert.rejects(() => withBrowserSession(store, f.connection.id, { owner: 'contract-cas', env: f.env, client: f.remote.client, now: f.base }, async session => {
       await session.client.open({ payload: { purpose: 'worker' } });
-      await saveCredentials(store, f.connection.id, { storageState: { ...cookieState, cookies: cookieState.cookies.map(cookie => ({ ...cookie, value: 'ROTATED-SESSION' })) } }, { env: f.env, expectedVersion: session.credentialVersion });
+      await saveCredentials(store, f.connection.id, { storageState: { ...cookieState, cookies: cookieState.cookies.map(cookie => ({ ...cookie, value: 'ROTATED-SESSION' })) } }, { runtime: await loadSocialRuntime(store, { env: f.env }), expectedVersion: session.credentialVersion });
       foreign = await store.db.get(`SELECT * FROM ${store.t('social_credentials')} WHERE connection_id=?`, [f.connection.id]); return 'stale-cookie-export';
     }), { status: 409 });
     assert.deepEqual(await store.db.get(`SELECT * FROM ${store.t('social_credentials')} WHERE connection_id=?`, [f.connection.id]), foreign);
@@ -480,7 +519,7 @@ const cases = [
     let browserSettled = false, timer, accounting;
     const running = f.turn().finally(() => { browserSettled = true; }); await entered.promise;
     try {
-      accounting = runBusinessJobs(store, { now: f.base });
+      accounting = runBusinessJobs(store, { now: f.base, env: f.env });
       const normal = await Promise.race([accounting, new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('La prueba de aislamiento excedió su plazo de seguridad')), 30000); })]);
       assert.equal(browserSettled, false);
       assert.ok(normal.payroll.created > 0); assert.equal(f.remote.writes, 0); assert.equal(normal.social.hasMore, false);
@@ -495,7 +534,7 @@ const cases = [
   }],
   ['desconectar espera prueba de pausa perdida y conserva custodia hasta la lectura del worker separado', async (store, t) => {
     const f = await setup(store, t, { mode: 'paid' }); const remote = await f.seedPaid('active');
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false'; f.remote.loseResponse = true;
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } }); f.remote.loseResponse = true;
     const current = await getSocialConnection(store, f.connection.id), input = { version: current.version, requestId: randomUUID(), pauseAndDisconnect: true };
     const queued = await socialConnectionAction(store, current.id, 'disconnect', input, f.actorId, { env: f.env });
     assert.equal(queued.disconnectPending, true); assert.equal(queued.remoteSpendStopped, false); assert.equal(f.remote.pauses, 0);

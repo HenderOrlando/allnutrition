@@ -16,12 +16,12 @@ const baseQuery = { periodStart: '2026-10-01', periodEnd: '2026-10-31', windowSt
 const errorCode = code => error => error.errorCode === code;
 async function environment(t) {
   const root = await mkdtemp(join(tmpdir(), 'native-measurement-')), provider = await createSocialBrowserProvider(), controlKey = randomBytes(32);
-  const runtime = await createBrowserRuntime({ chromium, controlKey, mediaRoot: root, allowedOrigins: [provider.origin] });
+  const runtime = await createBrowserRuntime({ chromium, keyring: { read: async name => name === 'control' ? controlKey : assert.fail('Runner requested a non-control key') }, mediaRoot: root, allowedOrigins: [provider.origin] });
   const server = createServer((req, res) => { void runtime.handle(req, res); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await runtime.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await provider.close(); await rm(root, { recursive: true, force: true }); });
   const session = { connectionId: 'metrics-connection', sessionEpoch: 1, lease: { key: 'social:browser-lock:metrics-connection', token: randomBytes(24).toString('base64url'), leaseUntil: new Date(Date.now() + 120000).toISOString() } };
-  const client = createBrowserClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, controlKey }).forSession(session);
+  const client = createBrowserClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, controlKey, runtime: { configurationVersion: 1, browserEnabled: true, publishingEnabled: false } }).forSession(session);
   await client.open({ payload: { purpose: 'login' } });
   await client.input({ payload: { sequence: 1, input: { kind: 'type', text: 'admin@example.test' } } });
   await client.input({ payload: { sequence: 2, input: { kind: 'key', key: 'Tab' } } });

@@ -20,9 +20,9 @@ async function fixture(t, { mode = 'paid', channel = 'meta_ads', kind = 'image',
   t.after(async () => { await handle.close(); await rm(root, { recursive: true, force: true }); });
   const media = { handle, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), contentType: kind === 'image' ? 'image/jpeg' : 'video/mp4', kind, assetId: randomUUID(), key: 'unused-pinned-descriptor' };
   provider ||= createMetaPublishingProvider({ now: NOW }); provider.state.currency = currency;
-  const env = { APP_URL: 'https://nutrition.example.test', SOCIAL_MEDIA_SIGNING_KEY: Buffer.alloc(32, 7).toString('base64') };
+  const runtime = { appId: '42', appSecret: 'synthetic-secret', publicBaseUrl: 'https://nutrition.example.test', keys: { media: Buffer.alloc(32, 7) } };
   const connection = { id: randomUUID(), integrationMethod: 'api', identities, state: 'connected' };
-  const connector = createMetaApiConnector({ connection, credentials: { accessToken: 'synthetic-user', userId: '100', pageTokens: { 200: 'stale-do-not-use' } }, transport: { fetchImpl: provider.fetchImpl, appId: '42', appSecret: 'synthetic-secret', now: NOW, env } });
+  const connector = createMetaApiConnector({ connection, credentials: { accessToken: 'synthetic-user', userId: '100', pageTokens: { 200: 'stale-do-not-use' } }, runtime, transport: { fetchImpl: provider.fetchImpl, now: NOW } });
   const platforms = mode === 'paid' ? ['facebook', 'instagram'] : [channel];
   const positions = platforms.map(platform => `${platform}_${kind === 'video' ? 'reels' : 'feed'}`);
   const targeting = { geo_locations: { countries: ['CO'], location_types: ['home', 'recent'] }, age_min: 18, age_max: 65, publisher_platforms: platforms, facebook_positions: [kind === 'video' ? 'facebook_reels' : 'feed'], instagram_positions: [kind === 'video' ? 'reels' : 'stream'], targeting_automation: { advantage_audience: 0 } };
@@ -53,7 +53,7 @@ async function fixture(t, { mode = 'paid', channel = 'meta_ads', kind = 'image',
     for (let turnCount = 0; turnCount < 6; turnCount++) { const result = await turn(); if (result.operationComplete !== false) return result; }
     assert.fail('control did not finish');
   }
-  return { provider, connector, media, spec, operation, receipts, beforeSend, turn, prepare, control };
+  return { provider, connector, runtime, media, spec, operation, receipts, beforeSend, turn, prepare, control };
 }
 
 test('paid image COP: one paused campaign/set/ad, exact lifetime units; two independent pause/resume cycles', async t => {
@@ -294,7 +294,7 @@ test('paid advideos resumes only a durably confirmed chunk cursor; a lost chunk 
   const first = await f.turn();
   assert.equal(first.operationComplete, false); assert.deepEqual(first.progress, { offset: 50002, endOffset: 100004 });
   const restoredOperation = structuredClone(f.operation);
-  const restarted = createMetaApiConnector({ connection: { id: f.spec.connectionId, identities }, credentials: { accessToken: 'synthetic-user', userId: '100' }, transport: { appId: '42', appSecret: 'synthetic-secret', now: NOW, fetchImpl: f.provider.fetchImpl } });
+  const restarted = createMetaApiConnector({ connection: { id: f.spec.connectionId, identities }, credentials: { accessToken: 'synthetic-user', userId: '100' }, runtime: f.runtime, transport: { now: NOW, fetchImpl: f.provider.fetchImpl } });
   const resumed = await restarted.executeStep({ operation: restoredOperation, spec: f.spec, media: f.media, beforeSend: f.beforeSend });
   assert.equal(resumed.progress.offset, 100004); assert.equal(resumed.remoteRefs.uploadSessionId, original.uploadSessionId);
   f.operation.progress = resumed.progress;

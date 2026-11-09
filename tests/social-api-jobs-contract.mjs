@@ -16,6 +16,8 @@ import { processSocialApiTurn, prepareSocialApiJobs, queueSocialApiJobTx } from 
 import { deferSocialAccountTx, socialAccountNotBefore, socialAccountScope } from '../lib/business/social-schedule.mjs';
 import { saveCredentials } from '../lib/social/credentials.mjs';
 import { createMetaPublishingProvider } from './social-meta-provider.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
+import { loadSocialRuntime } from '../lib/social/config.mjs';
 
 const NOW = '2026-11-02T12:00:00.000Z';
 const later = (ms, origin = NOW) => new Date(Date.parse(origin) + ms).toISOString();
@@ -66,11 +68,12 @@ async function setup(store, t, { mode = 'organic', platforms = ['facebook'], kin
     storeFixtures.set(store, { root, env });
   }
   const { root, env: deploymentEnv } = storeFixtures.get(store), env = { ...deploymentEnv };
+  await configureSocialTestRuntime(store, { env });
   const actorId = randomUUID(), approverId = randomUUID(), connectionId = randomUUID(), assetId = randomUUID(), campaignId = randomUUID();
   for (const id of [actorId, approverId]) await insertRow(store, 'users', { id, email: `${id}@example.test`, password: 'unused-synthetic-password', active: 1 });
   await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: 'api', state: 'connected', ...editable({ name: 'Cuenta sintética', identities, currency: 'COP', timeZone: 'America/Bogota', sessionEpoch: 0, capabilities: { facebookPublish: true, instagramPublish: true, adsPublish: true, insights: true, whatsappAds: true } }) });
   const connection = await get(store, 'social_connections', connectionId);
-  await saveCredentials(store, connectionId, { accessToken: 'synthetic-user', userId: '100', pageTokens: { 200: 'synthetic-page-200' } }, { env });
+  await saveCredentials(store, connectionId, { accessToken: 'synthetic-user', userId: '100', pageTokens: { 200: 'synthetic-page-200' } }, { runtime: (await configureSocialTestRuntime(store, { env })).runtime });
   await mkdir(join(root, assetId), { mode: 0o700 });
   const key = `${assetId}/derivative.${kind === 'image' ? 'jpg' : 'mp4'}`;
   if (kind === 'image') await writeFile(join(root, key), await sharp({ create: { width: 540, height: 675, channels: 3, background: '#446688' } }).jpeg().toBuffer(), { mode: 0o600 });
@@ -82,7 +85,8 @@ async function setup(store, t, { mode = 'organic', platforms = ['facebook'], kin
   const { spec, specHash } = buildSocialSpec({ id: campaignId, state: 'draft', ...configuration }, { connection, asset, now: later(-60000) });
   await insertRow(store, 'social_campaigns', { id: campaignId, connection_id: connectionId, asset_id: assetId, name: spec.name, mode, objective: spec.objective, state: publishAt ? 'scheduled' : 'publishing', ...editable(configuration) });
   const forecast = { source: 'insufficient', algorithmVersion: 'social-history-v1', specHash, sampleIds: [], sampleCount: 0, metricRanges: {}, unavailableReasons: ['Fixture sin historial.'] };
-  await insertRow(store, 'social_revisions', { campaign_id: campaignId, revision: 1, spec_hash: specHash, approved_at: NOW, actor_id: approverId, data: JSON.stringify({ spec, forecast, rightsAccepted: true, acceptedWarnings: [], ...(mode === 'paid' ? { budgetConfirmation: { investmentAccepted: true, budgetMinor: spec.budgetMinor, currency: spec.currency, startAt: spec.startAt, endAt: spec.endAt } } : {}) }) });
+  const runtime = await loadSocialRuntime(store, { env });
+  await insertRow(store, 'social_revisions', { campaign_id: campaignId, revision: 1, spec_hash: specHash, approved_at: NOW, actor_id: approverId, data: JSON.stringify({ spec, configurationFingerprint: runtime.fingerprint, forecast, rightsAccepted: true, acceptedWarnings: [], ...(mode === 'paid' ? { budgetConfirmation: { investmentAccepted: true, budgetMinor: spec.budgetMinor, currency: spec.currency, startAt: spec.startAt, endAt: spec.endAt } } : {}) }) });
   if (!remote) {
     const clock = { now: Date.parse(NOW) };
     remote = createMetaPublishingProvider({ now: () => clock.now });
@@ -90,7 +94,7 @@ async function setup(store, t, { mode = 'organic', platforms = ['facebook'], kin
   }
   const providerClock = providerClocks.get(remote);
   let logicalNow = Date.parse(NOW) - 1000;
-  const f = { store, env, root, actorId, approverId, connectionId, connection, campaignId, assetId, assetHash, spec, specHash, remote, deliveries: [], transport: { fetchImpl: await providerHttp(remote, t), appId: '42', appSecret: 'synthetic-secret' } };
+  const f = { store, env, root, actorId, approverId, connectionId, connection, campaignId, assetId, assetHash, spec, specHash, remote, deliveries: [], transport: { fetchImpl: await providerHttp(remote, t) } };
   f.delivery = async channel => {
     const id = randomUUID(); await insertRow(store, 'social_deliveries', { id, campaign_id: campaignId, revision: 1, channel, state: publishAt ? 'scheduled' : 'queued', remote_id: null, next_sync_at: null, ...editable({ integrationMethod: 'api', remoteRefs: {} }) });
     f.deliveries.push(id); return get(store, 'social_deliveries', id);
@@ -121,6 +125,66 @@ const pathOf = input => new URL(input).pathname.replace(/^\//, '').replace(/^v26
 const writing = request => request.method === 'POST';
 
 const cases = [
+  ['el consumidor publica con custodia persistida y sin variables de integración', async (store, t) => {
+    const f = await setup(store, t);
+    for (const key of ['APP_URL', 'META_APP_ID', 'META_APP_SECRET', 'META_LOGIN_CONFIG_ID', 'META_GRAPH_VERSION', 'SOCIAL_PUBLISHING_ENABLED', 'SOCIAL_BROWSER_ENABLED', 'SOCIAL_TOKEN_ENCRYPTION_KEY', 'SOCIAL_MEDIA_SIGNING_KEY', 'SOCIAL_BROWSER_CONTROL_KEY', 'SOCIAL_BROWSER_SESSION_KEY']) delete f.env[key];
+    await f.until(async () => (await get(store, 'social_deliveries', f.deliveries[0])).state === 'published');
+    assert.equal(f.remote.requests.filter(request => writing(request) && request.path === '200/feed').length, 1);
+  }],
+  ['el mismo consumidor relee la habilitación bajo reserva antes de enviar y continúa al habilitar', async (store, t) => {
+    const f = await setup(store, t), nativeFetch = f.transport.fetchImpl;
+    let changed = false;
+    f.transport.fetchImpl = async (input, init) => {
+      if (!changed && pathOf(input) === 'debug_token') {
+        changed = true;
+        await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
+      }
+      return nativeFetch(input, init);
+    };
+    assert.equal((await f.turn()).errorCode, 'PUBLISHING_DISABLED');
+    assert.equal(f.remote.requests.filter(writing).length, 0);
+    assert.equal((await operations(f))[0].sentAt, undefined);
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } });
+    await f.until(async () => (await get(store, 'social_deliveries', f.deliveries[0])).state === 'published');
+    assert.equal(f.remote.requests.filter(request => writing(request) && request.path === '200/feed').length, 1);
+  }],
+  ['un secreto cambiado durante validación invalida aprobación no enviada sin usar overrides de transporte', async (store, t) => {
+    const f = await setup(store, t), nativeFetch = f.transport.fetchImpl;
+    let changed = false;
+    f.transport.appId = '999'; f.transport.appSecret = 'UNTRUSTED-TRANSPORT-OVERRIDE';
+    f.transport.fetchImpl = async (input, init) => {
+      const response = await nativeFetch(input, init);
+      if (!changed && pathOf(input) === 'me') {
+        changed = true;
+        await configureSocialTestRuntime(store, { env: f.env, settings: { appSecret: 'ROTATED-SYNTHETIC-SECRET' } });
+      }
+      return response;
+    };
+    const approved = await store.db.get(`SELECT data FROM ${store.t('social_revisions')} WHERE campaign_id=?`, [f.campaignId]);
+    assert.equal((await f.turn()).errorCode, 'CONFIGURATION_CHANGED');
+    assert.equal(f.remote.requests.filter(writing).length, 0);
+    assert.deepEqual(await store.db.get(`SELECT data FROM ${store.t('social_revisions')} WHERE campaign_id=?`, [f.campaignId]), approved);
+    assert.equal((await get(store, 'social_connections', f.connectionId)).revalidationRequired, true);
+  }],
+  ['deshabilitar después de autorizar conserva recibo y referencias del envío en curso', async (store, t) => {
+    const f = await setup(store, t), nativeFetch = f.transport.fetchImpl;
+    let changed = false;
+    f.transport.fetchImpl = async (input, init) => {
+      const response = await nativeFetch(input, init);
+      if (!changed && init.method === 'POST') {
+        changed = true;
+        await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
+      }
+      return response;
+    };
+    assert.equal((await f.turn()).errorCode, null);
+    const operation = (await operations(f)).find(value => value.step === 'upload_photo');
+    assert.equal(operation.state, 'confirmed'); assert.equal(operation.receipts.length, 1);
+    assert.ok((await get(store, 'social_deliveries', f.deliveries[0])).remoteRefs.photoId);
+    const writes = f.remote.requests.filter(writing).length;
+    assert.equal((await f.turn()).processed, 0);
+    assert.equal(f.remote.requests.filter(writing).length, writes);
+  }],
   ['crea una sola intención inicial bajo lease, sólo reclama sus UUID y no altera contabilidad', async (store, t) => {
     const f = await setup(store, t), untouched = [`social:browser:delivery:${randomUUID()}`, `social:browser-lock:${randomUUID()}`, 'social:delivery:not-a-uuid', 'import:worker-contract'];
     for (const key of untouched) await store.transaction(tx => queueJobTx(tx, key, { marker: key }, { now: NOW }));
@@ -142,7 +206,7 @@ const cases = [
   }],
   ['flags y restore hold detienen efectos sin hasMore, pero lectura de restaurado sigue disponible', async (store, t) => {
     const f = await setup(store, t, { mode: 'paid' }); await f.ready();
-    await patch(store, 'social_campaigns', f.campaignId, { restore_hold: true }); f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    await patch(store, 'social_campaigns', f.campaignId, { restore_hold: true }); await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     const writes = f.remote.requests.filter(writing).length;
     await f.control('activate'); assert.equal((await f.turn()).hasMore, false);
     const result = await f.sync(); assert.equal(result.errorCode, null); assert.equal(f.remote.requests.filter(writing).length, writes);
@@ -191,14 +255,14 @@ const cases = [
     const activation = await publicControl('activate');
     await f.until(async () => (await get(store, 'social_operations', activation.id)).state === 'confirmed');
     for (let cycle = 0; cycle < 2; cycle++) {
-      f.env.SOCIAL_PUBLISHING_ENABLED = 'false'; await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.approverId]);
+      await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } }); await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.approverId]);
       await patch(store, 'social_campaigns', f.campaignId, { restore_hold: true }); await rm(join(f.root, f.assetId, 'derivative.jpg'));
       await store.db.run(`UPDATE ${store.t('social_connections')} SET state='reconnect_required' WHERE id=?`, [f.connection.id]);
       const pause = await publicControl('pause'); assert.equal((await f.turn()).errorCode, null); assert.equal((await get(store, 'social_operations', pause.id)).state, 'confirmed');
       assert.equal((await get(store, 'social_deliveries', f.deliveries[0])).state, 'paused');
       // A new complete file is revalidated before any subsequent resumption.
       const image = await sharp({ create: { width: 540, height: 675, channels: 3, background: '#446688' } }).jpeg().toBuffer(); await writeFile(join(f.root, f.assetId, 'derivative.jpg'), image);
-      f.env.SOCIAL_PUBLISHING_ENABLED = 'true'; await store.db.run(`UPDATE ${store.t('users')} SET active=1 WHERE id=?`, [f.approverId]); await patch(store, 'social_campaigns', f.campaignId, { restore_hold: false });
+      await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } }); await store.db.run(`UPDATE ${store.t('users')} SET active=1 WHERE id=?`, [f.approverId]); await patch(store, 'social_campaigns', f.campaignId, { restore_hold: false });
       await store.db.run(`UPDATE ${store.t('social_connections')} SET state='connected' WHERE id=?`, [f.connection.id]);
       const resume = await publicControl('resume'); await f.until(async () => (await get(store, 'social_operations', resume.id)).state === 'confirmed');
       const delivery = await get(store, 'social_deliveries', f.deliveries[0]); assert.equal(delivery.state, 'active'); assert.equal(delivery.budgetSnapshot.budgetMinor, 5000000); assert.equal(delivery.budgetSnapshot.endAt, f.spec.endAt);
@@ -337,7 +401,7 @@ const cases = [
     const f = await setup(store, t, { mode: 'paid' }); const delivery = await f.ready(), activation = await f.control('activate');
     await f.until(async () => (await get(store, 'social_operations', activation.id)).state === 'confirmed');
     await patch(store, 'social_connections', f.connectionId, { identities: { userId: '100', adAccountId: 'act_400' }, capabilities: {} });
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     f.remote.state.hidePages = true; f.remote.state.accountStatus = 2; f.remote.state.permissions = ['ads_management'];
     const cancellation = await f.control('pause');
     await patch(store, 'social_operations', cancellation.id, { cancelAfterPause: true });
@@ -356,7 +420,7 @@ const cases = [
     assert.equal([...f.remote.objects.values()].filter(object => object.type === 'media').length, 1);
   }],
   ['preparar trabajo con publicación deshabilitada no crea intención ni considera browser como trabajo propio', async (store, t) => {
-    const f = await setup(store, t); f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    const f = await setup(store, t); await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     await store.transaction(tx => queueJobTx(tx, `social:browser:delivery:${randomUUID()}`, { kind: 'delivery' }, { now: NOW }));
     const result = await prepareSocialApiJobs(store, { now: NOW, env: f.env });
     assert.deepEqual(result, { queued: 0, hasMore: false }); assert.equal((await operations(f)).length, 0); assert.equal((await f.turn()).processed, 0);
@@ -440,7 +504,7 @@ const cases = [
     };
     await f.until(async () => (await get(store, 'social_deliveries', f.deliveries[0])).state === 'uncertain');
     await patch(store, 'social_campaigns', f.campaignId, { restore_hold: true });
-    await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.approverId]); f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.approverId]); await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     const campaign = await getSocialCampaign(store, f.campaignId), operation = (await operations(f)).find(value => value.step === 'publish');
     assert.equal([...f.remote.objects.values()].filter(value => value.type === 'media').length, 0);
     const input = { requestId: randomUUID(), version: campaign.version, deliveryId: f.deliveries[0], operationId: operation.id, specHash: f.specHash, confirmAbsence: true, acceptDuplicateRisk: true, reason: 'Ausencia comprobada por operador; reconoce riesgo residual.' };
@@ -453,7 +517,7 @@ const cases = [
     assert.equal(prepared.resolution.previousActorId, f.approverId); assert.equal(prepared.resolution.acceptDuplicateRisk, true);
     assert.equal((await f.turn()).processed, 0);
     assert.equal(f.remote.requests.filter(request => writing(request) && request.path === '300/media_publish').length, 0);
-    const held = await getSocialCampaign(store, f.campaignId); f.env.SOCIAL_PUBLISHING_ENABLED = 'true';
+    const held = await getSocialCampaign(store, f.campaignId); await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } });
     await socialCampaignAction(store, f.campaignId, 'resume-restored', { requestId: randomUUID(), version: held.version, specHash: f.specHash, rightsAccepted: true, acceptedWarnings: [], acceptDuplicateRisk: true }, f.actorId, { ...options, now: f.now() });
     await f.until(async () => (await get(store, 'social_deliveries', f.deliveries[0])).state === 'published');
     assert.equal([...f.remote.objects.values()].filter(value => value.type === 'media').length, 1);
@@ -464,14 +528,14 @@ const cases = [
     const previous = await store.db.get(`SELECT * FROM ${store.t('social_revisions')} WHERE campaign_id=? AND revision=1`, [f.campaignId]);
     await patch(store, 'social_campaigns', f.campaignId, { restore_hold: true });
     await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.approverId]);
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     const held = await getSocialCampaign(store, f.campaignId), before = f.remote.requests.filter(writing).length;
     await socialCampaignAction(store, f.campaignId, 'resume-restored', { requestId: randomUUID(), version: held.version, specHash: f.specHash, rightsAccepted: true, acceptedWarnings: [], investmentAccepted: true, remainingBudgetMinor: delivery.budgetSnapshot.remainingMinor }, f.actorId, { env: f.env, now: f.now(), transport: f.transport });
     await f.turn();
     const restored = await getSocialCampaign(store, f.campaignId);
     assert.equal(restored.restore_hold, false); assert.equal(restored.restoredAuthorization.actorId, f.actorId);
     assert.equal(f.remote.requests.filter(writing).length, before); assert.equal(restored.deliveries[0].state, 'ready');
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'true';
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } });
     const activation = await socialCampaignAction(store, f.campaignId, 'activate-paid', { requestId: randomUUID(), version: restored.version, specHash: f.specHash, preparedRefs: delivery.preparedRefs, investmentAccepted: true, remainingBudgetMinor: delivery.budgetSnapshot.remainingMinor }, f.actorId, { env: f.env, now: f.now(), transport: f.transport });
     await f.until(async () => (await get(store, 'social_operations', activation.operationId)).state === 'confirmed');
     assert.equal((await get(store, 'social_deliveries', f.deliveries[0])).state, 'active');

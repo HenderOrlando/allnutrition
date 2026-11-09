@@ -5,6 +5,7 @@ import { buildSocialSpec } from '../lib/business/social-spec.mjs';
 import { buildSocialMetricQueries, normalizeSocialMeasurement, socialMetricRatios } from '../lib/business/social-metrics.mjs';
 import { buildSocialHistoricalForecast, selectSocialComparableSamples } from '../lib/business/social-analysis.mjs';
 import { socialMeasurementQueryKey } from '../lib/social/evidence.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
 
 export const CUT = '2026-11-02T12:00:00.000Z';
 export const START = '2026-10-26T05:00:00.000Z';
@@ -101,6 +102,8 @@ export function refreshRatios(measurement, objective = 'traffic') {
 // No credentials or provider client: these are already-confirmed, synthetic
 // remote facts. Every SQL mutation under test goes through the real domain.
 export async function createImprovementStoreFixture(store, { mode = 'paid', objective = mode === 'paid' ? 'traffic' : 'engagement', history = true } = {}) {
+  const env = {};
+  const { runtime } = await configureSocialTestRuntime(store, { env, settings: { publicBaseUrl: 'https://example.test', appId: '42', appSecret: 'SYNTHETIC-IMPROVEMENTS-SECRET', loginConfigId: '43' } });
   const actorId = randomUUID(), connectionId = randomUUID(), assetId = randomUUID();
   await insertRow(store, 'users', { id: actorId, email: `${actorId}@example.test`, password: 'unused-synthetic-password', active: 1 });
   const identities = { userId: '100', businessId: '500', pageId: '200', adAccountId: 'act_400' };
@@ -120,7 +123,7 @@ export async function createImprovementStoreFixture(store, { mode = 'paid', obje
   const delivery = improvementDelivery(spec, { id: randomUUID(), campaignId: campaign.id });
   await insertRow(store, 'social_deliveries', { id: delivery.id, campaign_id: campaign.id, revision: 1, channel: delivery.channel, state: delivery.state, remote_id: delivery.remoteId, next_sync_at: null, ...editable(delivery) });
   await store.db.run(`UPDATE ${store.t('social_campaigns')} SET state=? WHERE id=?`, [mode === 'paid' ? 'completed' : 'published', campaign.id]);
-  const f = { store, actorId, connectionId, assetId, campaignId: campaign.id, deliveryId: delivery.id, spec, forecastId, forecast, campaign, delivery };
+  const f = { store, env, runtime, actorId, connectionId, assetId, campaignId: campaign.id, deliveryId: delivery.id, spec, forecastId, forecast, campaign, delivery };
   f.addMeasurement = async (options = {}) => {
     const measurement = improvementMeasurement(spec, delivery, { id: randomUUID(), ...options });
     await insertRow(store, 'social_measurements', { id: measurement.id, delivery_id: delivery.id, query_key: socialMeasurementQueryKey(measurement), fetched_at: measurement.fetchedAt, payload_hash: measurement.payloadHash, data: JSON.stringify(measurementPayload(measurement)) });

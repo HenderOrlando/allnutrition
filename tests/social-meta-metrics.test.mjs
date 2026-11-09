@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createMetaApiConnector, MetaApiError } from '../lib/social/meta.mjs';
 import { createMetaMetricsProvider } from './social-meta-metrics-provider.mjs';
 import { hash } from '../lib/business/commands.mjs';
+import { runtimeFromTestEnv } from './social-runtime-fixture.mjs';
 
 const identities = { userId: '100', businessId: '500', pageId: '200', instagramId: '300', adAccountId: 'act_400' };
 const query = (dimension = 'aggregate', organic = false) => ({ periodStart: '2026-11-01', periodEnd: '2026-11-02', windowStart: '2026-11-01T05:00:00.000Z', windowEnd: '2026-11-03T05:00:00.000Z', timeZone: 'America/Bogota', dimension, scope: organic ? 'organic' : 'paid', periodType: organic ? 'lifetime' : 'range', window: 'cumulative' });
@@ -11,7 +12,8 @@ const delivery = { id: 'local-delivery', channel: 'meta_ads', remoteId: '902', r
 async function fixture(t, selectedIdentities = identities) {
   const provider = await createMetaMetricsProvider();
   t.after(() => provider.close());
-  const api = createMetaApiConnector({ connection: { integrationMethod: 'api', identities: selectedIdentities }, credentials: { accessToken: 'SYNTHETIC-PRIVATE-TOKEN-CANARY', userId: '100' }, transport: { appId: '42', appSecret: 'SYNTHETIC-SECRET-CANARY', fetchImpl: provider.fetchImpl, now: provider.now } });
+  const runtime = runtimeFromTestEnv({}, { appId: '42', appSecret: 'SYNTHETIC-SECRET-CANARY' });
+  const api = createMetaApiConnector({ connection: { integrationMethod: 'api', identities: selectedIdentities }, credentials: { accessToken: 'SYNTHETIC-PRIVATE-TOKEN-CANARY', userId: '100' }, runtime, transport: { fetchImpl: provider.fetchImpl, now: provider.now } });
   return { ...provider, api, measure: (overrides = {}) => api.fetchMeasurements({ delivery, spec: spec(), query: query(), ...overrides }) };
 }
 function sanitized(kind) {

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -13,13 +13,14 @@ import { createBrowserClient, browserSignature } from '../lib/social/browser-cli
 import { hash } from '../lib/business/commands.mjs';
 import { createMetaBrowserConnector } from '../lib/social/meta-browser.mjs';
 import { createSocialBrowserProvider } from './social-browser-provider.mjs';
+import { createIntegrationKeyring } from '../lib/integrations/keyring.mjs';
 
 const identities = Object.freeze({ userId: '101', businessId: '202', pageId: '303', instagramId: '404', adAccountId: '505' });
 const hasCode = expected => error => error.errorCode === expected;
 function session(connectionId = 'connection-1', epoch = 0) {
   return { connectionId, sessionEpoch: epoch, lease: { key: `social:browser-lock:${connectionId}`, token: randomBytes(24).toString('base64url'), leaseUntil: new Date(Date.now() + 120000).toISOString() } };
 }
-async function environment(t, { maxContexts = 2, now = Date.now } = {}) {
+async function environment(t, { maxContexts = 2, now = Date.now, publishingEnabled = true, browserEnabled = true } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'social-browser-')), provider = await createSocialBrowserProvider(), controlKey = randomBytes(32);
   const bytes = await sharp({ create: { width: 640, height: 640, channels: 3, background: '#c44122' } }).jpeg().toBuffer();
   const assetId = randomUUID();
@@ -27,17 +28,19 @@ async function environment(t, { maxContexts = 2, now = Date.now } = {}) {
   await writeFile(join(root, assetId, 'derivative.jpg'), bytes);
   const media = { assetId, key: `${assetId}/derivative.jpg`, sha256: createHash('sha256').update(bytes).digest('hex') };
   let runtime, server, url;
+  let configuration = { configurationVersion: 1, publishingEnabled, browserEnabled };
+  const makeClient = () => createBrowserClient({ baseUrl: url, controlKey, runtime: configuration });
   async function start() {
-    runtime = await createBrowserRuntime({ chromium, controlKey, mediaRoot: root, allowedOrigins: [provider.origin], maxContexts, now });
+    runtime = await createBrowserRuntime({ chromium, keyring: { read: async name => name === 'control' ? controlKey : assert.fail('Runner requested a non-control key') }, mediaRoot: root, allowedOrigins: [provider.origin], maxContexts, now });
     server = createServer((req, res) => { void runtime.handle(req, res); });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     url = `http://127.0.0.1:${server.address().port}`;
-    return createBrowserClient({ baseUrl: url, controlKey });
+    return makeClient();
   }
   async function stop() { await runtime?.close(); if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } }
   t.after(async () => { await stop(); await provider.close(); await rm(root, { recursive: true, force: true }); });
   const client = await start();
-  return { provider, client, media, root, controlKey, get url() { return url; }, async restart() { await stop(); return start(); } };
+  return { provider, client, media, root, controlKey, get configuration() { return configuration; }, get url() { return url; }, configure(changes) { configuration = { ...configuration, ...changes, configurationVersion: configuration.configurationVersion + 1 }; return makeClient(); }, async restart() { await stop(); return start(); } };
 }
 async function login(client, boundSession, { challenge = false } = {}) {
   const bound = client.forSession(boundSession);
@@ -107,7 +110,7 @@ test('login asistido, desafío, sesión reutilizable y expiración real de cooki
 
 test('HMAC inválido, nonce repetido, desfase y límites no ejecutan comandos', async t => {
   const env = await environment(t), control = session();
-  const body = JSON.stringify({ command: 'open', ...control, payload: { purpose: 'login' } });
+  const body = JSON.stringify({ command: 'open', ...env.configuration, ...control, payload: { purpose: 'login' } });
   const time = String(Date.now()), nonce = randomBytes(32).toString('base64url');
   const headers = { 'content-type': 'application/json', 'x-social-time': time, 'x-social-nonce': nonce, 'x-social-signature': browserSignature(env.controlKey, 'POST', '/control', time, nonce, body) };
   const send = headers => fetch(`${env.url}/control`, { method: 'POST', headers, body });
@@ -116,13 +119,85 @@ test('HMAC inválido, nonce repetido, desfase y límites no ejecutan comandos', 
   assert.equal((await send(headers)).status, 401);
   assert.equal((await send({ ...headers, 'x-social-time': String(Date.now() - 31000), 'x-social-nonce': randomBytes(32).toString('base64url') })).status, 401);
   assert.equal((await fetch(`${env.url}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{broken-json' })).status, 401);
-  assert.deepEqual(await (await fetch(`${env.url}/health`)).json(), { available: true });
+  assert.deepEqual(await (await fetch(`${env.url}/health`)).json(), { alive: true, available: true });
   assert.equal((await fetch(`${env.url}/evaluate`, { method: 'POST', body: 'alert(1)' })).status, 404);
   await assert.rejects(env.client.forSession(control).input({ payload: { sequence: 1, input: { kind: 'key', key: 'Control+L' } } }), hasCode('AUTH_FAILED'));
   await assert.rejects(env.client.forSession(control).input({ payload: { sequence: 1, input: { kind: 'click', x: 1280, y: 0 } } }), hasCode('AUTH_FAILED'));
   const large = JSON.stringify({ command: 'input', ...control, payload: { sequence: 1, input: { kind: 'type', text: 'x'.repeat(4096) } } }), largeNonce = randomBytes(32).toString('base64url'), largeTime = String(Date.now());
   const limited = await fetch(`${env.url}/control`, { method: 'POST', body: large, headers: { 'content-type': 'application/json', 'x-social-time': largeTime, 'x-social-nonce': largeNonce, 'x-social-signature': browserSignature(env.controlKey, 'POST', '/control', largeTime, largeNonce, large) } });
   assert.equal(limited.status, 401);
+});
+
+test('cliente firma configuración explícita inmutable y conserva runtime en forSession', async () => {
+  const controlKey = randomBytes(32), requests = [];
+  const configuration = { configurationVersion: 4, publishingEnabled: true, browserEnabled: true };
+  const client = createBrowserClient({ baseUrl: 'http://runner.test', controlKey, runtime: configuration, fetchImpl: async (url, options) => {
+    const headers = options.headers;
+    assert.equal(headers['x-social-signature'], browserSignature(controlKey, 'POST', '/control', headers['x-social-time'], headers['x-social-nonce'], options.body));
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ status: 'ok' }), { headers: { 'content-type': 'application/json' } });
+  } });
+  configuration.browserEnabled = false;
+  const bound = client.forSession(session());
+  await bound.open({ payload: { purpose: 'login' } });
+  assert.deepEqual(Object.fromEntries(['configurationVersion', 'publishingEnabled', 'browserEnabled'].map(key => [key, requests[0][key]])), { configurationVersion: 4, publishingEnabled: true, browserEnabled: true });
+  await bound.close({ runtime: { configurationVersion: 5, publishingEnabled: false, browserEnabled: false } });
+  assert.equal(requests[1].configurationVersion, 5);
+  assert.equal(requests[1].browserEnabled, false);
+  assert.equal(requests[1].publishingEnabled, false);
+  assert.throws(() => createBrowserClient({ baseUrl: 'http://runner.test', controlKey }));
+});
+
+test('runner sin clave vive, espera configuración y abre Chromium sólo tras habilitar sin reinicio', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'waiting-browser-')));
+  const provider = await createSocialBrowserProvider();
+  const keyring = createIntegrationKeyring({ directory: join(root, 'keys'), controlDirectory: join(root, 'control') });
+  let launches = 0;
+  const runtime = await createBrowserRuntime({
+    chromium: { launch: options => { launches++; return chromium.launch(options); } },
+    keyring: { read: name => { assert.equal(name, 'control'); return keyring.read(name); } },
+    mediaRoot: root, allowedOrigins: [provider.origin]
+  });
+  const server = createServer((req, res) => { void runtime.handle(req, res); });
+  t.after(async () => { await runtime.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await provider.close(); await rm(root, { recursive: true, force: true }); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const health = async () => { const response = await fetch(`${baseUrl}/health`); assert.equal(response.status, 200); return response.json(); };
+  assert.deepEqual(await health(), { alive: true, available: false });
+  assert.equal(launches, 0);
+  const control = session();
+  const waiting = createBrowserClient({ baseUrl, controlKey: randomBytes(32), runtime: { configurationVersion: 0, browserEnabled: false, publishingEnabled: false } }).forSession(control);
+  await assert.rejects(waiting.open({ payload: { purpose: 'login' } }), hasCode('AUTH_FAILED'));
+  const { control: controlKey } = await keyring.ensure();
+  assert.deepEqual(await health(), { alive: true, available: true });
+  assert.equal(launches, 0);
+  const disabled = createBrowserClient({ baseUrl, controlKey, runtime: { configurationVersion: 1, browserEnabled: false, publishingEnabled: false } }).forSession(control);
+  await assert.rejects(disabled.open({ payload: { purpose: 'login' } }), hasCode('PUBLISHING_DISABLED'));
+  assert.equal(launches, 0);
+  const enabled = createBrowserClient({ baseUrl, controlKey, runtime: { configurationVersion: 2, browserEnabled: true, publishingEnabled: true } });
+  const { bound: opened } = await login(enabled, control);
+  assert.equal(launches, 1);
+  const stored = (await opened.exportState()).data.storageState;
+  const spec = paidSpec({ assetId: 'fixture', sha256: 'f'.repeat(64) });
+  const publicationOff = createBrowserClient({ baseUrl, controlKey, runtime: { configurationVersion: 3, browserEnabled: true, publishingEnabled: false } }).forSession(control);
+  await assert.rejects(publicationOff.preflight({ payload: { operation: operation('prepare', spec, { acceptPrivateDraft: true }), spec, expectedIdentities: identities } }), hasCode('PUBLISHING_DISABLED'));
+  const gated = createBrowserClient({ baseUrl, controlKey, runtime: { configurationVersion: 4, browserEnabled: false, publishingEnabled: true } }).forSession(control);
+  assert.equal((await gated.inspect({ payload: { kind: 'connection', expectedIdentities: identities, purpose: 'read' } })).status, 'confirmed');
+  await assert.rejects(opened.inspect({ payload: { kind: 'connection' } }), hasCode('SPEC_MISMATCH'));
+  await assert.rejects(gated.inspect({ runtime: { configurationVersion: 4, browserEnabled: true, publishingEnabled: true }, payload: { kind: 'connection' } }), hasCode('SPEC_MISMATCH'));
+  await assert.rejects(gated.input({ payload: { sequence: 5, input: { kind: 'key', key: 'Tab' } } }), hasCode('PUBLISHING_DISABLED'));
+  await assert.rejects(gated.inspect({ payload: { kind: 'connection', expectedIdentities: identities, selectAssets: true } }), hasCode('PUBLISHING_DISABLED'));
+  await assert.rejects(gated.preflight({ payload: { operation: operation('prepare', spec, { acceptPrivateDraft: true }), spec, expectedIdentities: identities } }), hasCode('PUBLISHING_DISABLED'));
+  assert.equal(provider.objects.size, 0);
+  assert.equal(provider.state.publishCount, 0);
+  assert.equal(provider.state.activationCount, 0);
+  await gated.close();
+  await gated.open({ payload: { purpose: 'read', storageState: stored, expectedIdentities: identities } });
+  assert.equal((await gated.inspect({ payload: { kind: 'connection', expectedIdentities: identities, purpose: 'read' } })).status, 'confirmed');
+  assert.equal(launches, 1);
+  await rm(join(root, 'control', 'control.key'));
+  assert.deepEqual(await health(), { alive: true, available: false });
+  await assert.rejects(gated.inspect({ payload: { kind: 'connection' } }), hasCode('AUTH_FAILED'));
 });
 
 test('lease y epoch cercan contextos, entrada se deduplica y nunca desaloja dueño activo', async t => {
@@ -162,8 +237,6 @@ test('identidad ajena, idioma no admitido y redirects privados bloquean sin fall
 });
 
 test('draft independiente, cambios remotos bloqueados, activación, pausa y reanudación confirmadas', async t => {
-  const previous = process.env.SOCIAL_PUBLISHING_ENABLED; process.env.SOCIAL_PUBLISHING_ENABLED = 'true';
-  t.after(() => { if (previous === undefined) delete process.env.SOCIAL_PUBLISHING_ENABLED; else process.env.SOCIAL_PUBLISHING_ENABLED = previous; });
   const env = await environment(t), control = session(), spec = paidSpec(env.media);
   let { bound } = await login(env.client, control);
   const { ref, deliveryId, preparedRefs, mediaEvidence } = await prepare(bound, spec, env.media);
@@ -233,7 +306,7 @@ test('draft independiente, cambios remotos bloqueados, activación, pausa y rean
   const unavailable = (await bound.measure({ payload: { delivery, spec, expectedIdentities: identities, query: { ...metricQuery, dimension: 'country' } } })).data.snapshots[0];
   assert.equal(unavailable.coverage.status, 'unsupported'); assert.deepEqual(unavailable.values, {});
   const stateForPause = (await bound.exportState()).data.storageState;
-  await bound.close(); process.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+  await bound.close(); bound = env.configure({ publishingEnabled: false }).forSession(control);
   await bound.open({ payload: { purpose: 'worker', storageState: stateForPause } });
   remote.state = 'Active';
   assert.equal((await bound.execute({ payload: { operation: operation('pause:3', spec, { remoteId: delivery.remoteId }), delivery, spec: null, expectedIdentities: identities } })).data.state, 'paused');
@@ -241,8 +314,6 @@ test('draft independiente, cambios remotos bloqueados, activación, pausa y rean
 });
 
 test('ruta de medio, symlink y SHA adulterado no suben archivos ni publican', async t => {
-  const previous = process.env.SOCIAL_PUBLISHING_ENABLED; process.env.SOCIAL_PUBLISHING_ENABLED = 'true';
-  t.after(() => { if (previous === undefined) delete process.env.SOCIAL_PUBLISHING_ENABLED; else process.env.SOCIAL_PUBLISHING_ENABLED = previous; });
   const env = await environment(t), { bound } = await login(env.client, session()), spec = paidSpec(env.media);
   const prepared = await bound.preflight({ payload: { operation: operation('prepare', spec, { acceptPrivateDraft: true }), spec, expectedIdentities: identities } }), ref = prepared.data.remoteDraftRef;
   for (const key of ['../creative.jpg', '/etc/passwd', `${env.media.assetId}/original.jpg`]) await assert.rejects(bound.preflight({ payload: { operation: operation('validate', spec, { acceptPrivateDraft: true, remoteDraftRef: ref }), spec, media: { ...env.media, key }, expectedIdentities: identities } }), hasCode('SPEC_MISMATCH'));
@@ -256,8 +327,6 @@ test('ruta de medio, symlink y SHA adulterado no suben archivos ni publican', as
 });
 
 test('publicación aplicada con respuesta perdida queda incierta y lectura no repite publicación', async t => {
-  const previous = process.env.SOCIAL_PUBLISHING_ENABLED; process.env.SOCIAL_PUBLISHING_ENABLED = 'true';
-  t.after(() => { if (previous === undefined) delete process.env.SOCIAL_PUBLISHING_ENABLED; else process.env.SOCIAL_PUBLISHING_ENABLED = previous; });
   const env = await environment(t), control = session(), { bound } = await login(env.client, control);
   const spec = { ...paidSpec(env.media), mode: 'organic', platforms: ['facebook', 'instagram'], budgetMinor: null };
   const saved = (await bound.exportState()).data.storageState;
@@ -288,14 +357,8 @@ test('popup fuera del origen aislado se bloquea sin visitar el destino', async t
   assert.equal(visits, 0);
 });
 
-function enablePublishing(t) {
-  const previous = process.env.SOCIAL_PUBLISHING_ENABLED;
-  process.env.SOCIAL_PUBLISHING_ENABLED = 'true';
-  t.after(() => { if (previous === undefined) delete process.env.SOCIAL_PUBLISHING_ENABLED; else process.env.SOCIAL_PUBLISHING_ENABLED = previous; });
-}
 
 test('preflight parcial recuperable y vínculo standalone son lecturas sin crear otro borrador', async t => {
-  enablePublishing(t);
   const env = await environment(t), control = session(), { bound } = await login(env.client, control);
   const spec = { ...paidSpec(env.media), assetId: null, assetType: null, assetHash: null, budgetMinor: 0, startAt: null, endAt: null };
   const intention = operation('prepare', spec, { acceptPrivateDraft: true });
@@ -306,13 +369,14 @@ test('preflight parcial recuperable y vínculo standalone son lecturas sin crear
   const remote = [...env.provider.objects.values()][0];
   assert.equal(remote.name, `All Nutrition ${intention.id}`); assert.equal(remote.state, 'Draft');
   env.provider.state.loseSave = false;
-  const client = await env.restart(), connector = createMetaBrowserConnector({ client: client.forSession(control), connection: { id: control.connectionId, integrationMethod: 'browser', identities }, credentials: { storageState: stored } });
+  const client = await env.restart();
+  let connector = createMetaBrowserConnector({ client: client.forSession(control), connection: { id: control.connectionId, integrationMethod: 'browser', identities }, credentials: { storageState: stored } });
   const recovered = await connector.inspectDelivery({ delivery: null, operation: intention, spec });
   assert.equal(recovered.remoteRefs.remoteDraftRef, remote.id); assert.equal(recovered.evidence.remoteRead, true);
   const linked = await connector.verifyRemoteLink({ delivery: null, operation: intention, spec, remoteId: remote.id, acceptContentVerification: true });
   assert.equal(linked.state, 'ready'); assert.equal(linked.evidence.everActivated, false);
   await connector.disconnect();
-  process.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+  connector = createMetaBrowserConnector({ client: env.configure({ publishingEnabled: false }).forSession(control), connection: { id: control.connectionId, integrationMethod: 'browser', identities }, credentials: { storageState: stored } });
   const searched = await connector.preflight({ operation: operation('targeting', spec, { acceptPrivateDraft: true, remoteDraftRef: remote.id }), spec, query: { kind: 'location', q: 'Bogotá' } });
   assert.equal(searched.candidates[0].context.region, 'Bogotá D.C.');
   assert.equal(remote.config.budget, '0.00'); assert.equal(env.provider.objects.size, 1);
@@ -322,7 +386,6 @@ test('preflight parcial recuperable y vínculo standalone son lecturas sin crear
 });
 
 test('pérdida antes del marcador sólo permite vínculo humano de draft privado sin nombre', async t => {
-  enablePublishing(t);
   const env = await environment(t), control = session(), { bound } = await login(env.client, control);
   const spec = { ...paidSpec(env.media), assetId: null, assetType: null, assetHash: null, budgetMinor: 0, startAt: null, endAt: null }, intention = operation('prepare', spec, { acceptPrivateDraft: true });
   const stored = (await bound.exportState()).data.storageState;
@@ -343,7 +406,6 @@ test('pérdida antes del marcador sólo permite vínculo humano de draft privado
 });
 
 test('geografía observada conserva jerarquía independiente, radio e intereses; cambios bloquean adopción', async t => {
-  enablePublishing(t);
   const env = await environment(t), { bound } = await login(env.client, session()), initial = paidSpec(env.media);
   const draft = await bound.preflight({ payload: { operation: operation('prepare', initial, { acceptPrivateDraft: true }), spec: initial, expectedIdentities: identities } }), ref = draft.data.remoteDraftRef;
   async function candidates(kind, q) {
@@ -371,7 +433,6 @@ test('geografía observada conserva jerarquía independiente, radio e intereses;
 });
 
 test('cuatro objetivos, bienvenida WhatsApp y formato real permanecen en el mismo draft privado', async t => {
-  enablePublishing(t);
   const appKeys = ['META_APP_ID', 'META_APP_SECRET', 'META_LOGIN_CONFIG_ID'], previousKeys = Object.fromEntries(appKeys.map(key => [key, process.env[key]]));
   for (const key of appKeys) delete process.env[key];
   t.after(() => { for (const key of appKeys) if (previousKeys[key] === undefined) delete process.env[key]; else process.env[key] = previousKeys[key]; });
@@ -393,7 +454,6 @@ test('cuatro objetivos, bienvenida WhatsApp y formato real permanecen en el mism
 });
 
 test('activación perdida se reconcilia sin publicar de nuevo y no confunde paused con ready', async t => {
-  enablePublishing(t);
   const env = await environment(t), control = session(), { bound } = await login(env.client, control), spec = paidSpec(env.media);
   const prepared = await prepare(bound, spec, env.media), stored = (await bound.exportState()).data.storageState;
   const activate = operation('activate:lost-response', spec, { ...prepared, remoteDraftRef: prepared.ref, investmentAccepted: true, budgetConfirmation: budgetConfirmation(spec) });
@@ -415,11 +475,11 @@ test('activación perdida se reconcilia sin publicar de nuevo y no confunde paus
 });
 
 test('pausa mínima y exportación de sesión no dependen de Page, Instagram, pieza ni flag', async t => {
-  enablePublishing(t);
-  const env = await environment(t), control = session(), { bound } = await login(env.client, control), spec = paidSpec(env.media);
+  const env = await environment(t), control = session(), spec = paidSpec(env.media);
+  let { bound } = await login(env.client, control);
   const prepared = await prepare(bound, spec, env.media), stored = (await bound.exportState()).data.storageState;
   await bound.execute({ payload: { operation: operation('activate:initial', spec, { ...prepared, remoteDraftRef: prepared.ref, investmentAccepted: true, budgetConfirmation: budgetConfirmation(spec) }), spec, expectedIdentities: identities } });
-  await bound.close(); process.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+  await bound.close(); bound = env.configure({ publishingEnabled: false, browserEnabled: false }).forSession(control);
   await rm(join(env.root, env.media.key));
   env.provider.state.pageId = null; env.provider.state.instagramId = null;
   env.provider.state.omit = 'budget';
@@ -443,7 +503,6 @@ test('pausa mínima y exportación de sesión no dependen de Page, Instagram, pi
 });
 
 test('vínculo manual confirma canal, contenido y permalink por lectura sin SHA ficticio ni publicación', async t => {
-  enablePublishing(t);
   const env = await environment(t), control = session(), { bound } = await login(env.client, control);
   const spec = { ...paidSpec(env.media), mode: 'organic', platforms: ['facebook', 'instagram'], budgetMinor: 0 };
   const intention = operation('publish', spec, { channel: 'instagram' }), saved = (await bound.exportState()).data.storageState;
@@ -468,7 +527,6 @@ test('vínculo manual confirma canal, contenido y permalink por lectura sin SHA 
 });
 
 test('controles rechazan mejoras, recorte, IA y estructura externas sin activar; restante desconocido no autoriza resume', async t => {
-  enablePublishing(t);
   const env = await environment(t), { bound } = await login(env.client, session()), spec = paidSpec(env.media), prepared = await prepare(bound, spec, env.media);
   const remote = env.provider.objects.get(prepared.ref);
   const activate = () => ({ operation: operation('activate:exact', spec, { ...prepared, remoteDraftRef: prepared.ref, investmentAccepted: true, budgetConfirmation: budgetConfirmation(spec) }), spec, expectedIdentities: identities });
@@ -505,7 +563,6 @@ test('controles rechazan mejoras, recorte, IA y estructura externas sin activar;
 });
 
 test('pérdida del lease tras publicar conserva efecto incierto y pausa encuentra UUID sin remoteId', async t => {
-  enablePublishing(t);
   let clockOffset = 0;
   const env = await environment(t, { now: () => Date.now() + clockOffset }), control = session(), { bound } = await login(env.client, control), spec = paidSpec(env.media);
   const prepared = await prepare(bound, spec, env.media), saved = (await bound.exportState()).data.storageState;
@@ -522,7 +579,6 @@ test('pérdida del lease tras publicar conserva efecto incierto y pausa encuentr
 });
 
 test('pausa de draft privado queda pendiente y aliases de activación no generan publicación', async t => {
-  enablePublishing(t);
   const env = await environment(t), { bound } = await login(env.client, session()), spec = paidSpec(env.media), prepared = await prepare(bound, spec, env.media);
   const pending = await bound.execute({ payload: { operation: operation('pause:private-only', spec, { deliveryId: prepared.deliveryId, remoteDraftRef: prepared.ref }), spec: null, expectedIdentities: identities } });
   assert.equal(pending.status, 'pending'); assert.equal(pending.data.evidence.everActivated, false);
@@ -532,7 +588,6 @@ test('pausa de draft privado queda pendiente y aliases de activación no generan
 });
 
 test('Reel real por cada canal confirma medio, ID y permalink desde lista sin repetir el canal exitoso', async t => {
-  enablePublishing(t);
   const env = await environment(t), { bound } = await login(env.client, session());
   const assetId = randomUUID(), key = `${assetId}/derivative.mp4`, file = join(env.root, key);
   await mkdir(join(env.root, assetId));

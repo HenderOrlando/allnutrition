@@ -2,7 +2,7 @@ import './env.mjs';
 import { pathToFileURL } from 'node:url';
 import { openStore } from '../lib/db/index.mjs';
 import { verifySocialMediaFiles } from '../lib/business/social-media.mjs';
-import { backupSocialMedia, restoreSocialMedia, resetSocialAfterPhysicalRestore, requireSocialRestoreDisabled } from '../lib/social/media-backup.mjs';
+import { backupSocialMedia, restoreSocialMedia, resetSocialAfterPhysicalRestore } from '../lib/social/media-backup.mjs';
 
 export function parseSocialMediaBackupArgs(args) {
   const [command, directory, ...extra] = args;
@@ -14,7 +14,6 @@ export function parseSocialMediaBackupArgs(args) {
 
 export async function runSocialMediaBackupCLI(args = process.argv.slice(2), env = process.env) {
   const { command, directory } = parseSocialMediaBackupArgs(args);
-  if (['restore', 'reset-after-physical-restore'].includes(command)) requireSocialRestoreDisabled(env);
   const store = await openStore(env);
   try {
     const options = { env };

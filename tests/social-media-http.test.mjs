@@ -8,24 +8,24 @@ import { tmpdir } from 'node:os';
 import { createSocialMediaUrl, verifySocialMediaUrl, socialMediaResponse } from '../lib/social/media-http.mjs';
 
 const NOW = Date.parse('2030-01-01T14:00:00.000Z');
-const env = { APP_URL: 'https://social.example.test', SOCIAL_MEDIA_SIGNING_KEY: Buffer.alloc(32, 83).toString('base64') };
+const runtime = { publicBaseUrl: 'https://social.example.test', keys: { media: Buffer.alloc(32, 83) } };
 const asset = { id: '308c8e75-9609-48e2-b5f2-fecb2aab1947', state: 'ready', kind: 'image', sha256: '4'.repeat(64) };
 
 // Independent protocol fixture: its MAC is built from the documented fields,
 // not by the URL producer under test. Expired/overlong links retain a valid MAC.
 function signed(expires) {
-  const signature = createHmac('sha256', Buffer.from(env.SOCIAL_MEDIA_SIGNING_KEY, 'base64')).update(`${asset.id}\n${asset.sha256}\nderivative\n${expires}`).digest('hex');
-  return `${env.APP_URL}/api/social/media/${asset.id}?variant=derivative&expires=${expires}&signature=${signature}`;
+  const signature = createHmac('sha256', runtime.keys.media).update(`${asset.id}\n${asset.sha256}\nderivative\n${expires}`).digest('hex');
+  return `${runtime.publicBaseUrl}/api/social/media/${asset.id}?variant=derivative&expires=${expires}&signature=${signature}`;
 }
 
 test('signed derivative binds identity, hash, expiry and key; original or extra query never authorizes', () => {
-  const url = signed(NOW / 1000 + 60), check = (candidate, record = asset, at = NOW, settings = env) => verifySocialMediaUrl(record, candidate, { env: settings, now: at });
+  const url = signed(NOW / 1000 + 60), check = (candidate, record = asset, at = NOW, settings = runtime) => verifySocialMediaUrl(record, candidate, { runtime: settings, now: at });
   assert.equal(check(url), true);
   assert.equal(check(url, { ...asset, id: 'ab6bb49f-0b23-4b02-ab82-80e76936d1ed' }), false);
   assert.equal(check(url, { ...asset, sha256: '5'.repeat(64) }), false);
   assert.equal(check(url, { ...asset, state: 'missing_file' }), false);
   assert.equal(check(url, { ...asset, kind: 'video' }), false);
-  assert.equal(check(url, asset, NOW, { ...env, SOCIAL_MEDIA_SIGNING_KEY: Buffer.alloc(32, 84).toString('base64') }), false);
+  assert.equal(check(url, asset, NOW, { ...runtime, keys: { media: Buffer.alloc(32, 84) } }), false);
   assert.equal(check(url, asset, NOW, {}), false);
   assert.equal(check(url.replace('variant=derivative', 'variant=original')), false);
   assert.equal(check(`${url}&variant=derivative`), false);
@@ -38,12 +38,19 @@ test('signed derivative binds identity, hash, expiry and key; original or extra 
 });
 
 test('URL issuer accepts only ready images, bounded lifetime and an exact configured origin', () => {
-  const url = createSocialMediaUrl(asset, { env, now: NOW, expiresInSeconds: 90 });
-  assert.equal(verifySocialMediaUrl(asset, url, { env, now: NOW + 89000 }), true);
-  assert.equal(verifySocialMediaUrl(asset, url, { env, now: NOW + 90000 }), false);
-  for (const expiresInSeconds of [0, -1, 86401, 1.5]) assert.throws(() => createSocialMediaUrl(asset, { env, now: NOW, expiresInSeconds }), error => error.status === 400);
-  for (const record of [{ ...asset, state: 'processing' }, { ...asset, kind: 'video' }]) assert.throws(() => createSocialMediaUrl(record, { env, now: NOW }), error => error.status === 409);
-  for (const APP_URL of ['https://user:password@social.example.test', 'https://social.example.test/path', 'http://social.example.test', 'https://social.example.test?leak=1']) assert.throws(() => createSocialMediaUrl(asset, { env: { ...env, APP_URL }, now: NOW }), error => error.status === 409);
+  const url = createSocialMediaUrl(asset, { runtime, now: NOW, expiresInSeconds: 90 });
+  assert.equal(verifySocialMediaUrl(asset, url, { runtime, now: NOW + 89000 }), true);
+  assert.equal(verifySocialMediaUrl(asset, url, { runtime, now: NOW + 90000 }), false);
+  for (const expiresInSeconds of [0, -1, 86401, 1.5]) assert.throws(() => createSocialMediaUrl(asset, { runtime, now: NOW, expiresInSeconds }), error => error.status === 400);
+  for (const record of [{ ...asset, state: 'processing' }, { ...asset, kind: 'video' }]) assert.throws(() => createSocialMediaUrl(record, { runtime, now: NOW }), error => error.status === 409);
+  for (const publicBaseUrl of ['https://user:password@social.example.test', 'https://social.example.test/path', 'http://social.example.test', 'https://social.example.test?leak=1']) assert.throws(() => createSocialMediaUrl(asset, { runtime: { ...runtime, publicBaseUrl }, now: NOW }), error => error.status === 409);
+});
+
+test('previous media URLs remain valid after runtime option and app-secret changes', () => {
+  const url = createSocialMediaUrl(asset, { runtime, now: NOW });
+  const changed = { ...runtime, configurationVersion: 2, publicBaseUrl: 'https://changed.example.test', appSecret: 'changed-synthetic-secret', publishingEnabled: false, browserEnabled: false };
+  assert.equal(verifySocialMediaUrl(asset, url, { runtime: changed, now: NOW }), true);
+  assert.equal(new URL(createSocialMediaUrl(asset, { runtime: changed, now: NOW })).origin, changed.publicBaseUrl);
 });
 
 async function fileFixture(t, bytes = Buffer.from('0123456789abcdef')) {

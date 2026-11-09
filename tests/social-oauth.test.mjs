@@ -6,13 +6,18 @@ import { hash, insertRow, stamp, audit } from '../lib/business/commands.mjs';
 import { getSocialConnection } from '../lib/business/social.mjs';
 import { startSocialOAuth, consumeSocialOAuthState, completeSocialOAuth, createBrowserSocialConnection, getSocialConnections, socialConnectionAction, previewSocialConnectionDeletion, deauthorizeSocialMeta, verifyMetaSignedRequest } from '../lib/business/social-connections.mjs';
 import { loadCredentials, saveCredentials } from '../lib/social/credentials.mjs';
-import { META_PERMISSIONS } from '../lib/social/config.mjs';
+import { META_PERMISSIONS, loadSocialRuntime } from '../lib/social/config.mjs';
 import { queueJobTx } from '../lib/business/job-leases.mjs';
 import { socialConnection, socialTestEnv } from './social-contract.mjs';
 import { createBusinessBasics, businessOrderInput, fixtureActor } from './business-fixtures.mjs';
 import { recordExpense } from '../lib/business/expenses.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
 
-const envFor = () => ({ ...socialTestEnv(), APP_URL: 'https://admin.example.test', META_APP_ID: '901', META_APP_SECRET: 'SYNTHETIC-APP-SECRET', META_LOGIN_CONFIG_ID: '902' });
+async function envFor(store) {
+  const env = { ...socialTestEnv(), APP_URL: 'https://admin.example.test', META_APP_ID: '901', META_APP_SECRET: 'SYNTHETIC-APP-SECRET', META_LOGIN_CONFIG_ID: '902' };
+  await configureSocialTestRuntime(store, { env });
+  return env;
+}
 const admin = () => ({ user: { id: fixtureActor }, csrf: 'SYNTHETIC-CSRF', expires: Date.now() + 3600000 });
 async function withStore(fn) {
   const store = await openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' });
@@ -69,7 +74,7 @@ async function campaignGraph(store, connection, { state = 'queued', sent = false
 }
 
 test('OAuth guarda solo hash y consume una vez, ligado a actor, sesión y caducidad', () => withStore(async store => {
-  const env = envFor(), session = admin(), now = stamp();
+  const env = await envFor(store), session = admin(), now = stamp();
   const started = await startSocialOAuth(store, {}, session, { env, now });
   const url = new URL(started.authorizationUrl), state = url.searchParams.get('state');
   assert.equal(url.searchParams.get('response_type'), 'code');
@@ -80,19 +85,19 @@ test('OAuth guarda solo hash y consume una vez, ligado a actor, sesión y caduci
   assert.equal(row.state_hash, hash(state)); assert.equal(row.csrf_hash, hash(session.csrf));
   assert.equal(JSON.stringify(row).includes(state), false);
   assert.equal(Date.parse(row.expires_at) - Date.parse(now), 600000);
-  await assert.rejects(() => consumeSocialOAuthState(store, state, { ...session, user: { id: 'another-admin' } }), { status: 403 });
-  await assert.rejects(() => consumeSocialOAuthState(store, state, { ...session, csrf: 'another-session' }), { status: 403 });
-  await assert.rejects(() => consumeSocialOAuthState(store, '', session), { status: 403 });
-  await assert.rejects(() => consumeSocialOAuthState(store, state, session, { now: row.expires_at }), { status: 403 });
-  const simultaneous = await Promise.allSettled([consumeSocialOAuthState(store, state, session), consumeSocialOAuthState(store, state, session)]);
+  await assert.rejects(() => consumeSocialOAuthState(store, state, { ...session, user: { id: 'another-admin' } }, { env }), { status: 403 });
+  await assert.rejects(() => consumeSocialOAuthState(store, state, { ...session, csrf: 'another-session' }, { env }), { status: 403 });
+  await assert.rejects(() => consumeSocialOAuthState(store, '', session, { env }), { status: 403 });
+  await assert.rejects(() => consumeSocialOAuthState(store, state, session, { env, now: row.expires_at }), { status: 403 });
+  const simultaneous = await Promise.allSettled([consumeSocialOAuthState(store, state, session, { env }), consumeSocialOAuthState(store, state, session, { env })]);
   assert.equal(simultaneous.filter(result => result.status === 'fulfilled').length, 1);
-  await assert.rejects(() => consumeSocialOAuthState(store, state, session), { status: 403 });
+  await assert.rejects(() => consumeSocialOAuthState(store, state, session, { env }), { status: 403 });
   await assert.rejects(() => startSocialOAuth(store, {}, { ...session, expires: 0 }, { env }), { status: 401 });
-  assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('business_requests')}`), []);
+  assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('business_requests')} WHERE scope<>'social:settings'`), []);
 }));
 
 test('intercambio fuera de transacción, tokens en custodia y reconexión con identidad fija', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), session = admin();
+  const env = await envFor(store), fixture = provider(env), session = admin();
   const transaction = store.transaction.bind(store);
   let insideTransaction = false;
   store.transaction = callback => transaction(async tx => {
@@ -106,22 +111,22 @@ test('intercambio fuera de transacción, tokens en custodia y reconexión con id
   };
   const { connection } = await connect(store, env, fixture, session);
   assert.equal(connection.identities.userId, '101'); assert.equal(fixture.remote.exchanges, 2);
-  const token = await loadCredentials(store, await getSocialConnection(store, connection.id), env);
+  const token = await loadCredentials(store, await getSocialConnection(store, connection.id), await loadSocialRuntime(store, { env }));
   assert.equal(token.accessToken, 'TOKEN-CANARY-USER'); assert.equal(token.pageTokens['201'], 'TOKEN-CANARY-PAGE');
-  const listed = await getSocialConnections(store, { env });
+  const listed = await getSocialConnections(store, { env, client: { health: async () => false } });
   const persisted = JSON.stringify({ listed, audit: await store.db.all(`SELECT * FROM ${store.t('business_audit')}`), requests: await store.db.all(`SELECT * FROM ${store.t('business_requests')}`), credentials: await store.db.all(`SELECT * FROM ${store.t('social_credentials')}`) });
   assert.equal(persisted.includes('TOKEN-CANARY'), false); assert.equal(persisted.includes('SYNTHETIC-CODE'), false);
   fixture.remote.userId = '102';
   await assert.rejects(() => connect(store, env, fixture, session, connection.id), { status: 409 });
   assert.equal((await getSocialConnection(store, connection.id)).version, 1);
-  assert.equal((await loadCredentials(store, await getSocialConnection(store, connection.id), env)).userId, '101');
+  assert.equal((await loadCredentials(store, await getSocialConnection(store, connection.id), await loadSocialRuntime(store, { env }))).userId, '101');
   fixture.remote.userId = '101';
   const restored = await connect(store, env, fixture, session, connection.id);
   assert.equal(restored.connection.id, connection.id); assert.equal(restored.connection.version, 2);
 }));
 
 test('selección verifica pertenencia y no cambia assets después de aprobación', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), { connection } = await connect(store, env, fixture);
+  const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture);
   await assert.rejects(() => socialConnectionAction(store, connection.id, 'select-assets', { version: 1, requestId: randomUUID(), identities: { pageId: '999' } }, fixtureActor, { env, fetchImpl: fixture.fetchImpl }), { status: 400 });
   const selected = await socialConnectionAction(store, connection.id, 'select-assets', { version: 1, requestId: randomUUID(), identities: { businessId: '301', pageId: '201', instagramId: '401', adAccountId: 'act_501' } }, fixtureActor, { env, fetchImpl: fixture.fetchImpl });
   assert.equal(selected.capabilities.facebookPublish, true); assert.equal(selected.capabilities.whatsappAds, true); assert.equal(selected.currency, 'COP');
@@ -132,7 +137,7 @@ test('selección verifica pertenencia y no cambia assets después de aprobación
 }));
 
 test('revocación exige HMAC válido, es idempotente y bloquea exclusivamente API del usuario', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), { connection } = await connect(store, env, fixture);
+  const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture);
   const browser = await socialConnection(store, { method: 'browser', data: { identities: { userId: '101' } } });
   const other = await socialConnection(store, { data: { identities: { userId: '202' } } });
   const request = signed('101', env.META_APP_SECRET);
@@ -142,7 +147,7 @@ test('revocación exige HMAC válido, es idempotente y bloquea exclusivamente AP
   await store.transaction(tx => queueJobTx(tx, `social:delivery:${graph.deliveryId}`, { deliveryId: graph.deliveryId }));
   await deauthorizeSocialMeta(store, request, { env });
   const revoked = await getSocialConnection(store, connection.id);
-  assert.equal(revoked.state, 'reconnect_required'); assert.equal(await loadCredentials(store, revoked, env), null);
+  assert.equal(revoked.state, 'reconnect_required'); assert.equal(await loadCredentials(store, revoked, await loadSocialRuntime(store, { env })), null);
   assert.equal((await getSocialConnection(store, browser.id)).state, 'connected'); assert.equal((await getSocialConnection(store, other.id)).state, 'connected');
   assert.equal((await store.db.get(`SELECT state FROM ${store.t('social_operations')} WHERE id=?`, [graph.operationId])).state, 'uncertain');
   assert.equal((await store.db.get(`SELECT state FROM ${store.t('social_deliveries')} WHERE id=?`, [graph.deliveryId])).state, 'uncertain');
@@ -152,7 +157,7 @@ test('revocación exige HMAC válido, es idempotente y bloquea exclusivamente AP
 }));
 
 test('desconexión del navegador revoca epoch, lock y control sin borrar historial incierto', () => withStore(async store => {
-  const env = envFor(), browser = await createBrowserSocialConnection(store, { integrationMethod: 'browser', name: 'Navegador sintético', requestId: randomUUID() }, fixtureActor);
+  const env = await envFor(store), browser = await createBrowserSocialConnection(store, { integrationMethod: 'browser', name: 'Navegador sintético', requestId: randomUUID() }, fixtureActor, { env });
   await saveCredentials(store, browser.id, { storageState: { cookies: [], origins: [] } }, { env });
   const graph = await campaignGraph(store, browser, { sent: true }), now = stamp(), controlId = randomUUID();
   await insertRow(store, 'social_browser_controls', { id: controlId, connection_id: browser.id, actor_id: fixtureActor, session_binding: hash('csrf'), lease_key: `social:browser-lock:${browser.id}`, lease_token: 'SYNTHETIC-LEASE', state: 'active', expires_at: new Date(Date.now() + 60000).toISOString(), last_seen_at: now, created_at: now, updated_at: now });
@@ -162,12 +167,12 @@ test('desconexión del navegador revoca epoch, lock y control sin borrar histori
   assert.equal(result.connection.state, 'disconnected'); assert.equal(result.connection.sessionEpoch, 1); assert.equal(result.remoteSpendStopped, false);
   assert.equal((await store.db.get(`SELECT state FROM ${store.t('social_browser_controls')} WHERE id=?`, [controlId])).state, 'cancelled');
   assert.equal((await store.db.get(`SELECT state FROM ${store.t('social_operations')} WHERE id=?`, [graph.operationId])).state, 'uncertain');
-  assert.equal(await loadCredentials(store, result.connection, env), null);
+  assert.equal(await loadCredentials(store, result.connection, await loadSocialRuntime(store, { env })), null);
   assert.deepEqual(await socialConnectionAction(store, browser.id, 'disconnect', input, fixtureActor, { env }), result);
 }));
 
 test('anuncios activos requieren advertencia o pausa remota comprobada; no afirma pausa ante respuesta perdida', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), { connection } = await connect(store, env, fixture);
+  const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture);
   const selected = await socialConnectionAction(store, connection.id, 'select-assets', { version: 1, requestId: randomUUID(), identities: { businessId: '301', pageId: '201', adAccountId: 'act_501' } }, fixtureActor, { env, fetchImpl: fixture.fetchImpl });
   await campaignGraph(store, selected, { state: 'active' });
   await assert.rejects(() => socialConnectionAction(store, selected.id, 'disconnect', { version: selected.version, requestId: randomUUID() }, fixtureActor, { env, fetchImpl: fixture.fetchImpl }), { status: 409 });
@@ -181,7 +186,7 @@ test('anuncios activos requieren advertencia o pausa remota comprobada; no afirm
 }));
 
 test('eliminar datos requiere conteos confirmados, conserva documentos y piezas, retira jobs y referencias', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), { connection } = await connect(store, env, fixture), graph = await campaignGraph(store, connection);
+  const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture), graph = await campaignGraph(store, connection);
   const business = await createBusinessBasics(store, { withPlatform: false });
   const order = await store.saveOrder(businessOrderInput(business.a), fixtureActor);
   const expense = await recordExpense(store, { requestId: randomUUID(), category: 'advertising', amountMinor: 100000, incurredOn: `${business.year}-09-02`, concept: 'Pauta sintética' }, fixtureActor);
@@ -221,18 +226,18 @@ test('eliminar datos requiere conteos confirmados, conserva documentos y piezas,
 }));
 
 test('OAuth denegado y replay no intercambian código ni destruyen credenciales anteriores', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), session = admin(), { connection } = await connect(store, env, fixture, session);
+  const env = await envFor(store), fixture = provider(env), session = admin(), { connection } = await connect(store, env, fixture, session);
   const started = await startSocialOAuth(store, { connectionId: connection.id }, session, { env });
   const state = new URL(started.authorizationUrl).searchParams.get('state'), exchanges = fixture.remote.exchanges;
   await assert.rejects(() => completeSocialOAuth(store, { state, error: 'access_denied' }, session, { env, fetchImpl: fixture.fetchImpl }), { status: 400 });
   await assert.rejects(() => completeSocialOAuth(store, { state, code: 'REPLAY-CODE' }, session, { env, fetchImpl: fixture.fetchImpl }), { status: 403 });
   assert.equal(fixture.remote.exchanges, exchanges);
-  assert.equal((await loadCredentials(store, await getSocialConnection(store, connection.id), env)).accessToken, 'TOKEN-CANARY-USER');
+  assert.equal((await loadCredentials(store, await getSocialConnection(store, connection.id), await loadSocialRuntime(store, { env }))).accessToken, 'TOKEN-CANARY-USER');
   assert.equal((await getSocialConnection(store, connection.id)).state, 'connected');
 }));
 
 test('credenciales rotadas durante una validación no admiten escritura tardía del token antiguo', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), { connection } = await connect(store, env, fixture);
+  const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture);
   let rotated = false;
   const rotatingFetch = async (url, init) => {
     if (!rotated && new URL(url).pathname.endsWith('/me/adaccounts')) {
@@ -242,22 +247,22 @@ test('credenciales rotadas durante una validación no admiten escritura tardía 
     return fixture.fetchImpl(url, init);
   };
   await assert.rejects(() => socialConnectionAction(store, connection.id, 'validate', { version: 1, requestId: randomUUID() }, fixtureActor, { env, fetchImpl: rotatingFetch }), { status: 409 });
-  assert.equal((await loadCredentials(store, await getSocialConnection(store, connection.id), env)).accessToken, 'TOKEN-NEW-ROTATION');
+  assert.equal((await loadCredentials(store, await getSocialConnection(store, connection.id), await loadSocialRuntime(store, { env }))).accessToken, 'TOKEN-NEW-ROTATION');
   assert.equal((await getSocialConnection(store, connection.id)).version, 1);
 }));
 
 test('token revocado bloquea consulta API local sin afectar otra vía', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), { connection } = await connect(store, env, fixture);
+  const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture);
   const browser = await socialConnection(store, { method: 'browser' });
   fixture.remote.valid = false;
   const result = await socialConnectionAction(store, connection.id, 'validate', { version: 1, requestId: randomUUID() }, fixtureActor, { env, fetchImpl: fixture.fetchImpl });
   assert.equal(result.state, 'reconnect_required');
-  assert.equal(await loadCredentials(store, result, env), null);
+  assert.equal(await loadCredentials(store, result, await loadSocialRuntime(store, { env })), null);
   assert.equal((await getSocialConnection(store, browser.id)).state, 'connected');
 }));
 
 test('pausa rechaza credenciales sustituidas antes del envío y no realiza POST tardío', () => withStore(async store => {
-  const env = envFor(), fixture = provider(env), { connection } = await connect(store, env, fixture);
+  const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture);
   const selected = await socialConnectionAction(store, connection.id, 'select-assets', { version: 1, requestId: randomUUID(), identities: { pageId: '201', adAccountId: 'act_501' } }, fixtureActor, { env, fetchImpl: fixture.fetchImpl });
   await campaignGraph(store, selected, { state: 'active' });
   const credentialRow = await store.db.get(`SELECT version FROM ${store.t('social_credentials')} WHERE connection_id=?`, [selected.id]);
@@ -273,5 +278,5 @@ test('pausa rechaza credenciales sustituidas antes del envío y no realiza POST 
   await assert.rejects(() => socialConnectionAction(store, selected.id, 'disconnect', { version: selected.version, requestId: randomUUID(), pauseAndDisconnect: true }, fixtureActor, { env, fetchImpl: rotatingFetch }), { status: 409 });
   assert.equal(fixture.remote.calls.filter(call => call.path === '701' && call.method === 'POST').length, 0);
   assert.equal((await getSocialConnection(store, selected.id)).state, 'connected');
-  assert.equal((await loadCredentials(store, await getSocialConnection(store, selected.id), env)).accessToken, 'TOKEN-NEW-BEFORE-PAUSE');
+  assert.equal((await loadCredentials(store, await getSocialConnection(store, selected.id), await loadSocialRuntime(store, { env }))).accessToken, 'TOKEN-NEW-BEFORE-PAUSE');
 }));

@@ -7,6 +7,7 @@ import { estimateSocialCampaign, analyzeSocialCampaign } from '../lib/business/s
 import { saveCredentials } from '../lib/social/credentials.mjs';
 import { META_PERMISSIONS } from '../lib/social/config.mjs';
 import { queueJobTx, claimJob } from '../lib/business/job-leases.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
 
 const NOW = '2026-11-02T12:00:00.000Z', START = '2026-11-03T12:00:00.000Z', END = '2026-11-10T12:00:00.000Z';
 const OLD_START = '2026-10-01T12:00:00.000Z', OLD_END = '2026-10-08T12:00:00.000Z';
@@ -22,12 +23,13 @@ async function fixture(store, { method = 'api', mode = 'paid', objective = 'traf
   // and allowed GET surface. No real provider request can leave this fixture.
   const remote = { calls: [], beforeEstimate: null, audience: { users_lower_bound: 10000, users_upper_bound: 20000, estimate_ready: true } };
   const env = { META_APP_ID: '42', META_APP_SECRET: 'SYNTHETIC-FORECAST-SECRET', META_GRAPH_VERSION: 'v26.0', SOCIAL_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64') };
+  await configureSocialTestRuntime(store, { env });
   const actorId = randomUUID(), connectionId = randomUUID(), assetId = randomUUID();
   await insertRow(store, 'users', { id: actorId, email: `${actorId}@example.test`, password: 'synthetic-unused', active: 1 });
   const identities = { userId: '100', businessId: '500', pageId: '200', adAccountId: method === 'api' ? 'act_400' : '400' };
   await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: method, state: 'connected', ...editable({ identities, currency: 'COP', timeZone: 'America/Bogota', sessionEpoch: 0, capabilities: { facebookPublish: true, adsPublish: true, insights: true } }) });
   await insertRow(store, 'social_assets', { id: assetId, state: 'ready', sha256: 'a'.repeat(64), bytes: 100, ...editable({ name: 'Imagen sintética', kind: 'image', derivativeSha256: 'a'.repeat(64) }) });
-  if (method === 'api') await saveCredentials(store, connectionId, { accessToken: 'SYNTHETIC-FORECAST-TOKEN', userId: '100' }, { env });
+  if (method === 'api') await saveCredentials(store, connectionId, { accessToken: 'SYNTHETIC-FORECAST-TOKEN', userId: '100' }, { runtime: (await configureSocialTestRuntime(store, { env })).runtime });
   remote.fetchImpl = async (href, init) => {
     const url = new URL(href), path = url.pathname.replace('/v26.0/', '');
     assert.equal(url.hostname, 'graph.facebook.com'); assert.equal(init.method, 'GET'); remote.calls.push({ path, targeting: url.searchParams.get('targeting_spec') });

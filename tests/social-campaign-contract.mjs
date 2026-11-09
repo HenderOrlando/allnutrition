@@ -10,6 +10,8 @@ import { buildSocialSpec, buildSocialDraftSpec } from '../lib/business/social-sp
 import { saveCredentials } from '../lib/social/credentials.mjs';
 import { META_PERMISSIONS } from '../lib/social/config.mjs';
 import { claimJob } from '../lib/business/job-leases.mjs';
+import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
+import { loadSocialRuntime } from '../lib/social/config.mjs';
 
 const NOW = '2026-11-02T12:00:00.000Z';
 const START = '2026-11-03T12:00:00.000Z', END = '2026-11-10T12:00:00.000Z';
@@ -48,12 +50,13 @@ async function setup(store, t, { method = 'api', mode = 'organic', objective = '
   t.after(() => rm(root, { recursive: true, force: true }));
   const env = { APP_URL: 'http://localhost:3310', META_APP_ID: '42', META_APP_SECRET: 'CAMPAIGN-SYNTHETIC-SECRET', META_LOGIN_CONFIG_ID: '43', SOCIAL_PUBLISHING_ENABLED: 'true', SOCIAL_BROWSER_ENABLED: 'true', SOCIAL_MEDIA_DIR: root };
   for (const key of ['SOCIAL_TOKEN_ENCRYPTION_KEY', 'SOCIAL_MEDIA_SIGNING_KEY', 'SOCIAL_BROWSER_CONTROL_KEY', 'SOCIAL_BROWSER_SESSION_KEY']) env[key] = randomBytes(32).toString('base64');
+  await configureSocialTestRuntime(store, { env });
   const actorId = randomUUID(), connectionId = randomUUID(), assetId = randomUUID(), remote = syntheticProvider();
   await insertRow(store, 'users', { id: actorId, email: `${actorId}@example.test`, password: 'synthetic-not-used', active: 1 });
   const identities = { userId: '100', businessId: '500', pageId: '200', instagramId: '300', adAccountId: method === 'api' ? 'act_400' : '400' };
   const connectionData = { name: 'Conexión sintética', identities, currency: 'COP', timeZone: 'America/Bogota', sessionEpoch: 0, capabilities: { facebookPublish: true, instagramPublish: true, adsPublish: true, insights: true, whatsappAds: true }, resources: { pages: [{ id: '200', instagramId: '300', whatsappNumber: '+573001234567', businessId: '500', tasks: ['CREATE_CONTENT', 'ADVERTISE', 'ANALYZE'] }], adAccounts: [{ id: identities.adAccountId, currency: 'COP', timeZone: 'America/Bogota', accountStatus: 1, businessId: '500', tasks: ['ADVERTISE'] }] } };
   await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: method, state: 'connected', ...editable(connectionData) });
-  await saveCredentials(store, connectionId, method === 'api' ? { accessToken: TOKEN, userId: '100', pageTokens: { 200: PAGE_TOKEN } } : { storageState: { cookies: [], origins: [] } }, { env });
+  await saveCredentials(store, connectionId, method === 'api' ? { accessToken: TOKEN, userId: '100', pageTokens: { 200: PAGE_TOKEN } } : { storageState: { cookies: [], origins: [] } }, { runtime: (await configureSocialTestRuntime(store, { env })).runtime });
   const bytes = await sharp({ create: { width: 540, height: 675, channels: 3, background: '#336699' } }).jpeg().toBuffer();
   const assetHash = createHash('sha256').update(bytes).digest('hex'), key = `${assetId}/derivative.jpg`;
   await mkdir(join(root, assetId), { mode: 0o700 }); await writeFile(join(root, key), bytes, { mode: 0o600 });
@@ -77,21 +80,35 @@ async function setup(store, t, { method = 'api', mode = 'organic', objective = '
   return context;
 }
 async function validatedPreflight(f, campaign) {
+  const configurationFingerprint = (await loadSocialRuntime(f.store, { env: f.env })).fingerprint;
   const built = await f.build(campaign.id), id = randomUUID(), ref = '800', mediaEvidence = { scope: ref, name: 'derivative.jpg', sha256: f.assetHash, remoteMediaId: '801' };
   const authorization = { actorId: f.actorId, acceptedAt: NOW, requestId: randomUUID() };
   const observedSpec = { identities: built.spec.identities, assetHash: f.assetHash, assetType: 'image', budgetMinor: built.spec.budgetMinor, caption: built.spec.caption, platforms: built.spec.platforms, placements: built.spec.placements };
   const preparedRefs = { remoteDraftRef: ref, adSetId: '802', creativeId: '803', adId: '804' };
   const result = { status: 'confirmed', state: 'ready', remoteRefs: preparedRefs, preparedRefs, observedSpec, evidence: { adapterVersion: 'meta-ui-v2', remoteRead: true, mediaEvidence } };
-  await insertRow(f.store, 'social_operations', { id, campaign_id: campaign.id, delivery_id: null, operation_key: `preflight:${campaign.id}:${randomUUID()}`, step: 'validate', state: 'confirmed', next_attempt_at: null, ...editable({ integrationMethod: 'browser', actorId: f.actorId, kind: 'validate', campaignVersion: campaign.version, specHash: built.specHash, spec: built.spec, remoteDraftRef: ref, acceptPrivateDraft: true, privateDraftAuthorization: authorization, result }) });
+  await insertRow(f.store, 'social_operations', { id, campaign_id: campaign.id, delivery_id: null, operation_key: `preflight:${campaign.id}:${randomUUID()}`, step: 'validate', state: 'confirmed', next_attempt_at: null, ...editable({ integrationMethod: 'browser', configurationFingerprint, actorId: f.actorId, kind: 'validate', campaignVersion: campaign.version, specHash: built.specHash, spec: built.spec, remoteDraftRef: ref, acceptPrivateDraft: true, privateDraftAuthorization: authorization, result }) });
   // The stored fixture represents resultTx confirming the version owned by
   // its queued operation, then increasing the campaign version once.
-  await patchData(f.store, 'social_campaigns', campaign.id, { preflight: { kind: 'validate', operationId: id, specHash: built.specHash, remoteDraftRef: ref, preparedRefs, mediaEvidence, observedSpec, adapterVersion: 'meta-ui-v2', privateDraftAuthorization: authorization, checkedAt: NOW } }, { bump: true });
+  await patchData(f.store, 'social_campaigns', campaign.id, { preflight: { kind: 'validate', configurationFingerprint, operationId: id, specHash: built.specHash, remoteDraftRef: ref, preparedRefs, mediaEvidence, observedSpec, adapterVersion: 'meta-ui-v2', privateDraftAuthorization: authorization, checkedAt: NOW } }, { bump: true });
   return { campaign: await get(f.store, 'social_campaigns', campaign.id), operationId: id, ref, mediaEvidence };
 }
 const cases = [
+  ['una preparación privada de otra app/secreto/callback exige verificar de nuevo aunque la cuenta se revalide', async (store, t) => {
+    const f = await setup(store, t, { method: 'browser', mode: 'paid', objective: 'traffic' });
+    const campaign = await f.create(), prepared = await validatedPreflight(f, campaign), forecast = await f.forecast(campaign.id);
+    const { runtime } = await configureSocialTestRuntime(store, { env: f.env, settings: { publicBaseUrl: 'https://another-panel.example.test' } });
+    await patchData(store, 'social_connections', f.connectionId, { configurationFingerprint: runtime.fingerprint, revalidationRequired: false });
+    await assert.rejects(() => f.action(prepared.campaign, 'prepare-paid', f.approvalInput(forecast)), { status: 409 });
+    assert.deepEqual(await rows(store, 'social_revisions', campaign.id), []);
+    assert.deepEqual(await rows(store, 'social_deliveries', campaign.id), []);
+    assert.equal((await get(store, 'social_operations', prepared.operationId)).state, 'confirmed');
+    const detail = await getSocialCampaign(store, campaign.id);
+    assert.equal(detail.preflight.configurationFingerprint, undefined);
+    assert.equal(detail.connection.configurationFingerprint, undefined);
+  }],
   ['borrador incompleto e idempotencia no alteran indicadores ni permiten suplantar actor', async (store, t) => {
     const f = await setup(store, t), requestId = randomUUID(), input = { name: 'Borrador incompleto', requestId };
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     const before = await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`);
     const [first, replay] = await Promise.all([saveSocialCampaign(store, input, f.actorId, f.options), saveSocialCampaign(store, input, f.actorId, f.options)]);
     assert.deepEqual(first, replay); assert.equal(first.state, 'draft');
@@ -160,8 +177,8 @@ const cases = [
   }],
   ['flag, capacidades remotas y derivado manipulado bloquean antes de persistir aprobación', async (store, t) => {
     const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id), confirmation = f.approvalInput(forecast);
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false'; await assert.rejects(() => f.action(campaign, 'approve-organic', confirmation), { status: 409 }); assert.deepEqual(f.remote.calls, []);
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'true'; f.remote.pageTasks = ['ANALYZE']; await assert.rejects(() => f.action(campaign, 'approve-organic', confirmation), { status: 409 });
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } }); await assert.rejects(() => f.action(campaign, 'approve-organic', confirmation), { status: 409 }); assert.deepEqual(f.remote.calls, []);
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } }); f.remote.pageTasks = ['ANALYZE']; await assert.rejects(() => f.action(campaign, 'approve-organic', confirmation), { status: 409 });
     f.remote.pageTasks = ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE']; await writeFile(join(f.root, f.assetId, 'derivative.jpg'), 'tampered');
     await assert.rejects(() => f.action(campaign, 'approve-organic', confirmation), { status: 409 }); assert.deepEqual(await rows(store, 'social_revisions', campaign.id), []);
   }],
@@ -180,7 +197,7 @@ const cases = [
   ['cancelación revoca lease del trabajo no enviado y conserva revisión y evidencia', async (store, t) => {
     const f = await setup(store, t, { method: 'browser' }), campaign = await f.create({ publishAt: START }), forecast = await f.forecast(campaign.id), approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
     const revision = (await rows(store, 'social_revisions', campaign.id))[0], lease = await claimJob(store, { key: `social:browser:delivery:${approved.deliveryIds[0]}`, now: NOW }); assert.ok(lease.token);
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false'; const cancelled = await f.action(approved, 'cancel'); assert.equal(cancelled.state, 'cancelled');
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } }); const cancelled = await f.action(approved, 'cancel'); assert.equal(cancelled.state, 'cancelled');
     for (const id of approved.deliveryIds) { const job = await store.db.get(`SELECT * FROM ${store.t('job_runs')} WHERE key=?`, [`social:browser:delivery:${id}`]); assert.equal(job.state, 'failed'); assert.equal(job.lease_token, null); assert.equal((await get(store, 'social_deliveries', id)).state, 'cancelled'); }
     assert.ok((await rows(store, 'social_operations', campaign.id)).every(operation => operation.state === 'failed')); assert.deepEqual((await rows(store, 'social_revisions', campaign.id))[0], revision);
   }],
@@ -197,7 +214,7 @@ const cases = [
   }],
   ['duplicar crea borrador limpio sin incrementar presupuesto ni copiar trabajos/aceptación/fechas/vínculos', async (store, t) => {
     const f = await setup(store, t, { mode: 'paid', objective: 'traffic' }), campaign = await f.create(), forecast = await f.forecast(campaign.id), approved = await f.action(campaign, 'prepare-paid', f.approvalInput(forecast));
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false'; const duplicate = await f.action(approved, 'duplicate'), detail = await getSocialCampaign(store, duplicate.id);
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } }); const duplicate = await f.action(approved, 'duplicate'), detail = await getSocialCampaign(store, duplicate.id);
     assert.equal(detail.state, 'draft'); assert.equal(detail.parentCampaignId, campaign.id); assert.equal(detail.budgetMinor, 5000000); assert.equal(detail.startAt, null); assert.equal(detail.endAt, null); assert.equal(detail.publishAt, null);
     for (const key of ['forecastId', 'forecast', 'preflight', 'rightsAccepted', 'acceptedWarnings', 'investmentAccepted', 'remoteRefs', 'preparedRefs']) assert.equal(detail[key], undefined);
     for (const table of ['social_revisions', 'social_deliveries', 'social_operations', 'social_order_links', 'social_expense_links']) assert.deepEqual(await rows(store, table, duplicate.id), []);
@@ -285,7 +302,7 @@ const cases = [
     const forecast = await f.forecast(saved.id);
     await assert.rejects(() => f.action(saved, 'prepare-paid', f.approvalInput(forecast)), { status: 409 });
     await assert.rejects(() => queueSocialBrowserPreflight(store, saved.id, { version: saved.version, requestId: randomUUID(), kind: 'prepare', acceptPrivateDraft: true }, f.actorId, f.options), { status: 409 });
-    f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     const queued = await queueSocialBrowserPreflight(store, saved.id, { version: saved.version, requestId: randomUUID(), kind: 'targeting', query: { kind: 'location', q: 'Bogotá' } }, f.actorId, f.options);
     const operation = await get(store, 'social_operations', queued.operationId);
     assert.equal(operation.remoteDraftRef, validated.ref); assert.equal(operation.state, 'prepared');
@@ -295,7 +312,7 @@ const cases = [
     const f = await setup(store, t, { method: 'browser', mode: 'paid' });
     const created = await f.create({ assetId: null, budgetMinor: 0, startAt: null, endAt: null, aiDisclosure: null });
     const pending = await queueSocialBrowserPreflight(store, created.id, { version: created.version, requestId: randomUUID(), kind: 'prepare', acceptPrivateDraft: true }, f.actorId, f.options);
-    await patchData(store, 'social_campaigns', created.id, { restore_hold: true }, { bump: true }); f.env.SOCIAL_PUBLISHING_ENABLED = 'false';
+    await patchData(store, 'social_campaigns', created.id, { restore_hold: true }, { bump: true }); await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     const held = await getSocialCampaign(store, created.id), connection = await get(store, 'social_connections', f.connectionId), built = buildSocialDraftSpec(held, { connection });
     await assert.rejects(() => f.action(held, 'resume-restored', { specHash: built.specHash, rightsAccepted: false, acceptPrivateDraft: true }), { status: 409 });
     const accepted = await f.action(held, 'resume-restored', { specHash: built.specHash, rightsAccepted: true, acceptPrivateDraft: true });
