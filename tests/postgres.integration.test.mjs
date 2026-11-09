@@ -6,7 +6,7 @@ import { openPostgres } from '../lib/db/postgres.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
 import { runContracts } from './contract.mjs';
 import { testDatabaseEnv, resetPostgresStore } from './postgres-fixture.mjs';
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
 import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore,runSocialBackupContracts } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
@@ -22,6 +22,9 @@ import { runSocialMetricsContracts } from './social-metrics-contract.mjs';
 import { runSocialAnalysisContracts } from './social-analysis-contract.mjs';
 import { runSocialLinkContracts } from './social-links-contract.mjs';
 import { runSocialImprovementContracts } from './social-improvements-contract.mjs';
+import { runSocialSettingsContracts } from './social-settings-contract.mjs';
+import { runShippingBridgeContracts } from './shipping-bridge-contract.mjs';
+import { runHekaImportContracts } from './heka-import-contract.mjs';
 
 async function migrationRows(store) {
  const tables=['migrations','records','settings','users','sessions','attempts','orders','order_events','order_audit','counters','idempotency',...BUSINESS_TABLES];
@@ -47,7 +50,7 @@ async function insertInsurance(store,fixture) {
 const url=process.env.TEST_DATABASE_URL;
 test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},async t=>{
  const env=testDatabaseEnv();
- const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);await migrateSocialV8(first);await migrateStockAlertsV9(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=9`));}finally{await first.close();}
+ const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);await migrateSocialV8(first);await migrateStockAlertsV9(first);await migrateRuntimeIntegrationsV10(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=10`));}finally{await first.close();}
  const factory=async()=>{
   const store=await openStore(env);
   try { await resetPostgresStore(store); return store; }
@@ -80,6 +83,8 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    await createBusinessFixture(store,{year:2025,pay:true});
    await store.transaction(async tx=>{
     await tx.lockWrites();
+    for(const table of [...INTEGRATION_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=10`);
     for(const table of [...SOCIAL_INTERNAL_TABLES].reverse().concat([...SOCIAL_TABLES].reverse()))await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
     await tx.db.exec('DROP FUNCTION allnutrition.social_connection_method_guard()');
     await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=8`);
@@ -121,7 +126,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    assert.deepEqual(await migrateSocialV8(store),{migrated:false,version:8});
    assert.deepEqual(await migrationRows(store),migrated);
    assert.deepEqual(await store.db.get(`SELECT * FROM ${store.t('social_connections')} WHERE id='social-connection'`),connection);
-  }finally{try{await migrateSocialV8(store);}finally{await store.close();}}
+  }finally{try{await migrateSocialV8(store);await migrateRuntimeIntegrationsV10(store);}finally{await store.close();}}
  });
  await t.test('avisos v9 amplía solo alert_rules_type_check y conserva reglas, episodios, permisos y marcadores',async()=>{
   const store=await factory();
@@ -173,6 +178,54 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    assert.deepEqual(await migrateStockAlertsV9(store),{migrated:false,version:9});
    assert.deepEqual(await migrationRows(store),migrated);
   }finally{try{await migrateStockAlertsV9(store);}finally{await store.close();}}
+ });
+ await t.test('integraciones v10 conserva negocio, invalida OAuth pendiente y revierte DDL con su marcador',async()=>{
+  const store=await factory();
+  const at='2026-10-01T00:00:00.000Z';
+  try{
+   const fixture=await createBusinessFixture(store,{year:2025,pay:true});
+   await store.transaction(async tx=>{
+    await tx.lockWrites();
+    for(const table of [...INTEGRATION_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+    await tx.db.exec(`ALTER TABLE ${tx.t('social_oauth_states')} DROP COLUMN configuration_version`);
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=10`);
+    for(const [hash,consumed] of [['pending',null],['consumed',at]])await tx.db.run(`INSERT INTO ${tx.t('social_oauth_states')}(state_hash,actor_id,csrf_hash,expires_at,consumed_at) VALUES(?,?,?,?,?)`,[hash,fixture.actorId,'synthetic-csrf',at,consumed]);
+   });
+   await assert.rejects(()=>openStore(env),/v10/);
+   const before=await migrationRows(store),oauthBefore=await store.db.all(`SELECT * FROM ${store.t('social_oauth_states')} ORDER BY state_hash`);
+   const markerFailure=new Error('synthetic integration marker failure');
+   const failingStore={provider:store.provider,transaction:fn=>store.transaction(tx=>{
+    const run=tx.db.run;
+    tx.db={...tx.db,run:async(sql,params)=>{
+     if(sql.startsWith(`INSERT INTO ${tx.t('migrations')}(version,applied_at) VALUES(10,`))throw markerFailure;
+     return run(sql,params);
+    }};
+    return fn(tx);
+   })};
+   await assert.rejects(()=>migrateRuntimeIntegrationsV10(failingStore),error=>error===markerFailure);
+   assert.deepEqual(await migrationRows(store),before);
+   assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('social_oauth_states')} ORDER BY state_hash`),oauthBefore);
+   for(const table of INTEGRATION_INTERNAL_TABLES)assert.equal((await store.db.get('SELECT to_regclass(?) AS relation',[store.t(table)])).relation,null,table);
+   assert.deepEqual(await migrateRuntimeIntegrationsV10(store),{migrated:true,version:10});
+   const after=await migrationRows(store);
+   assert.deepEqual(after.migrations.filter(row=>row.version!==10),before.migrations);
+   delete after.migrations;delete before.migrations;assert.deepEqual(after,before);
+   assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('social_oauth_states')} ORDER BY state_hash`),[{...oauthBefore.find(row=>row.state_hash==='consumed'),configuration_version:0}]);
+   assert.equal((await store.db.get(`SELECT COUNT(*) AS n FROM ${store.t('social_integration_settings')}`)).n,0);
+   await store.db.run(`INSERT INTO ${store.t('social_integration_settings')}(id,actor_id,created_at,updated_at) VALUES(1,?,?,?)`,[fixture.actorId,at,at]);
+   await assert.rejects(()=>store.db.run(`UPDATE ${store.t('social_integration_settings')} SET app_secret_iv='incomplete'`),{code:'23514'});
+   const connection=(id,source)=>store.db.run(`INSERT INTO ${store.t('shipping_connections')}(id,source_id,actor_id,state,identity_fingerprint,created_at,updated_at) VALUES(?,?,?,'connected',?,?,?)`,[id,source,fixture.actorId,id,at,at]);
+   await connection('shipping-connection',fixture.source.id);
+   await assert.rejects(()=>connection('duplicate-source',fixture.source.id),{code:'23505'});
+   await assert.rejects(()=>connection('missing-source','absent-source'),{code:'23503'});
+   await assert.rejects(()=>store.db.run(`UPDATE ${store.t('shipping_connections')} SET epoch=0`),{code:'23514'});
+   await store.db.run(`INSERT INTO ${store.t('shipping_pairings')}(hash,connection_id,epoch,actor_id,expires_at) VALUES('synthetic-pairing','shipping-connection',1,?,?)`,[fixture.actorId,at]);
+   await assert.rejects(()=>store.db.run(`DELETE FROM ${store.t('shipping_connections')} WHERE id='shipping-connection'`),{code:'23503'});
+   const migrated=await migrationRows(store),connectionBefore=await store.db.get(`SELECT * FROM ${store.t('shipping_connections')}`);
+   assert.deepEqual(await migrateRuntimeIntegrationsV10(store),{migrated:false,version:10});
+   assert.deepEqual(await migrationRows(store),migrated);
+   assert.deepEqual(await store.db.get(`SELECT * FROM ${store.t('shipping_connections')}`),connectionBefore);
+  }finally{try{await migrateRuntimeIntegrationsV10(store);}finally{await store.close();}}
  });
  await t.test('seguro v6 migra el CHECK v5 real, revierte fallos y conserva ownership, permisos y relaciones',async()=>{
   // The factory verifies the connected database is the explicitly authorized allnutrition_test.
@@ -226,6 +279,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
  await runImportCancellationContracts(t,factory);
  await runWorkbookImportContracts(t,factory);
  await runSocialContracts(t,factory);
+ await runSocialSettingsContracts(t,factory);
  await runSocialMediaContracts(t,factory);
  await runSocialCampaignContracts(t,factory);
  await runSocialApiJobContracts(t,factory);
@@ -235,6 +289,8 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
  await runSocialLinkContracts(t,factory);
  await runSocialImprovementContracts(t,factory);
  await runSocialBackupContracts(t,factory);
+ await runShippingBridgeContracts(t,factory);
+ await runHekaImportContracts(t,factory);
  await t.test('libro v7 conserva pagos, ownership, índices y FK y revierte el CHECK al fallar el marcador',async()=>{
   const store=await factory();
   try{
