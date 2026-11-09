@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'">
+  <title>All Nutrition · Heka</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="renderer.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">ALL NUTRITION · COMPLEMENTO LOCAL</p><h1>Consultar Heka</h1><p>Consulta de solo lectura. La revisión y aceptación de importaciones se realizan en el panel.</p></header>
+    <section aria-labelledby="status-title"><h2 id="status-title">Estado del dispositivo</h2><p id="status" role="status" aria-live="polite">Abriendo el almacén seguro…</p><dl id="binding-details" hidden><dt>Panel verificado</dt><dd id="bound-origin"></dd><dt>Fuente comercial</dt><dd id="source"></dd><dt>Cuenta Heka</dt><dd id="account"></dd><dt>Confirmación del panel</dt><dd id="confirmation"></dd><dt>Última captura aceptada</dt><dd id="capture"></dd></dl></section>
+    <section id="pairing" aria-labelledby="pair-title"><h2 id="pair-title">Emparejar con el panel</h2><p>En Configuración → Proveedores de envíos, elige la fuente comercial y genera un código de un solo uso (5 minutos).</p>
+      <form id="pair-form" autocomplete="off">
+        <label for="origin">Origen HTTPS del panel</label><input id="origin" name="origin" type="url" placeholder="https://panel.ejemplo.com" required maxlength="2048" autocomplete="off" spellcheck="false">
+        <p class="hint">Solo el origen: sin rutas, parámetros ni credenciales. No se omiten errores de certificado TLS.</p>
+        <label for="pair-code">Código de emparejamiento</label><input id="pair-code" name="pair-code" type="password" required minlength="43" maxlength="43" autocomplete="off" spellcheck="false">
+        <div class="origin-check"><p>La credencial quedará vinculada exclusivamente a:</p><strong id="origin-preview">Introduce el origen HTTPS</strong><label class="checkbox"><input id="confirm-origin" type="checkbox" required> Reconozco este origen y autorizo vincular el dispositivo.</label></div>
+        <button id="pair-button" type="submit" disabled>Vincular dispositivo</button>
+      </form>
+    </section>
+    <section id="session-actions" aria-labelledby="session-title" hidden><h2 id="session-title">Sesión personal en Heka</h2><p>Introduce tus credenciales y verificaciones únicamente en la ventana oficial. La sesión permanece en memoria y se borra al cerrar esa ventana o esta aplicación.</p><button id="login" type="button">Iniciar sesión en Heka</button><p class="hint">Portal clásico compatible: admin.hekaentrega.co/plataforma2.html. Nunca se solicitan pagos ni se modifican guías o bancos.</p><p>Después del login, confirma explícitamente la cuenta y fuente en Configuración del panel. Mantén este complemento abierto para recibir consultas.</p></section>
+    <footer><button id="disconnect" type="button" class="secondary" hidden>Desconectar localmente</button><p>Desconectar borra la vinculación de este equipo. Para invalidar el dispositivo en el servidor, usa «Revocar» en el panel. Cerrar la aplicación detiene las consultas.</p><p id="action-error" role="alert" hidden></p></footer>
+  </main>
+</body>
+</html>

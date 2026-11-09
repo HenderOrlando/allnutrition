@@ -13,3 +13,5 @@ playwright-report
 **/*.xlsx
 **/*.xlsm
 **/*.xlsb
+# The local Electron companion has its own dependency tree and package.
+desktop

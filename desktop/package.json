@@ -1,0 +1,31 @@
+{
+  "name": "all-nutrition-shipping-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Complemento local de consulta Heka para All Nutrition",
+  "author": "All Nutrition",
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "dev": "electron .",
+    "package": "electron-builder --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "co.allnutrition.shippingbridge",
+    "productName": "All Nutrition Heka",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": { "output": "dist" },
+    "files": [
+      "package.json", "main.mjs", "preload.cjs", "index.html", "renderer.js", "styles.css", "providers/heka.mjs",
+      "!node_modules/**", "!**/.env*", "!**/*.sqlite*", "!**/*.db", "!**/snapshots/**"
+    ],
+    "mac": { "target": [{ "target": "dir", "arch": ["arm64"] }], "category": "public.app-category.business", "identity": null },
+    "win": { "target": ["nsis"] },
+    "linux": { "target": ["AppImage"], "category": "Office" }
+  }
+}

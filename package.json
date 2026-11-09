@@ -24,7 +24,10 @@
     "test:e2e": "playwright test",
     "deploy": "node scripts/deploy.mjs",
     "deploy:env": "node scripts/deploy-env.mjs",
-    "verify:docker": "node scripts/verify-docker.mjs"
+    "verify:docker": "node scripts/verify-docker.mjs",
+    "desktop:install": "npm --prefix desktop install",
+    "desktop:dev": "npm --prefix desktop run dev",
+    "desktop:package": "npm --prefix desktop run package --"
   },
   "dependencies": {
     "@xmldom/xmldom": "0.9.12",

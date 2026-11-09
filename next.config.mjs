@@ -3,7 +3,7 @@ const config = {
   poweredByHeader: false,
   serverExternalPackages: ['pg'],
   outputFileTracingIncludes: { '/*': ['./db/*.sql'] },
-  outputFileTracingExcludes: { '/*': ['./data/**/*', './.env*'] },
+  outputFileTracingExcludes: { '/*': ['./data/**/*', './.test-data/**/*', './desktop/**/*', './.env*'] },
   logging: {
     incomingRequests: { ignore: [/\/api\/admin\/social\/oauth\/callback(?:\?|$)/, /\/api\/social\/media\//] },
     browserToTerminal: false,
