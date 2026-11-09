@@ -1,6 +1,6 @@
 # All Nutrition — administración de negocio · v3
 
-Vitrina autoadministrada y panel privado para pedidos, inventario por referencia, seguimiento, recaudos, caja, gastos, liquidaciones, sueldos e informes. WhatsApp sigue siendo el canal comercial principal. No incluye CRM de interesados, chatbot, pasarela de pago, integración bancaria/logística ni facturación legal.
+Vitrina autoadministrada y panel privado para pedidos, inventario por referencia, seguimiento, recaudos, caja, gastos, liquidaciones, sueldos e informes. WhatsApp sigue siendo el canal comercial principal. No incluye CRM de interesados, chatbot, pasarela de pago, integración bancaria, emisión de guías en el proveedor ni facturación legal.
 
 ## Estado de esta entrega
 
@@ -131,11 +131,29 @@ Un gasto nuevo siempre comienza en **Dejar pendiente**, incluso con cuenta prede
 
 **Seguro de envío** es un gasto logístico opcional y separado del flete. Usa la fecha explícita del cargo, no la entrega ni el corte del archivo. Sin observación no se exige; vacío observado significa costo desconocido, cero explícito significa sin cargo, y un importe sin fecha mantiene cobertura pendiente. Reduce contribución y la métrica **Transporte y seguros** sin mover caja: pagar o confirmar una retención sigue siendo una acción explícita. Requiere **esquema 6**: SQLite migra al abrir una conexión nueva; PostgreSQL exige `npm run db:migrate` antes de iniciar web y scheduler con la misma versión. Esta entrega no actualiza producción.
 
+### Proveedores de envíos · Heka clásico
+
+**Configuración → Proveedores de envíos** (`business/shipping`) vincula una fuente comercial activa al complemento local. Esta ampliación local todavía no está desplegada en producción. Requiere esquema **10** y panel HTTPS. El código de emparejamiento dura cinco minutos y solo puede usarse una vez; después, confirma expresamente la cuenta Heka y la fuente en el panel.
+
+```sh
+npm run desktop:install
+npm run desktop:dev
+npm run desktop:package -- --mac --arm64
+```
+
+El paquete local queda en `desktop/dist/mac-arm64/All Nutrition Heka.app`, sin firma/notarización. Windows/Linux tienen configuración de empaquetado, no aceptación ejercitada. Electron no forma parte de las dependencias ni de la imagen del servidor.
+
+Introduce credenciales/2FA únicamente en la ventana oficial de Heka; la sesión vive en memoria y se destruye al cerrar. La vinculación al panel se guarda cifrada por el sistema, nunca en texto plano. Mantén Electron abierto para consultar; al reabrir requiere login Heka. El adaptador usa el SDK del portal clásico y falla cerrado ante cambios, datos cacheados, lectura incompleta o límites: 31 días, 10 MiB y 10.000 filas.
+
+Las fechas de pago publicadas son días sin hora: se contrastan con `FECHA`, sin fabricar un instante. Las marcas originales `seconds`/`nanoseconds` se conservan; la marca de cabecera es informativa, no prueba cuándo se pagó. El corte de actualización de una guía no es su fecha de entrega.
+
+Guías, paquetes pagados y pendientes permanecen separados. **Preparar importación completa** conserva un único XLSX/lote por captura y abre la revisión existente; no acepta por ti. Cada paquete se incluye completo o se excluye entero, con documentos originales, ajustes y netos negativos trazables. Aceptar una declaración no fabrica cobros, gastos ni recepción bancaria: la conciliación sigue pendiente y Caja no aumenta. Los manifiestos del lote sobreviven a su respaldo comercial; la custodia del dispositivo y las capturas internas no se exportan.
+
 ### Publicidad orgánica y pauta de Facebook/Instagram
 
-Interfaz publicada y comprobada en producción, **sin habilitación ni aceptación real de Meta**. Se abre en **Publicidad** (`/admin?section=advertising`) y separa **Publicaciones, Imágenes y videos, Resultados y Cuentas conectadas**.
+**Publicidad** (`/admin?section=advertising`) contiene **Publicaciones, Imágenes y videos y Resultados**. La configuración y gestión de cuentas está únicamente en **Configuración → Redes sociales** (`/admin?section=business&tab=social`); esta separación no acredita publicación real ni aceptación del proveedor.
 
-1. **Cuentas conectadas:** elegir Conexión oficial de Meta (API), mediante Facebook, o Acceso asistido por navegador con visor privado. Son vías independientes; un fallo nunca cambia automáticamente de método. La sesión asistida se conserva cifrada, puede caducar y exige permiso previo de Meta e intervención personal ante desafíos o cambios de interfaz. El visor solo permite completar el acceso, no publicar ni invertir.
+1. **Redes sociales:** guardar aplicación Meta, secreto, origen público y habilitaciones sin reiniciar procesos ni editar variables de integración. Elegir Conexión oficial (API) mediante Facebook o Acceso asistido por navegador con visor privado. Son vías independientes, sin fallback automático. La sesión asistida se custodia cifrada y puede caducar; desafíos y 2FA requieren intervención personal. El visor no autoriza publicaciones ni gasto.
 2. **Imágenes y videos:** subir material propio ya terminado y esperar «Lista para usar». El original es privado; la aprobación usa el archivo preparado para publicar (derivado JPEG o MP4) que puedes revisar/reproducir. No se generan archivos, recortan imágenes ni inventa audio. La biblioteca busca por nombre y estado; archivar conserva bytes e historia, sin liberar espacio ni cambiar contenido publicado. La cuota y el volumen son independientes del catálogo.
 3. **Crear publicación:** basta un nombre para «Guardar borrador» y retomar por URL; cuenta y archivo pueden añadirse después. Cinco pasos adaptados al tipo: cuenta/objetivo, imagen o video/texto, dónde se verá o audiencia pagada, cuándo publicar o inversión/fechas, y revisar/aprobar. Continuar no guarda. El presupuesto pagado es total, no diario ni duplicado entre redes. El acceso asistido requiere consentimiento expreso para crear y validar el mismo borrador privado.
 4. **Revisar y aprobar:** audiencia potencial, rango histórico comparable e hipótesis propia son fuentes distintas; datos insuficientes no producen una predicción. Aprobar una publicación sin inversión autoriza publicarla, inmediata o programada; aprobar un anuncio pagado solo prepara objetos en pausa o un borrador sin entrega. Activar o reanudar gasto exige otra aceptación del total/restante y fechas originales. La configuración aprobada es de solo lectura; las correcciones usan un nuevo borrador.
@@ -153,7 +171,7 @@ npm run business:jobs -- --once
 npm run business:jobs -- --once --social-browser
 ```
 
-`SOCIAL_PUBLISHING_ENABLED` y `SOCIAL_BROWSER_ENABLED` siguen en `false` por defecto. No habilitarlos con cuentas reales sin permisos, autorización del propietario y aceptación del proveedor actual. Claves, perfil aislado, volumen de medios, backup y prerrequisitos externos: [DESPLIEGUE.md](docs/DESPLIEGUE.md#publicidad-habilitación-y-custodia). Evidencia y límites del ensayo: [VERIFICACION.md](docs/VERIFICACION.md).
+Sin configuración persistida, publicación y navegador están deshabilitados. No habilitarlos con cuentas reales sin permisos y autorización del propietario. Cambiar aplicación exige desconectar sus cuentas; cambiar secreto/callback requiere revalidación. Deshabilitar no pausa anuncios remotos ni deshace envíos ya autorizados. Custodia privada, conversión única desde entorno antiguo, recuperación y prerrequisitos: [DESPLIEGUE.md](docs/DESPLIEGUE.md#publicidad-habilitación-y-custodia). Evidencia ejercitada y límites: [VERIFICACION.md](docs/VERIFICACION.md).
 
 
 ### Puesta en marcha guiada

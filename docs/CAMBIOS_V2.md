@@ -1,5 +1,18 @@
 # Cambios — administración v3 y antecedentes
 
+## Integraciones en ejecución y consulta Heka
+
+- Migración v10 separa configuración social, emparejamientos, dispositivos y capturas de los hechos comerciales. Invalida OAuth pendiente anterior; no modifica pedidos, recaudos, gastos ni caja.
+- Los respaldos comerciales excluyen estas tablas internas y rechazan su restauración; una instalación con integraciones configuradas no es un destino vacío para mezclar respaldos.
+- Redes sociales se configura y administra sólo en Configuración; Publicidad conserva publicaciones, archivos y resultados. Opciones, OAuth y preparación se ligan a versiones persistidas; procesos vivos y sesiones abiertas observan la habilitación actual.
+- Las claves se generan en custodia privada y estable, con conversión explícita de instalaciones antiguas. Runner persistente con Chromium perezoso y liveness independiente de readiness; deshabilitar no afirma una pausa de anuncios remotos.
+- Bridge Heka con emparejamiento de un uso, credenciales propias por dispositivo, identidad fijada a una fuente y consultas con leases. Capturas internas limitadas y completas separan guías, paquetes pagados y pendientes; leer o capturar no importa ni confirma dinero.
+- Complemento independiente Electron 45.2.3 / electron-builder 26.18.0: IPC cerrado, red HTTPS en main, bearer cifrado por el SO y sesión Heka solo en memoria. No lleva depuración remota, servidor local ni dependencias del panel.
+- Adaptador clásico fijo mediante SDK ya cargado, lecturas de servidor paginadas y paquetes completos en las siete transportadoras, con identidad y cabecera contrastadas. Un fallo no se convierte en captura vacía ni truncada.
+- Fechas Heka contrastadas con el SDK real: `fechaPago` es un día sin hora; las marcas `seconds`/`nanoseconds` se preservan sin redondear ni atribuirles una fecha de pago. La cabecera aporta una marca informativa, no un instante bancario.
+- Resultados separados y preparación retomable de un XLSX/lote por captura. Manifiesto original ligado a revisión/respaldo; paquetes completos o exclusión expresa, incluidos documentos distintos de una misma guía. Declaraciones pendientes de conciliación, sin cobros, gastos ni recepción ficticios.
+- Los volúmenes de custodia son entradas privadas de ejecución, no archivos trazables del build; los artefactos web excluyen datos, aceptación privada y el paquete de escritorio.
+
 ## Informes y Publicidad guiados · publicados el 8 de noviembre de 2026
 
 - Publicados como `allnutrition:release-f0474580c564`, con la misma imagen Linux/amd64 aceptada en web y scheduler, sin rebuild ni migración. Aceptación nativa nueva: 1268 contratos sin fallos/omisiones, 64 E2E aprobadas y las 17 compuertas oficiales.
