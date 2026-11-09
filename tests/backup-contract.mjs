@@ -17,7 +17,7 @@ import { recordExpense, payExpense } from '../lib/business/expenses.mjs';
 import { entity, hash, insertRow } from '../lib/business/commands.mjs';
 import { inventoryState } from '../lib/business/inventory.mjs';
 import { COMMERCIAL_TABLES, CORE_BACKUP_TABLES } from '../lib/backup-schema.mjs';
-import { SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
+import { SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
 import { socialMeasurementQueryKey } from '../lib/social/evidence.mjs';
 import { prepareSocialApiJobs } from '../lib/business/social-api-jobs.mjs';
 import { prepareSocialBrowserJobs } from '../lib/business/social-jobs.mjs';
@@ -379,7 +379,7 @@ export async function runSocialBackupContracts(t, factory) {
       const {bundle,ids} = scenario, original = structuredClone(bundle);
       assert.equal(bundle.socialVersion,1);
       assert.ok(!JSON.stringify(bundle).includes('social-private-canary'));
-      for (const table of SOCIAL_INTERNAL_TABLES) assert.equal(Object.hasOwn(bundle.business,table),false);
+      for (const table of [...SOCIAL_INTERNAL_TABLES,...INTEGRATION_INTERNAL_TABLES]) assert.equal(Object.hasOwn(bundle.business,table),false);
       assert.ok(!bundle.pendingJobs.some(job => job.key.startsWith('social:')));
       assert.ok(!bundle.business.business_requests.some(row => row.scope.startsWith('social:')));
       assert.equal(JSON.parse(bundle.business.business_audit.find(row => row.entity_type === 'social_connection').data).action,'validate');
@@ -431,8 +431,7 @@ export async function runSocialBackupContracts(t, factory) {
       for (const table of ['social_revisions','social_operations','social_measurements','social_forecasts','social_recommendations','social_order_links','social_expense_links']) assert.deepEqual(restored.business[table],bundle.business[table]);
       const deliveryEvidence = rows => rows.map(row => Object.fromEntries(['id','campaign_id','revision','channel','state','remote_id','data'].map(key => [key,row[key]])));
       assert.deepEqual(deliveryEvidence(restored.business.social_deliveries),deliveryEvidence(bundle.business.social_deliveries));
-      const readOnlyEnv = {SOCIAL_API_ENABLED:'true',SOCIAL_BROWSER_ENABLED:'true',SOCIAL_PUBLISHING_ENABLED:'false'};
-      await prepareSocialApiJobs(target,{env:readOnlyEnv}); await prepareSocialBrowserJobs(target,{env:readOnlyEnv});
+      await prepareSocialApiJobs(target); await prepareSocialBrowserJobs(target);
       for (const row of restored.business.social_connections) {
         const old = bundle.business.social_connections.find(value => value.id === row.id);
         assert.equal(row.state,'reconnect_required');
@@ -451,7 +450,7 @@ export async function runSocialBackupContracts(t, factory) {
         assert.equal(row.bytes,0);
         assert.equal(JSON.parse(row.data).reservedBytes,0);
       }
-      for (const table of SOCIAL_INTERNAL_TABLES) assert.equal(Number((await target.db.get(`SELECT COUNT(*) AS n FROM ${target.t(table)}`)).n),0);
+      for (const table of [...SOCIAL_INTERNAL_TABLES,...INTEGRATION_INTERNAL_TABLES]) assert.equal(Number((await target.db.get(`SELECT COUNT(*) AS n FROM ${target.t(table)}`)).n),0);
       assert.equal(Number((await target.db.get(`SELECT COUNT(*) AS n FROM ${target.t('job_runs')} WHERE key LIKE 'social:%'`)).n),0);
       assert.deepEqual(restored.orders,bundle.orders);
       assert.deepEqual(restored.business.expenses,bundle.business.expenses);

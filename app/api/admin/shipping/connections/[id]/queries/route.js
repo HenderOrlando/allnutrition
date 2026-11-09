@@ -1,0 +1,7 @@
+import { authorize, db, json, jsonBody, errorResponse } from '@/lib/server.mjs';
+import { requestShippingQuery } from '@/lib/business/shipping-bridge.mjs';
+export const runtime = 'nodejs';
+export async function POST(request, { params }) { try {
+  const session = await authorize(request, { write: true }), { id } = await params;
+  return json(await requestShippingQuery(await db(), id, await jsonBody(request), session.user.id));
+} catch (error) { return errorResponse(error); } }
