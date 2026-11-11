@@ -59,6 +59,16 @@ Los avisos de existencias usan el trabajo de alertas del scheduler: unidades net
 
 Se encontró `scheduler:alerts` fallido desde `2026-11-05T07:07:40.434Z`, código `ALERT_EVALUATION_INVALID`; no se estableció su causa original. Se conservó íntegramente el registro previo, se comprobó el evaluador vigente sobre los hechos reales y se reencoló solo ese trabajo mediante comando auditado sin afectar indicadores. El demonio completó automáticamente la evaluación a las **2026-11-07T03:10:33.085Z**: 938 condiciones evaluadas, cero duplicados y resultado no obsoleto. Los seis conteos desconocidos no generaron avisos `stock_low`; los 938 avisos abiertos corresponden a otras reglas y no son filas rechazadas. No generalizar este reencolado a fallos futuros sin diagnosticar y preservar antes su evidencia.
 
+## Ali: migración y custodia privada
+
+Ali requiere **v11 después de v10**; una producción en v9 debe aplicar ambas con la misma imagen aceptada. Antes del corte, ensayar recuperación y migración en una base aislada, respaldar DB/medios/configuración y detener todos los escritores anteriores. Ejecutar `npm run db:migrate -- --provision-app-role` mediante el servicio `migrate`, sin `setup`, seed ni reset; comprobar su repetición idempotente y los marcadores 2–11 antes de reabrir los procesos.
+
+La v11 añade cuatro tablas privadas: `assistant_settings`, `assistant_threads`, `assistant_turns` y `assistant_proposals`. PostgreSQL exige el marcador 11 al arrancar y el rol runtime mantiene permisos DML, sin DDL. Configuración, conversaciones y credenciales quedan fuera del respaldo comercial; recuperarlas requiere la copia física privada de la base y su custodia correspondiente.
+
+No hay variables nuevas exclusivas de Ali. Proveedor, modelo, URL y clave se configuran en **Configuración → Ali**; permanece deshabilitado hasta verificar la conexión y habilitarlo explícitamente. `assistant.key` se conserva en el volumen persistente `INTEGRATION_SECRETS_DIR`: directorio `0700`, archivo binario de 32 bytes `0600`, propiedad del usuario runtime. Respaldarlo por separado y no regenerarlo si existen credenciales cifradas.
+
+Conservar la imagen anterior como material de recuperación, no asumir compatibilidad de rollback sobre el esquema 11. No restaurar ni degradar automáticamente una base que pueda contener hechos posteriores al respaldo.
+
 ## Publicidad: habilitación y custodia
 
 Esta actualización local requiere **v10 después de v9**; todavía no está desplegada en producción. Detener los escritores anteriores y respaldar antes del corte. PostgreSQL rechaza el arranque sin v10; SQLite migra al abrir. La migración invalida OAuth pendiente, sin reescribir hechos comerciales.

@@ -1,5 +1,14 @@
 # Verificación v3 — administración de negocio
 
+## Ali · correcciones previas a la promoción · 11 de noviembre de 2026
+
+- La revisión estática rechazó el primer candidato preparado, antes de ejecutar su aceptación nativa o modificar producción: una cantidad transitoriamente inválida podía desmontar el pedido y faltaba el montaje de los valores comunes por hoja.
+- La serialización de borradores conserva el estado editable sin rebajar la validación del contexto, las propuestas o el guardado. `node --test tests/assistant-contracts.test.mjs`: **19 aprobadas**, cero fallos, cancelaciones u omisiones. `npm run build`: compilación y generación completas.
+- Chromium sobre web compilada y SQLite sintética: vaciar y reponer la cantidad conservó el destinatario y el diálogo; a 390 px el documento midió 390 px, sin desbordamiento. Se descartó el borrador sin crear un pedido.
+- Los controles nativos de valores comunes y su ancla `defaults` vuelven al editor. Se añaden recorridos de regresión para conservar el pedido y resolver la cantidad de obsequios, guardarla y retomarla sin importar operaciones.
+- Regresión E2E compilada: **2/2** de pedido manual y **2/2** de cantidad de obsequios, escritorio/móvil. El primer pase fue 2/4: el fixture de obsequios no vinculaba productos reales y se detenía antes de validar la cantidad. Se añadieron esos vínculos autenticados, sin rebajar las guardas ni las aserciones; el recorrido corregido resolvió el bloqueo y conservó la cantidad tras recargar.
+- Estas comprobaciones locales no acreditan por sí solas la aceptación Linux/amd64 ni el despliegue productivo. El builder y la red del candidato rechazado se retiraron; se conservaron sus fuentes y evidencia privadas.
+
 ## Ali · aceptación local completa · ronda 7
 
 El usuario autorizó hasta la novena ronda, sin reiniciar el contador. Esta revisión sincroniza el autosave social con su `nextAttemptAt` persistido, espera el POST real de logout y verifica la lectura e identidad del pedido antes de operar su diálogo. Conserva todas las aserciones previas, las doce operaciones concurrentes, las guardas y los límites internos.

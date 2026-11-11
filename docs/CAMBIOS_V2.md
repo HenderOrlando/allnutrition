@@ -12,6 +12,8 @@
 - La migración v11 mantiene configuración, conversaciones, turnos y propuestas fuera del respaldo comercial. Aceptación local completa en SQLite/PostgreSQL y escritorio/móvil; evidencia y límites en [VERIFICACION.md](VERIFICACION.md). No acredita un proveedor externo ni un despliegue.
 - El fixture del motor de Ali separa custodia y control en directorios hermanos; mantiene la prohibición de rutas iguales o anidadas y vuelve a ejercitar los trece escenarios del contrato con SQLite y PostgreSQL sin heredar rutas de custodia.
 - El contrato de recuperación social usa el vencimiento persistido en vez de un salto fijo. Los E2E esperan las respuestas reales de logout y detalle del pedido antes de comprobar la navegación; conservan los escenarios, la identidad del registro, las guardas y los timeouts internos.
+- La captura del borrador se separa de la validación de contexto y guardado: vaciar una cantidad no desmonta el pedido ni pierde sus campos hermanos; las cantidades inválidas siguen rechazadas por los límites de Ali.
+- Se restituyen los valores comunes por hoja, incluida la cantidad explícita de obsequios sin columna propia y el destino de navegación desde su bloqueo de revisión.
 
 ## Integraciones en ejecución y consulta Heka
 

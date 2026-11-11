@@ -9,7 +9,7 @@ import {
   validatePublicBlock,
   validateTurnInput,
 } from '../lib/assistant/contracts.mjs';
-import { serializeAssistantForm, validateAssistantFormValues, validateAssistantSubmission } from '../lib/assistant/forms.mjs';
+import { serializeAssistantDraft, serializeAssistantForm, validateAssistantFormValues, validateAssistantSubmission } from '../lib/assistant/forms.mjs';
 
 test('una configuración solo queda habilitada con proveedor, clave y conexión verificada', () => {
   const base = {
@@ -49,6 +49,18 @@ test('el contexto de formulario conserva valores asistibles y rechaza credencial
   const poisoned = JSON.parse('{"title":"Seguro","__proto__":{"assistantPolluted":true}}');
   assert.throws(() => validateAssistantContext(context(poisoned)));
   assert.equal({}.assistantPolluted, undefined);
+});
+
+test('el borrador conserva una cantidad incompleta sin autorizarla como contexto válido',()=>{
+  const input={customerName:'Destinatario conservado',items:[{kind:'products',itemId:'product-1',quantity:0,unitPriceMinor:5500000,discountMinor:0}],apiKey:'secret-canary'};
+  const values=serializeAssistantDraft('order',input);
+  assert.equal(values.customerName,input.customerName);
+  assert.equal(values.items[0].quantity,0);
+  assert.equal(Object.hasOwn(values,'apiKey'),false);
+  const form={...context(values).form,target:'order'};
+  assert.throws(()=>validateAssistantContext({view:{section:'orders'},form}),/cantidad debe ser positiva/);
+  const corrected={...values,items:values.items.map(item=>({...item,quantity:1}))};
+  assert.equal(validateAssistantContext({view:{section:'orders'},form:{...form,values:corrected}}).form.values.items[0].quantity,1);
 });
 
 test('las propuestas vinculan formulario y diff al estado que el usuario revisa', () => {

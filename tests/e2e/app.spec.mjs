@@ -127,6 +127,12 @@ test('pedido manual: acuerdo, guía, despacho y conservación del historial',asy
  const references=await (await page.request.get('/api/admin/products')).json();
  const product=references.records.find(record=>record.slug==='creatina-vital-force-70-servicios');
  await drawer.getByRole('combobox',{name:'Referencia 1',exact:true}).selectOption(`products:${product.id}`);
+ const quantity=drawer.getByLabel('Cantidad 1',{exact:true});
+ await quantity.fill('');
+ await expect(drawer.getByLabel('Nombre del destinatario')).toHaveValue(name);
+ await quantity.fill('1');
+ await expect(quantity).toHaveValue('1');
+ await expect(drawer.getByRole('combobox',{name:'Referencia 1',exact:true})).toHaveValue(`products:${product.id}`);
  const creating=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/orders'&&r.request().method()==='POST');
  await drawer.getByRole('button',{name:'Crear pedido',exact:true}).click();
  const response=await creating;expect(response.status()).toBe(201);const created=await response.json();

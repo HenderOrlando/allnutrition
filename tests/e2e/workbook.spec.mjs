@@ -6,6 +6,7 @@ import { login, navigate, openConfigurationTask, openDisclosure, selectWorkspace
 import { readExcel, writeExcelSheets } from '../../lib/business/excel.mjs';
 import { IMPORT_TABLES } from '../../lib/business/import-templates.mjs';
 import { formatMoneyMinor } from '../../lib/business/money.mjs';
+import { emptyRecord } from '../../lib/schema.mjs';
 
 test.use({ actionTimeout: 30000 });
 
@@ -1071,4 +1072,51 @@ test('los problemas abren su fila exacta entre hojas y conservan filtros y búsq
   expect(pending.records).toHaveLength(1);
   await openDisclosure(sourceRow(page, pending.records[0].sheet, pending.records[0].rowNumber), 'Valores originales por posición');
   await expect(button(sourceRow(page, pending.records[0].sheet, pending.records[0].rowNumber), 'Completar o corregir columna 4')).toBeEnabled();
+});
+
+test('la cantidad común de obsequios resuelve el bloqueo y se conserva al retomar la hoja',async({page},info)=>{
+  test.setTimeout(240000);
+  const panelRequest=page.waitForRequest(request=>new URL(request.url()).pathname.startsWith('/api/admin/')&&Boolean(request.headers()['x-csrf-token']));
+  await login(page);
+  const marker=`Obsequios-${info.project.name}-${randomUUID().slice(0,8)}`;
+  const f={marker,year:'2026',cutoff:'2026-09-30'};
+  const headers={Origin:new URL(page.url()).origin,'x-csrf-token':await (await panelRequest).headerValue('x-csrf-token')};
+  const product=(await get(page,'/api/admin/products')).records.find(row=>row.slug==='creatina-vital-force-70-servicios');
+  const giftResponse=await page.request.post('/api/admin/products',{headers,data:{...emptyRecord('products'),title:`Obsequio ${marker}`,slug:marker.toLowerCase(),status:'draft',productType:'gift',orderable:true,price:0,items:[{productId:product.id,quantity:1}]}});
+  expect(giftResponse.status()).toBe(201);
+  const gift=await giftResponse.json();
+  const columns=IMPORT_TABLES.sales.columns.map(column=>column.header);
+  const bytes=writeExcelSheets([{name:'VENTAS',rows:[
+    [...columns,'Referencia del obsequio'],
+    [marker,'LINE-A','2026-09-28',marker,'3001234567','Bogotá','Cundinamarca','Dirección sintética',`${marker}-producto`,1,55000,20000,0,0,'','',`${marker}-obsequio`],
+  ]}]);
+  await startOwnImport(page,marker);
+  await upload(page,bytes,`${marker}.xlsx`);
+  await configureSheets(page,f);
+  await button(wizard(page),`Destino de columna ${columns.length+1}`).click();
+  const mapping=page.getByRole('dialog',{name:/^Asignar columna /});
+  await mapping.getByLabel('Buscar destino').fill('Referencia del obsequio');
+  await mapping.getByRole('button',{name:/^Referencia del obsequio/}).click();
+  await expect(mapping).toHaveCount(0);
+  const current=await batch(page),saving=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/admin/imports/${current.id}`&&response.request().method()==='PUT');
+  await button(wizard(page),'Guardar borrador').click();
+  const saved=await (await saving).json();
+  const linked=await page.request.put(`/api/admin/imports/${saved.id}`,{headers,data:{version:saved.version,requestId:randomUUID(),resolutions:[
+    {action:'link_product',externalKey:`${marker}-producto`,internalId:product.id},
+    {action:'link_product',externalKey:`${marker}-obsequio`,internalId:gift.id},
+  ]}});
+  expect(linked.status()).toBe(200);
+  await page.reload();
+  const codes=value=>value.preview.groups.flatMap(group=>group.errors||[]).map(error=>error.code);
+  expect(codes(await preview(page))).toContain('IMPORT_GIFT_QUANTITY');
+  await button(wizard(page),'Revisar columnas y valores de obsequios').click();
+  const quantity=wizard(page).getByLabel('Confirmar cantidad de obsequios por fila en esta hoja');
+  await quantity.fill('2');
+  const reviewed=await preview(page);
+  expect(codes(reviewed)).not.toContain('IMPORT_GIFT_QUANTITY');
+  expect(reviewed.config.sheets.find(sheet=>sheet.sheetName==='VENTAS').defaults.giftQuantity).toBe(2);
+  await page.reload();
+  await button(wizard(page),'Atrás').click();
+  await expect(quantity).toHaveValue('2');
+  expect((await get(page,'/api/admin/orders?'+new URLSearchParams({q:marker}))).total).toBe(0);
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { filterAssistantPatch, serializeAssistantForm, serializeAssistantHumanAcknowledgements, validateAssistantSubmission, formatAssistantChangeValue } from '../lib/assistant/forms.mjs';
+import { filterAssistantPatch, serializeAssistantDraft, serializeAssistantHumanAcknowledgements, validateAssistantSubmission, formatAssistantChangeValue } from '../lib/assistant/forms.mjs';
 import { validateAssistantReceipt } from '../lib/assistant/contracts.mjs';
 
 const BridgeContext = createContext(null);
@@ -224,7 +224,7 @@ export function useAssistantForm({ target, entityId = null, recordVersion = null
   const callbacks = useRef({ applyPatch, busy, acceptAutomaticResult });
   callbacks.current = { applyPatch, busy, acceptAutomaticResult };
   const formId = idRef.current;
-  const safeValues = serializeAssistantForm(target, values);
+  const safeValues = serializeAssistantDraft(target, values);
   const currentSnapshot = {
     formId, target, entityId:cleanIdentity(entityId), recordVersion:recordVersion ?? null,
     generation:generation.current, values:safeValues, dirty:Boolean(dirty), busy:Boolean(busy || bridge.getAutomaticLock(target,cleanIdentity(entityId))),
