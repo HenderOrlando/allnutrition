@@ -7,6 +7,7 @@ import { login,navigate,signOut,visibleRecord,selectWorkspace,openDisclosure,ope
 import { emptyRecord, money } from '../../lib/schema.mjs';
 import { writeExcelSheets } from '../../lib/business/excel.mjs';
 import { bogotaDate } from '../../lib/business/dates.mjs';
+import { adminTasks as navigationTasks } from '../../components/admin-tasks.mjs';
 
 test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',async({page,request},info)=>{
  expect((await page.goto('/')).status()).toBe(200);await expect(page.locator('article.product-card')).toHaveCount(0);
@@ -133,7 +134,13 @@ test('pedido manual: acuerdo, guía, despacho y conservación del historial',asy
  await expect(drawer).toHaveCount(0);
  await page.getByRole('textbox',{name:'Buscar pedidos'}).fill(name);
  const open=page.getByRole('button',{name:`Abrir pedido AN-${String(created.number).padStart(6,'0')}`,exact:true});
- await expect(visibleRecord(page,name)).toHaveCount(1);await open.click();
+ const openSavedOrder=async()=>{
+  const reading=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/admin/orders/'+created.id&&response.request().method()==='GET');
+  await open.click();const detail=await reading;expect(detail.status()).toBe(200);
+  expect((await detail.json()).id).toBe(created.id);
+  await expect(drawer).toBeVisible();
+ };
+ await expect(visibleRecord(page,name)).toHaveCount(1);await openSavedOrder();
  const draftURL=page.url(),recipient=drawer.getByLabel('Nombre del destinatario');
  await recipient.fill(`${name} borrador`);
  let discarded=0;const rejectTab=async dialog=>{expect(dialog.message()).toContain('Hay cambios sin guardar');discarded++;await dialog.dismiss();};page.on('dialog',rejectTab);
@@ -149,7 +156,7 @@ test('pedido manual: acuerdo, guía, despacho y conservación del historial',asy
  }
  page.off('dialog',rejectTab);await recipient.fill(name);
  await drawer.getByRole('combobox',{name:'Estado comercial',exact:true}).selectOption('preparing');
- await drawer.getByRole('button',{name:'Guardar cambios',exact:true}).click();await expect(drawer).toHaveCount(0);await open.click();
+ await drawer.getByRole('button',{name:'Guardar cambios',exact:true}).click();await expect(drawer).toHaveCount(0);await openSavedOrder();
  await selectWorkspace(drawer,'Detalle del pedido','Envíos');
  await drawer.locator('summary').filter({hasText:'Registrar guía o entrega local'}).click();
  await drawer.getByLabel('Transportadora',{exact:true}).fill('Transportadora prueba');
@@ -194,7 +201,7 @@ test('pedido manual: acuerdo, guía, despacho y conservación del historial',asy
  }finally{releaseSave();}
  expect((await savingNote).status()).toBe(200);
  // Keep the released pass-through route until page teardown; unroute races the save's background catalog reads.
- await expect(drawer).toHaveCount(0);await open.click();
+ await expect(drawer).toHaveCount(0);await openSavedOrder();
  expect((await (await page.request.get('/api/admin/orders/'+created.id)).json()).notes).toBe('Nota posterior al despacho');
  const headers={Origin:new URL(page.url()).origin,'x-csrf-token':csrf};
  const personResponse=await page.request.post('/api/admin/business/people',{headers,data:{requestId:crypto.randomUUID(),name:`Responsable cobro ${info.project.name}`,active:true}});
@@ -281,7 +288,7 @@ test('navegación conserva destino, selección y recarga en escritorio y móvil'
   ['combos',{section:'combos'}],['catalogs',{section:'catalogs'}],
   ...[['cash','overview'],['movements','movements'],['settlements','settlements'],['expenses','expenses'],['payroll','payroll']].map(([id,tab])=>[id,{section:'cash',tab}]),
   ...[['reports','overview'],['sales-report','sales'],['shipping-report','shipping'],['returns-report','returns'],['costs-report','costs'],['payroll-report','payroll'],['cash-report','cash']].map(([id,tab])=>[id,{section:'reports',tab}]),
-  ...['setup','people','accounts','platforms','rules','alerts'].map(id=>[id,{section:'business',tab:id}]),
+  ...navigationTasks.filter(task=>task.view.section==='business').map(task=>[task.id,task.view]),
   ...['users','settings','faqs','messages','shipping'].map(id=>[id,{section:id}])
  ].map(([id,view])=>({id,view}));
  await login(page);
@@ -308,34 +315,44 @@ test('navegación conserva destino, selección y recarga en escritorio y móvil'
     const nav=page.getByRole('navigation',{name:navName,exact:true});
     if(width<768){
      await expect(nav.getByRole('combobox')).toBeVisible();
-     await expect(nav.getByRole('button')).toHaveCount(0);
      expect(await nav.getByRole('combobox').inputValue()).toBe(task.view.productType==='gift'?'gifts':task.view.tab||task.view.section);
     }else{
-     await expect(nav.getByRole('combobox')).toHaveCount(0);
-     await expect(nav.locator('button[aria-current="page"]')).toHaveCount(1);
+     await expect(nav.locator('button[aria-current="page"]')).toBeVisible();
     }
    }else if(task.id!=='home'){
     const config=page.getByRole('navigation',{name:'Vistas de configuración'});
     await expect(config).toBeVisible();
-    if(task.id!=='setup')await expect(config.getByLabel('Cambiar de tarea')).toHaveValue(task.id);
+    if(task.id!=='setup')await expect(config.getByRole('combobox')).toHaveValue(task.id);
    }
   }
  await page.reload();
  await expect(page).toHaveURL(url=>url.searchParams.get('section')==='shipping');
+ const ordersBefore=await (await page.request.get('/api/admin/orders')).json();
+ await page.goto('/admin?section=orders&tab=list&record=new');
+ const newOrder=page.getByRole('dialog');
+ await expect(newOrder.getByRole('button',{name:'Crear pedido',exact:true})).toBeVisible();
+ const recipient=newOrder.getByLabel('Nombre del destinatario');
+ await expect(recipient).toHaveValue('');
+ await recipient.fill(`Pedido cancelado desde URL ${info.project.name}`);
+ page.once('dialog',dialog=>dialog.accept());
+ await newOrder.getByRole('button',{name:'Cerrar pedido',exact:true}).click();
+ await expect(newOrder).toHaveCount(0);
+ const ordersAfter=await (await page.request.get('/api/admin/orders')).json();
+ expect(ordersAfter.total).toBe(ordersBefore.total);
 });
 
 test('lanzador y guía se usan con foco real, sin abrirse sobre campos o diálogos',async({page},info)=>{
  await login(page);
- const trigger=page.getByRole('button',{name:/^Ir a…/});
+ const trigger=page.getByRole('button').and(page.locator('[aria-keyshortcuts]'));
  await trigger.focus();await page.keyboard.press('Control+k');
- const launcher=page.getByRole('dialog',{name:'Ir a…',exact:true}),input=launcher.getByLabel('Buscar sección o acción');
+ const launcher=page.getByRole('dialog'),input=launcher.getByRole('textbox');
  await expect(input).toBeFocused();await input.fill('gastos');
  const composingURL=page.url();
  for(const key of ['ArrowDown','Enter']){
   await input.dispatchEvent('keydown',{key,code:key,isComposing:true});await expect(input).toBeFocused();await expect(launcher).toBeVisible();await expect(page).toHaveURL(composingURL);
  }
  await input.press('ArrowDown');
- const gastos=launcher.getByRole('button',{name:'Gastos',exact:true});
+ const gastos=launcher.getByRole('button',{name:navigationTasks.find(task=>task.id==='expenses').label,exact:true});
  await expect(gastos).toBeFocused();await page.keyboard.press('ArrowUp');await expect(input).toBeFocused();
  await page.screenshot({path:info.outputPath('launcher-keyboard.png')});
  await input.press('ArrowDown');await page.keyboard.press('Enter');
@@ -349,14 +366,15 @@ test('lanzador y guía se usan con foco real, sin abrirse sobre campos o diálog
  await page.keyboard.press('Home');await expect(results.first()).toBeFocused();await page.keyboard.press('ArrowUp');await expect(input).toBeFocused();
  await input.press('ArrowUp');await expect(results.last()).toBeFocused();await page.keyboard.press('Home');await page.keyboard.press('ArrowUp');await expect(input).toBeFocused();
  await input.fill('sin-destino-e2e-98217');await input.press('Enter');await expect(launcher).toBeVisible();
- await expect(launcher.getByRole('status')).toContainText('0 resultados');
+ await expect(results).toHaveCount(0);
  await page.keyboard.press('Escape');await expect(trigger).toBeFocused();
- await page.getByRole('button',{name:'Atajos',exact:true}).click();
- const guide=page.getByRole('dialog',{name:'Atajos de teclado',exact:true});
- await expect(guide).toBeVisible();await expect(guide.locator('kbd').filter({hasText:'Tab'}).first()).toBeVisible();
- await page.keyboard.press('Control+k');await expect(page.getByRole('dialog')).toHaveCount(1);await expect(guide).toBeVisible();
+ await trigger.click();
+ const guide=launcher.locator('details'),summary=guide.locator('summary');
+ await summary.click();await expect(guide.locator('dl')).toBeVisible();
+ await expect(summary).toBeFocused();
+ await page.keyboard.press('Control+k');await expect(page.getByRole('dialog')).toHaveCount(1);await expect(summary).toBeFocused();
  await page.screenshot({path:info.outputPath('keyboard-shortcuts.png')});
- await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'Atajos',exact:true})).toBeFocused();
+ await page.keyboard.press('Escape');await expect(trigger).toBeFocused();
  await trigger.focus();await page.keyboard.press('Meta+k');await expect(input).toBeFocused();await page.keyboard.press('Escape');await expect(trigger).toBeFocused();
  await navigate(page,'Pedidos');const search=page.getByRole('textbox',{name:'Buscar pedidos'});
  await search.focus();

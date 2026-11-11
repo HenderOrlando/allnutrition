@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { Field } from './Fields';
+import { useAssistantForm } from './AssistantBridge.jsx';
 import styles from './AdvertisingWorkspace.module.css';
 
 const ROOT = '/api/admin/social';
@@ -120,13 +121,38 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   const formDirty = JSON.stringify(form) !== baseline.current || Object.entries(invalid).some(([key, value]) => key !== 'controlRemaining' && value);
   const confirmDirty = rights || investment || recommendationAccepted || warningsAccepted.length > 0 || privateConsent || manualEnabled;
   const dirty = formDirty || confirmDirty || Boolean(action);
-  current.current = { formDirty, campaign, form, busy };
-  const connection = connections.find(item => item.id === form.connectionId) || (campaign?.connection?.id === form.connectionId ? campaign.connection : null);
-  const asset = assets.find(item => item.id === form.assetId) || (campaign?.asset?.id === form.assetId ? campaign.asset : null);
   const frozen = Boolean(campaign && (campaign.state !== 'draft' || campaign.revisions?.length));
   const uncertain = campaign?.operations?.some(item => ['sent', 'uncertain'].includes(item.state));
   const preflightPending = campaign?.operations?.some(item => !item.deliveryId && PENDING.includes(item.state));
   const pending = uncertain || preflightPending || campaign?.operations?.some(item => PENDING.includes(item.state)) || campaign?.deliveries?.some(item => ['queued', 'preparing', 'publishing', 'in_review'].includes(item.state));
+  const assistant = useAssistantForm({
+    target: 'campaign-draft', entityId: campaign?.id || existing || null, recordVersion: campaign?.version ?? null,
+    values: form, dirty, busy: busy || loading,
+    referenceChoices: { connectionId: connections.map(item => item.id), assetId: assets.filter(item => item.state === 'ready').map(item => item.id) },
+    applyPatch: patch => {
+      if (frozen || uncertain || preflightPending) throw new Error('Este borrador no se puede editar hasta resolver su operación o revisión pendiente.');
+      for (const key of ['mode', 'connectionId', 'platforms', 'assetId']) {
+        if (!Object.hasOwn(patch, key)) continue;
+        if (key === 'mode') changeMode(patch[key]);
+        else if (key === 'connectionId') selectConnection(patch[key]);
+        else if (key === 'platforms') changePlatforms(patch[key]);
+        else changeAsset(patch[key]);
+      }
+      for (const [key, value] of Object.entries(patch)) {
+        if (['mode', 'connectionId', 'platforms', 'assetId'].includes(key)) continue;
+        if (key === 'audience') {
+          for (const [field, entry] of Object.entries(value)) setAudience(field, entry);
+        } else set(key, value);
+      }
+    },
+    acceptAutomaticResult: campaign?.state === 'draft' && !frozen && !uncertain && !preflightPending ? async ({ result }) => {
+      try { await hydrateCommittedDraft(result); }
+      catch (cause) { setError(`El cambio se guardó; no se pudo actualizar el borrador. ${cause.message}`); throw cause; }
+    } : undefined,
+  });
+  current.current = { formDirty, campaign, form, busy };
+  const connection = connections.find(item => item.id === form.connectionId) || (campaign?.connection?.id === form.connectionId ? campaign.connection : null);
+  const asset = assets.find(item => item.id === form.assetId) || (campaign?.asset?.id === form.assetId ? campaign.asset : null);
   const approved = campaign?.revisions?.at(-1), forecast = frozen ? approved?.forecast : forecastChoice || campaign?.forecasts?.find(item => item.id === campaign.forecastId);
   const validation = campaign?.validation, warningList = validation?.warnings || [];
   const spec = frozen ? approved?.spec || campaign : validation?.spec || { ...form, integrationMethod: connection?.integrationMethod, currency: connection?.currency, timeZone: form.mode === 'paid' ? connection?.timeZone : 'America/Bogota' };
@@ -137,8 +163,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   const steps = form.mode === 'paid' ? PAID_STEPS : ORGANIC_STEPS;
   const instructions = form.mode === 'paid' ? PAID_INSTRUCTIONS : ORGANIC_INSTRUCTIONS;
 
-  useEffect(() => { callbacks.current.onInteractionStateChange?.({ dirty, busy }); }, [dirty, busy]);
-  useEffect(() => () => { sequence.current++; for (const controller of requests.current) controller.abort(); callbacks.current.onInteractionStateChange?.({ dirty: false, busy: false }); }, []);
+  useEffect(() => { callbacks.current.onInteractionStateChange?.({ dirty, busy:busy||assistant.assistantBusy }); }, [dirty, busy, assistant.assistantBusy]);
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
   useEffect(() => { heading.current?.focus(); }, [step]);
   useEffect(() => { if (action) actionHeading.current?.focus(); }, [action]);
@@ -171,7 +196,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
     applyDetail(data, options); return data;
   }
   useEffect(() => {
-    if (!existing || current.current.formDirty || locked.current) return;
+    if (!existing || current.current.formDirty || locked.current || assistant.assistantBusy && !loading) return;
     let active = true; setLoading(true);
     loadDetail(existing, { openStep: !current.current.campaign }).catch(cause => { if (active && cause.name !== 'AbortError') setError(cause.message); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; sequence.current++; };
@@ -181,7 +206,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
     let active = true, timer;
     const poll = async () => {
       if (!active) return;
-      if (document.visibilityState === 'hidden' || locked.current) { timer = setTimeout(poll, 5000); return; }
+      if (document.visibilityState === 'hidden' || locked.current || assistant.assistantBusy) { timer = setTimeout(poll, 5000); return; }
       try {
         if (operationId) { const value = await request(`${ROOT}/operations/${encodeURIComponent(operationId)}`); if (active) { setOperation(value); if (value.result?.candidates) setCandidates(value.result.candidates); } }
         if (active) await loadDetail();
@@ -195,7 +220,9 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   function set(key, value) {
     setForm(previous => ({ ...previous, [key]: value })); setForecastChoice(null); resetAcceptance();
   }
-  function setAudience(key, value) { set('audience', { ...form.audience, [key]: value }); }
+  function setAudience(key, value) {
+    setForm(previous => ({ ...previous, audience: { ...previous.audience, [key]: value } })); setForecastChoice(null); resetAcceptance();
+  }
   function selectConnection(value) {
     const next = connections.find(item => item.id === value), currencyChanged = connection?.currency !== next?.currency;
     setForm(previous => ({ ...previous, connectionId: value || null, audience: { ...previous.audience, regions: [], cities: [], interests: [] }, ...(currencyChanged ? { budgetMinor: 0, targetCostMinor: null } : {}) }));
@@ -205,6 +232,9 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   function changeMode(value) {
     setForm(previous => ({ ...previous, mode: value, budgetMinor: 0, targetCostMinor: null, startAt: null, endAt: null, publishAt: null, placements: [] })); setForecastChoice(null); resetAcceptance();
   }
+  function changePlatforms(value) {
+    setForm(previous => ({ ...previous, platforms: value, placements: previous.placements.filter(key => value.some(network => key.startsWith(`${network}_`))) })); setForecastChoice(null); resetAcceptance();
+  }
   function changeAsset(value) {
     const selected = assets.find(item => item.id === value);
     setForm(previous => ({ ...previous, assetId: value || null, placements: previous.placements.filter(key => selected?.kind === 'image' ? key.endsWith('_feed') : previous.mode === 'organic' ? key.endsWith('_reels') : true) })); setForecastChoice(null); resetAcceptance();
@@ -212,27 +242,55 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   async function task(fn) {
     if (locked.current) return;
     locked.current = true; setBusy(true); setError('');
-    try { await fn(); } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); } finally { locked.current = false; setBusy(false); }
+    try { return await fn(); } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); } finally { locked.current = false; setBusy(false); }
   }
   async function notifyMutation() {
     try { await callbacks.current.onMutation?.(); } catch (cause) { setNotice(`La operación se guardó; la vista general está pendiente de actualizar. ${cause.message}`); }
   }
-  async function persist() {
+  function assertSaveableDraft() {
     if (!form.name.trim()) throw new Error('Escribe un nombre para poder guardar y retomar este borrador.');
     if (Object.values(invalid).some(Boolean)) throw new Error('Corrige el formato de los importes antes de guardar.');
+  }
+  async function hydrateCommittedDraft(result) {
+    const target = current.current.campaign?.id || existing;
+    if (!result?.id || target && result.id !== target || !Number.isSafeInteger(result.version)) throw new Error('No se recibió el borrador guardado para actualizar este editor.');
+    const data = await loadDetail(result.id, { replace: true });
+    if (!data) throw new Error('La lectura del borrador fue reemplazada por otra actualización. Recarga los datos guardados.');
+    setForecastChoice(null); resetAcceptance(); setNotice('Borrador guardado. No se publicó ni se autorizó gasto.');
+    await notifyMutation();
+    return data;
+  }
+  async function persist() {
+    assertSaveableDraft();
     const target = campaign?.id || existing;
     if (target && !formDirty) return campaign;
     const payload = { ...form, version: target ? campaign?.version : 0 };
     const body = { ...payload, requestId: rid(`save:${target || 'new'}`, payload) };
     const result = await request(`${ROOT}/campaigns${target ? `/${encodeURIComponent(target)}` : ''}`, { method: target ? 'PATCH' : 'POST', body: JSON.stringify(body) });
-    // Mark the successfully committed form clean before refreshing its normalized representation.
-    baseline.current = JSON.stringify(form); current.current.formDirty = false;
-    const data = await loadDetail(result.id, { replace: true });
-    setForecastChoice(null); resetAcceptance(); setNotice('Borrador guardado. No se publicó ni se autorizó gasto.');
-    await notifyMutation();
-    return data || { ...campaign, ...result };
+    return hydrateCommittedDraft(result);
   }
-  async function save(event) { event?.preventDefault(); await task(async () => { const result = await persist(); callbacks.current.onSaved?.(result); }); }
+  async function save(event) {
+    event?.preventDefault();
+    if (assistant.assistantBusy || busy || loading) return;
+    setError('');
+    try {
+      assertSaveableDraft();
+      let savedUnassisted = false;
+      const result = await assistant.submitAssisted({
+        payload: { ...form, version: campaign?.version ?? 0 },
+        saveUnassisted: async () => {
+          savedUnassisted = true;
+          return await task(() => persist()) || false;
+        },
+        onCommitted: async result => {
+          const saved = savedUnassisted ? result : await hydrateCommittedDraft(result);
+          await callbacks.current.onSaved?.(saved);
+        },
+      });
+      if (result.postCommitError) setError(`Borrador guardado; no se actualizó la vista. ${result.postCommitError.message || ''}`);
+      if (result.reason === 'changed') setError('El borrador cambió mientras se guardaba. Revisa los valores e inténtalo de nuevo.');
+    } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); }
+  }
   async function preflight(kind) {
     await task(async () => {
       if (kind === 'prepare' && !privateConsent) throw new Error('Acepta expresamente crear un borrador privado en Meta, sin publicar ni gastar.');
@@ -324,11 +382,16 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   const check = (label, value, change, disabled = false) => <label key={label} className={styles.checkRow}><input type="checkbox" checked={Boolean(value)} disabled={disabled} onChange={event => change(event.target.checked)}/><span>{label}</span></label>;
   const amount = (key, label) => <Field key={`${key}:${connection?.currency || 'none'}`} field={{ name: key, label, type: 'moneyOptionalMinor', description: `Importe en ${connection?.currency || 'moneda de cuenta sin verificar'}. Punto para miles y coma para centavos. COP exige pesos enteros; USD permite centavos. No se redondea.` }} value={form[key]} onChange={value => set(key, key === 'budgetMinor' ? value ?? 0 : value)} onDraftInvalid={value => setInvalid(previous => ({ ...previous, [key]: value }))}/>;
   const dateInput = (key, label) => <label className="field">{label}<input name={key} type="datetime-local" aria-describedby={`${id}-${key}-help`} value={localDate(form[key])} onChange={event => { const value = event.target.value; set(key, value ? new Date(value).toISOString() : null); }}/><small id={`${id}-${key}-help`} className={styles.help}>{form[key] ? `En ${form.mode === 'paid' ? connection?.timeZone || 'zona de cuenta sin verificar' : 'America/Bogota'}: ${date(form[key], form.mode === 'paid' ? connection?.timeZone : 'America/Bogota')}. Bogotá: ${date(form[key], 'America/Bogota')}.` : 'Sin fecha registrada.'}</small></label>;
-  const formLocked = busy || loading || frozen || uncertain || preflightPending;
+  const formLocked = busy || loading || frozen || uncertain || preflightPending || assistant.assistantBusy;
   const stepChange = value => { setStep(value); setError(''); };
+  function blockAssistantInteraction(event) {
+    if (!assistant.assistantBusy) return;
+    event.preventDefault(); event.stopPropagation();
+  }
 
-  return <section className={styles.detail} aria-busy={busy || loading}>
-    <header className={styles.heading}><div><p className={styles.eyebrow}>{frozen ? 'Configuración aprobada · Solo lectura' : 'Preparar una publicación'}</p><h2 ref={frozen ? heading : undefined} tabIndex={-1}>{campaign?.name || 'Nueva publicación'} · {stateLabel(campaign?.state || 'draft')}</h2></div><button type="button" className="button subtle" disabled={busy} onClick={() => callbacks.current.onNavigate?.({ section: 'advertising', tab: 'campaigns', record: null })}>Volver a publicaciones</button></header>
+  return <section className={styles.detail} aria-busy={busy || loading || assistant.assistantBusy} onClickCapture={blockAssistantInteraction} onChangeCapture={blockAssistantInteraction} onSubmitCapture={blockAssistantInteraction}>
+    <fieldset className={`editor-fieldset ${styles.stack}`} disabled={assistant.assistantBusy}>
+    <header className={styles.heading}><div><p className={styles.eyebrow}>{frozen ? 'Configuración aprobada · Solo lectura' : 'Preparar una publicación'}</p><h2 ref={frozen ? heading : undefined} tabIndex={-1}>{campaign?.name || 'Nueva publicación'} · {stateLabel(campaign?.state || 'draft')}</h2></div><div>{!frozen && <button type="button" className="button subtle" disabled={assistant.assistantBusy || loading} onClick={assistant.openAssistant}>Ayúdame con este borrador</button>} <button type="button" className="button subtle" disabled={busy} onClick={() => callbacks.current.onNavigate?.({ section: 'advertising', tab: 'campaigns', record: null })}>Volver a publicaciones</button></div></header>
     {error && <div ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}<div className={styles.actions}>{existing && <button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => setRetry(value => value + 1)}>Recargar datos guardados</button>}<button type="button" className="button subtle" disabled={busy} onClick={() => callbacks.current.onNavigate?.({ section: 'business', tab: 'social', record: connection?.id || null })}>Revisar conexión</button></div>{formDirty && <p>Tus cambios locales se conservaron; no se reemplazan al actualizar.</p>}</div>}
     {notice && <p role="status" className={styles.notice}>{notice}</p>}
     {loading && <p role="status">{campaign ? 'Actualizando datos guardados…' : 'Cargando publicación…'}</p>}
@@ -338,7 +401,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
     {!frozen && <div className={styles.stepIntro}><h3 ref={heading} tabIndex={-1}>Paso {step + 1} de 5 · {steps[step]}</h3><p>{instructions[step]}</p></div>}
 
     {!frozen && <form method="post" onSubmit={save} className={styles.stack}>
-      <fieldset disabled={formLocked} className="editor-fieldset"><legend>{steps[step]}</legend>
+      <fieldset disabled={formLocked || assistant.assistantBusy} className="editor-fieldset"><legend>{steps[step]}</legend>
         {step === 0 && <div className={styles.stack}>
           <p className={styles.help}>Puedes empezar solo con un nombre y guardar el borrador.</p>
           <div className={styles.fieldGrid}>
@@ -349,7 +412,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
           <p className={styles.help}>El método de conexión queda fijo al aprobar. No existe cambio automático entre la conexión oficial de Meta (API) y el acceso asistido por navegador. Para cambiarlo después, duplica en borrador sin reutilizar objetos remotos.</p>
           {form.mode === 'paid' && (form.startAt || form.publishAt) && <p className={styles.help}>Al cambiar modalidad se deben revisar inversión y agenda.</p>}
           <label className="field">Objetivo comercial<select name="objective" aria-describedby={`${id}-objective-help`} value={form.objective} onChange={event => set('objective', event.target.value)}>{Object.entries(OBJECTIVES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><p id={`${id}-objective-help`} className={styles.help}>{OBJECTIVE_HELP[form.objective]} No hay píxel ni seguimiento automático de ventas.</p>
-          <fieldset><legend>Redes</legend>{['facebook', 'instagram'].map(network => check(network === 'facebook' ? 'Facebook · página' : 'Instagram · cuenta profesional', form.platforms.includes(network), enabled => { setForm(previous => ({ ...previous, platforms: enabled ? [...previous.platforms, network] : previous.platforms.filter(value => value !== network), placements: enabled ? previous.placements : previous.placements.filter(key => !key.startsWith(`${network}_`)) })); resetAcceptance(); setForecastChoice(null); }))}</fieldset>
+          <fieldset><legend>Redes</legend>{['facebook', 'instagram'].map(network => check(network === 'facebook' ? 'Facebook · página' : 'Instagram · cuenta profesional', form.platforms.includes(network), enabled => changePlatforms(enabled ? [...form.platforms, network] : form.platforms.filter(value => value !== network))))}</fieldset>
           {connection && <Values rows={[['Cuenta conectada', connection.name || connection.id], ["Método elegido", METHODS[connection.integrationMethod] || connection.integrationMethod], ['Estado de conexión', CONNECTION_STATES[connection.state] || connection.state], ['Moneda de cuenta', connection.currency || 'Sin verificar'], ['Zona de cuenta', connection.timeZone || 'Sin verificar'], ['Capacidades verificadas', Object.entries(connection.capabilities || {}).filter(([, value]) => value === true).map(([key]) => ({ facebookPublish: 'Publicar en Facebook', instagramPublish: 'Publicar en Instagram', adsPublish: 'Preparar y operar anuncios pagados', insights: 'Consultar resultados', whatsappAds: 'Anuncios a WhatsApp vinculado' }[key] || key)).join(' · ') || 'Ninguna acreditada']]}/>}
           {!connections.length && <div className="admin-empty"><h3>Puedes conectar la cuenta después</h3><p>Guarda el nombre del borrador y retómalo cuando tengas una cuenta disponible. Cada método tiene requisitos y autenticación independientes.</p></div>}
           <button type="button" className="button subtle" onClick={() => callbacks.current.onNavigate?.({ section: 'business', tab: 'social', record: null })}>Ir a Redes sociales en Configuración (guarda antes si quieres retomar)</button>
@@ -463,5 +526,6 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
     {operation && <p role="status" className={styles.notice}>Operación {operation.step || operation.kind} · {stateLabel(operation.state)} · {operation.id}{operation.nextAttemptAt ? ` · próxima ejecución ${date(operation.nextAttemptAt)}` : ''}{operation.lastError ? ` · ${errorText(operation.lastError)}` : ''}. El progreso se consulta localmente, no son nuevas llamadas a Meta.</p>}
     {campaign?.deliveries?.length > 0 && <section className={styles.panel}><h3>Estado por destino</h3>{campaign.deliveries.map(delivery => <article key={delivery.id} className={styles.card}><h4>{delivery.channel} · {stateLabel(delivery.state)}</h4><Values rows={[["Conexión", METHODS[delivery.integrationMethod || connection?.integrationMethod]], ['Último estado confirmado', stateLabel(delivery.lastConfirmedState)], ['Confirmación remota', date(delivery.lastConfirmedAt)], ['Siguiente consulta', date(delivery.nextSyncAt)], ['Último intento de resultados', date(delivery.metricSync?.lastAttemptAt)], ['ID remoto', delivery.remoteId || 'No confirmado']]}/>{delivery.lastError && <p className={styles.warning}>{errorText(delivery.lastError)}</p>}{delivery.remoteRefs?.permalink && /^https:\/\//.test(delivery.remoteRefs.permalink) && <a href={delivery.remoteRefs.permalink} target="_blank" rel="noopener noreferrer">Ver publicación confirmada en Meta</a>}{['scheduled', 'queued'].includes(delivery.state) && (spec.publishAt || spec.startAt) && Date.parse(spec.publishAt || spec.startAt) < Date.now() && <p className={styles.warning}>La hora prevista ya pasó; aún no consta confirmación. El procesamiento en segundo plano puede estar atrasado. Si supera 15 minutos antes del envío, requiere reprogramar mediante un nuevo borrador.</p>}</article>)}</section>}
     {campaign?.operations?.length > 0 && <details className={styles.technicalDetails} open={Boolean(uncertain)}><summary>Historial técnico de operaciones y recuperación</summary><p>Una respuesta perdida no autoriza otro clic de publicación. Primero comprueba el estado en Meta sin reenviar la intención original; si no existe una identificación inequívoca, usa una resolución explícita.</p>{campaign.operations.map(op => <article key={op.id} className={styles.card}><h4>{op.step} · {stateLabel(op.state)}</h4><p>{op.id} · {METHODS[op.integrationMethod]} · actualizado {date(op.updatedAt)} · próximo intento {date(op.nextAttemptAt)}</p>{op.lastError && <p className={styles.warning}>{errorText(op.lastError)}</p>}{['sent', 'uncertain'].includes(op.state) && <div className={styles.actions}><button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => campaignAction('reconcile', op.deliveryId ? { deliveryId: op.deliveryId } : {})}>Comprobar estado en Meta sin reenviar esta intención</button><button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => openAction('link-remote', op)}>Vincular ID o enlace permanente existente</button><button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => openAction('confirm-absent', op)}>Confirmar ausencia y riesgo</button></div>}</article>)}</details>}
+    </fieldset>
   </section>;
 }

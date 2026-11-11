@@ -71,6 +71,7 @@ test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privada
     '/api/admin/business/people/unknown','/api/admin/business/shipments','/api/admin/business/shipments/unknown',
     ...['overview','movements','settlements','expenses','payroll','closings'].map(resource=>'/api/admin/finance/'+resource),
     '/api/admin/imports','/api/admin/imports/unknown','/api/admin/imports/unknown/file','/api/admin/imports/unknown/errors',
+    '/api/admin/assistant/settings','/api/admin/assistant/threads','/api/admin/assistant/threads/unknown','/api/admin/assistant/proposals/unknown',
   ];
   const writes=[
     ...['people','platforms','sources','profiles','accounts'].flatMap(resource=>[['POST','/api/admin/business/'+resource],['PUT','/api/admin/business/'+resource+'/unknown']]),
@@ -80,6 +81,7 @@ test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privada
     ['POST','/api/admin/imports'],['PUT','/api/admin/imports/unknown'],['PUT','/api/admin/imports/unknown/file'],
     ['POST','/api/admin/imports/unknown/preview'],['POST','/api/admin/imports/unknown/commit'],
     ...['collection','refund','expense','expense-recovery','pay-expense','settlement-save','settlement-confirm','transfer','cash-close','cash-reopen','cash-reverse','document-reverse','resolve-legacy-payment','return','payroll-prepare','payroll-confirm','payroll-pay','advance','income','complete-costs','link-shipment'].map(action=>['POST','/api/admin/business/actions/'+action]),
+    ['PUT','/api/admin/assistant/settings'],['POST','/api/admin/assistant/turns'],['DELETE','/api/admin/assistant/threads/unknown'],['POST','/api/admin/assistant/proposals/unknown'],
   ];
   for(const path of reads)expect((await context.request.get(path)).status(),path).toBe(401);
   for(const [method,path] of writes)expect((await context.request.fetch(path,{method,data:{}})).status(),method+' '+path).toBe(401);

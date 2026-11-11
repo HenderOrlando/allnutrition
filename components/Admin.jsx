@@ -10,6 +10,7 @@ import Icon from './Icons';
 import UserManagement from './UserManagement';
 import AdminNavigation,{ AreaNavigation } from './AdminNavigation';
 import AdminOverview from './AdminOverview';
+import AssistantConsole from './AssistantConsole';
 import { ContentList } from './AdminLists';
 import OrdersWorkspace from './OrdersWorkspace';
 import ReportsWorkspace from './ReportsWorkspace';
@@ -17,8 +18,10 @@ import BusinessActionDialog from './BusinessActionDialog';
 import CashWorkspace from './CashWorkspace';
 import AdvertisingWorkspace from './AdvertisingWorkspace';
 import BusinessSettings from './BusinessSettings';
+import AssistantSettings from './AssistantSettings';
 import ConfigurationNavigation from './ConfigurationNavigation';
 import { adminTasks,adminLocationLabel,isCurrentAdminTask } from './admin-tasks.mjs';
+import { AssistantBridgeProvider,useAssistantForm,useAssistantBridge } from './AssistantBridge';
 import configurationStyles from './ConfigurationExperience.module.css';
 const contentKeys=Object.keys(schemas);
 const initialResources=()=>Object.fromEntries(contentKeys.map(key=>[key,{records:null,loading:false,error:''}]));
@@ -32,12 +35,44 @@ const settingsGroups=[
 ];
 const settingsHelp={whatsapp:'Por ejemplo, 573001234567. Incluye el código de país, sin + ni espacios.',whatsappTemplate:'Escribe {producto} donde deba aparecer la referencia que consulta el cliente.',showNextStage:'Esta orientación solo aparece dentro del panel, no en la página pública.'};
 const settingsFieldByName=new Map(settingsFields.map(field=>[field.name,{...field,description:settingsHelp[field.name]}]));
+function StorefrontSettingsForm({settings,all,api,onSettingsChange,onSave,onCommitted,onError,dirty,busy,savedPublication}) {
+ const assistant=useAssistantForm({target:'storefront-settings',recordVersion:settings.version,values:settings,dirty,busy,applyPatch:patch=>onSettingsChange(previous=>({...previous,...patch}))});
+ async function submit(event) {
+  event.preventDefault();
+  try { await assistant.submitAssisted({payload:settings,saveUnassisted:onSave,onCommitted}); }
+  catch(cause) { onError(cause.message); }
+ }
+ const saving=busy||assistant.assistantBusy;
+ return <form className={`settings-form ${configurationStyles.vitrinaForm}`} onSubmit={submit} aria-busy={saving} aria-describedby="vitrina-form-help">
+  <div className={configurationStyles.formIntro}><div><strong>{savedPublication?'Estado guardado: vitrina publicada':'Estado guardado: modo preparación'}</strong>{Boolean(settings.launchApproved)!==savedPublication&&<p>Selección pendiente: {settings.launchApproved?'publicar la vitrina':'volver a modo preparación'}. Se aplicará al guardar.</p>}<p id="vitrina-form-help">Confirma con «Guardar configuración». No hay guardado automático.</p></div></div>
+  <nav className={configurationStyles.formIndex} aria-label="Secciones de datos de la vitrina">{settingsGroups.map((group,index)=><button type="button" className="button subtle" key={group.key} onClick={()=>{const heading=document.getElementById(`settings-${group.key}`);heading?.focus({preventScroll:true});heading?.scrollIntoView({block:'start'});}}><span aria-hidden="true">{index+1}</span>{group.action}</button>)}</nav>
+  <fieldset className="auth-fieldset" disabled={saving}>
+   {settingsGroups.map(group=><section className="settings-group" key={group.key} aria-labelledby={`settings-${group.key}`}>
+    <h2 id={`settings-${group.key}`} tabIndex={-1}>{group.title}</h2><p className={configurationStyles.groupDescription}>{group.description}</p>
+    <div className="settings-fields">{group.fields.map(name=><div className={`settings-field settings-field--${name}`} key={name}><Field field={settingsFieldByName.get(name)} value={settings[name]} onChange={value=>onSettingsChange(previous=>({...previous,[name]:value}))} all={all} api={api}/></div>)}</div>
+    {group.key==='contact'&&<div className="whatsapp-preview" aria-labelledby="whatsapp-preview-title"><h3 id="whatsapp-preview-title">Mensaje de ejemplo</h3><p>{String(settings.whatsappTemplate||'').replaceAll('{producto}','producto de ejemplo')}</p><small>Solo es texto de ejemplo: no se envía ni responde automáticamente. {'{producto}'} se sustituye por la referencia al abrir la consulta en la vitrina.</small></div>}
+    {group.key==='publication'&&<p className="small muted">Al guardar con «Publicar la vitrina» activado, la página pública mostrará los contenidos publicados y guardados. Desactivarlo vuelve a mostrar la preparación. No publica borradores, compra un dominio ni conecta pagos.</p>}
+   </section>)}
+   <div className="settings-save-bar"><span className="small" role="status">{busy?'Guardando configuración…':dirty?'Cambios sin guardar':'Configuración al día'}</span><button type="button" className="button subtle" disabled={saving} onClick={assistant.openAssistant}>Ayúdame con este formulario</button><button type="submit" className="button primary">{busy?'Guardando…':'Guardar configuración'}<Icon name="check" size={16}/></button></div>
+  </fieldset>
+ </form>;
+}
+
+function AssistantTargetAcknowledger({request,onHandled}) {
+ const bridge=useAssistantBridge();
+ useEffect(()=>{
+  if(!request||request.open.owner!=='admin'||(!request.open.target.startsWith('record:')&&request.open.target!=='storefront-settings'))return;
+  const form=bridge.snapshot().find(item=>item.target===request.open.target&&(item.entityId??null)===(request.open.entityId??null)&&item.recordVersion===request.expectedVersion);
+  if(form)onHandled(request.requestId);
+ },[request,bridge.revision,bridge.snapshot,onHandled]);
+ return null;
+}
 export default function Admin({csrf,user}) {
  const params=useSearchParams();
  const [view,setView]=useState(()=>readAdminView(params));
  const [resources,setResources]=useState(initialResources),[settingsResource,setSettingsResource]=useState(blankResource),[ordersResource,setOrdersResource]=useState(blankResource),[cashAction,setCashAction]=useState(null);
  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[query,setQueryInput]=useState(view.q),[editing,setEditing]=useState(null),[opening,setOpening]=useState(null),[busy,setBusy]=useState(false),[interaction,setInteraction]=useState({dirty:false,busy:false}),[userRevision,setUserRevision]=useState(0);
- const [workspaceInteraction,setWorkspaceInteraction]=useState({dirty:false,busy:false}),[businessRevision,setBusinessRevision]=useState(0),[workspaceEpoch,setWorkspaceEpoch]=useState(0);
+ const [workspaceInteraction,setWorkspaceInteraction]=useState({dirty:false,busy:false}),[businessRevision,setBusinessRevision]=useState(0),[workspaceEpoch,setWorkspaceEpoch]=useState(0),[assistantOpen,setAssistantOpen]=useState(false),[assistantOpenRequest,setAssistantOpenRequest]=useState(null),[assistantMutation,setAssistantMutation]=useState(false);
  const accepted=useRef(view),settingsSnapshot=useRef(''),searchTimer=useRef(null),searchGeneration=useRef(0),navigationHandler=useRef(null),guardState=useRef(null),reads=useRef({}),inFlight=useRef({}),openingSequence=useRef(0),resourcesRef=useRef(resources);
  const auxiliaryProduct=useRef(null);
  const historyPosition=useRef(null),historyRestoring=useRef(false);
@@ -50,6 +85,8 @@ export default function Admin({csrf,user}) {
   window.history.replaceState({...previousState,...window.history.state,allNutritionAdminIndex:next},'',href);
  },[]);
  const editorInteractionRef=useRef(interaction),workspaceInteractionRef=useRef(workspaceInteraction);
+ const editingRef=useRef(editing),assistantMutationRef=useRef(false),assistantOpeningSequence=useRef(0),assistantOpenRequestRef=useRef(assistantOpenRequest);
+ editingRef.current=editing;assistantOpenRequestRef.current=assistantOpenRequest;
  const settings=settingsResource.data;
  const all=useMemo(()=>Object.fromEntries(contentKeys.filter(key=>resources[key].records!==null).map(key=>[key,resources[key].records])),[resources]);
  const setSettings=value=>setSettingsResource(previous=>({...previous,data:typeof value==='function'?value(previous.data):value}));
@@ -62,10 +99,10 @@ export default function Admin({csrf,user}) {
  const settingsDirty=Boolean(settings&&JSON.stringify(settings)!==settingsSnapshot.current);
  const savedPublication=useMemo(()=>settingsSnapshot.current?Boolean(JSON.parse(settingsSnapshot.current).launchApproved):false,[settingsSnapshot.current]);
  const giftView=section==='products'&&view.productType==='gift';
- guardState.current={rootBusy:busy,settingsDirty:section==='settings'&&settingsDirty,busy:busy||editorInteractionRef.current.busy||workspaceInteractionRef.current.busy,dirty:editorInteractionRef.current.dirty||workspaceInteractionRef.current.dirty||(section==='settings'&&settingsDirty)};
+ guardState.current={rootBusy:busy,settingsDirty:section==='settings'&&settingsDirty,busy:busy||editorInteractionRef.current.busy||workspaceInteractionRef.current.busy||assistantMutationRef.current,dirty:editorInteractionRef.current.dirty||workspaceInteractionRef.current.dirty||(section==='settings'&&settingsDirty)};
  const syncGuard=useCallback(()=>{
   const state=guardState.current;
-  state.busy=Boolean(state.rootBusy||editorInteractionRef.current.busy||workspaceInteractionRef.current.busy);
+  state.busy=Boolean(state.rootBusy||editorInteractionRef.current.busy||workspaceInteractionRef.current.busy||assistantMutationRef.current);
   state.dirty=Boolean(state.settingsDirty||editorInteractionRef.current.dirty||workspaceInteractionRef.current.dirty);
  },[]);
  const reportInteraction=useCallback(state=>{editorInteractionRef.current=state;setInteraction(state);syncGuard();},[syncGuard]);
@@ -80,7 +117,7 @@ export default function Admin({csrf,user}) {
   const isJSON=(response.headers.get('content-type')||'').includes('application/json');
   if(!response.ok){
    const data=isJSON?await response.json():null,cause=new Error(data?.error||'No se pudo completar la operación.');
-   cause.status=response.status;throw cause;
+   cause.status=response.status;cause.code=data?.code;throw cause;
   }
   if(responseType==='blob'){
    if(isJSON){const data=await response.json();throw new Error(data.error||'El servidor no devolvió el archivo esperado.');}
@@ -132,8 +169,8 @@ export default function Admin({csrf,user}) {
  },[api,writeHistory]);
  useEffect(()=>{
   if(schemas[section])void loadContent(section).catch(()=>{});
-  if(section==='settings')void loadSettings();
- },[section,loadContent,loadSettings]);
+ },[section,loadContent]);
+ useEffect(()=>{void loadSettings();},[loadSettings]);
  useEffect(()=>{
   if(section==='orders'&&(!view.tab||view.tab==='list'))void loadOrders(view);
   return()=>{reads.current['orders:list']=(reads.current['orders:list']||0)+1;};
@@ -188,6 +225,44 @@ export default function Admin({csrf,user}) {
   document.title=label+' | All Nutrition';
  },[view.section,view.tab,giftView,isConfiguration]);
  useEffect(()=>{const unload=event=>{if(guardState.current.dirty||guardState.current.busy){event.preventDefault();event.returnValue='';}};window.addEventListener('beforeunload',unload);return()=>window.removeEventListener('beforeunload',unload);},[]);
+ const proposalRequestId=()=>globalThis.crypto?.randomUUID?.()||`assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+ const reviseProposal=useCallback(({proposal,payload,formBinding,humanAcknowledgements,requestId})=>api(`/api/admin/assistant/proposals/${encodeURIComponent(proposal.id)}`,{method:'POST',body:JSON.stringify({decision:'revise',version:proposal.version,requestId:requestId||proposalRequestId(),formBinding,payload,humanAcknowledgements})}),[api]);
+ const cancelProposal=useCallback(({proposal})=>api(`/api/admin/assistant/proposals/${encodeURIComponent(proposal.id)}`,{method:'POST',body:JSON.stringify({decision:'cancel',version:proposal.version,requestId:proposalRequestId()})}),[api]);
+ const executeProposal=useCallback(async(proposal,confirmation)=>{
+  assistantMutationRef.current=true;setAssistantMutation(true);syncGuard();
+  try{return await api(`/api/admin/assistant/proposals/${encodeURIComponent(proposal.id)}`,{method:'POST',body:JSON.stringify({decision:'execute',version:proposal.version,requestId:proposal.id,confirmation})});}
+  finally{assistantMutationRef.current=false;setAssistantMutation(false);syncGuard();}
+ },[api,syncGuard]);
+ const receiveAssistantReceipt=useCallback(async({receipt})=>{
+  businessChanged();
+  if(receipt.target.startsWith('record:')){
+   const kind=receipt.target.slice('record:'.length);
+   if(accepted.current.section===kind)await loadContent(kind,true).catch(cause=>setError(cause.message));
+   else updateContent(kind,{records:null,loading:false,error:''});
+  }
+ },[businessChanged,loadContent,updateContent]);
+ const assistantOpenHandled=useCallback(requestId=>{
+  if(assistantOpenRequestRef.current?.requestId!==requestId)return;
+  assistantOpenRequestRef.current=null;
+  setAssistantOpenRequest(current=>current?.requestId===requestId?null:current);
+  setAssistantOpen(true);
+ },[]);
+ const handleProposalOpen=useCallback(async request=>{
+  const descriptor=request?.open;
+  if(!descriptor?.view||!request.proposalId)return;
+  const sequence=++assistantOpeningSequence.current;
+  try{
+   const response=await api(`/api/admin/assistant/proposals/${encodeURIComponent(request.proposalId)}`),proposal=response.proposal;
+   if(sequence!==assistantOpeningSequence.current)return;
+   if(response.receipt){setNotice('Este cambio ya está guardado. Consulta su comprobante en Ali.');return;}
+   if(!proposal||proposal.open.target!==descriptor.target||proposal.open.entityId!==descriptor.entityId)throw new Error('La propuesta cambió. Vuelve a consultar su estado.');
+   const destination=readAdminView(proposal.open.view),current=editingRef.current;
+   const sameEditor=current&&((proposal.target===`record:${current.kind}`&&(current.record?.id??null)===(proposal.entityId??null))||(current.kind==='orders'&&(proposal.open.refs?.order?.id??proposal.entityId)===(current.record?.id??null)));
+   if(!sameEditor&&!acceptView(destination))return;
+   const opening={requestId:request.requestId,proposalId:proposal.id,open:proposal.open,expectedVersion:proposal.recordVersion};
+   setAssistantOpen(false);setAssistantOpenRequest(opening);
+  }catch(cause){if(sequence===assistantOpeningSequence.current)setError(cause.message);}
+ },[api]);
  const navigate=key=>acceptView(typeof key==='string'?{section:key}:key);
  function setQuery(value){setQueryInput(value);cancelSearch();const generation=searchGeneration.current;searchTimer.current=setTimeout(()=>{if(searchGeneration.current===generation)acceptView({...accepted.current,q:value,page:1},{replace:true,check:false});},200);}
  function changeView(patch){
@@ -219,8 +294,11 @@ export default function Admin({csrf,user}) {
   catch(cause){setError(cause.message);}finally{setBusy(false);}
  }
  useEffect(()=>{
-  if(view.record&&(schemas[section]||section==='orders'&&(!view.tab||view.tab==='list')))void openEditor(section,{id:view.record});
- },[section,view.tab,view.record]);
+  if(!view.record||!(schemas[section]||section==='orders'&&(!view.tab||view.tab==='list')))return;
+  const id=view.record==='new'?null:view.record,current=editingRef.current;
+  if(current?.kind===section&&(current.record?.id??null)===id)return;
+  void openEditor(section,id?{id}:null);
+ },[section,view.tab,view.record,assistantOpenRequest?.requestId]);
  async function createProductForImport({productId,kind='products',productType='product',externalKey=''}={}){
   const title=String(externalKey).trim(),prefill=productId?{id:productId}:{title,slug:slugify(title),status:'draft',orderable:true,...(kind==='products'?{productType}:{})};
   if(!await openEditor(kind,prefill))return null;
@@ -241,7 +319,7 @@ export default function Admin({csrf,user}) {
    else updateContent(kind,{records:null,loading:false,error:''});
   }
  }
- async function saveSettings(event){event.preventDefault();setBusy(true);setError('');try{const current=await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(settings)});setSettings(current);settingsSnapshot.current=JSON.stringify(current);setNotice('Configuración guardada.');}catch(cause){setError(cause.message);}finally{setBusy(false);}}
+ async function persistSettings(payload){setBusy(true);setError('');try{const current=await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(payload)});setSettings(current);settingsSnapshot.current=JSON.stringify(current);setNotice('Configuración guardada.');return current;}finally{setBusy(false);}}
  function retry(key){if(key==='settings')void loadSettings();else void loadContent(key).catch(()=>{});}
  async function signOut(){if(!allowExit())return;setBusy(true);try{await api('/api/auth/logout',{method:'POST'});setBusy(false);guardState.current={dirty:false,busy:false};window.location.assign('/admin/login');}catch(cause){setError(cause.message);setBusy(false);}}
  const closeEditor=()=>{openingSequence.current++;setEditing(null);reportInteraction({dirty:false,busy:false});if(accepted.current.record&&(schemas[accepted.current.section]||accepted.current.section==='orders'&&(!accepted.current.tab||accepted.current.tab==='list')))acceptView({...accepted.current,record:''},{replace:true,check:false});if(auxiliaryProduct.current){const {resolve}=auxiliaryProduct.current;auxiliaryProduct.current=null;resolve(null);}};
@@ -255,39 +333,33 @@ export default function Admin({csrf,user}) {
   setEditing({...current,record,revision:current.revision+1});
   return true;
  }
- return <div className="admin-shell">
-  <AdminNavigation view={view} user={user} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onSignOut={signOut} interactionLocked={Boolean(editing)||Boolean(cashAction)||busy||interaction.busy||workspaceInteraction.busy}/>
+ return <AssistantBridgeProvider onOpenAssistant={()=>setAssistantOpen(true)} onProposalOpen={handleProposalOpen}
+  reviseProposal={reviseProposal} cancelProposal={cancelProposal} executeProposal={executeProposal} onReceipt={receiveAssistantReceipt}>
+ <AssistantTargetAcknowledger request={assistantOpenRequest} onHandled={assistantOpenHandled}/>
+ <div className="admin-shell">
+  <AdminNavigation view={view} user={user} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onSignOut={signOut} onOpenAssistant={()=>setAssistantOpen(true)} interactionLocked={Boolean(editing)||Boolean(cashAction)||busy||interaction.busy||workspaceInteraction.busy||assistantMutation}/>
   <div className={`admin-main${isConfiguration?' '+configurationStyles.viewport:''}`}><main className="admin-content" id="admin-workspace" tabIndex={-1}>
    {!['home','reports','cash','advertising'].includes(section)&&<div className="admin-heading"><div><p className="eyebrow">{isConfiguration?(configurationHome?'Administración':'Configuración'):'Mesa de trabajo'}</p><h1 tabIndex="-1" data-admin-section-heading>{configurationHome?'Configuración':section==='settings'?'Datos y publicación de la vitrina':giftView?'Obsequios':configurationTask?.label||sectionLabel}</h1><p>{configurationHome?'Organiza la operación, la vitrina y el acceso al panel.':configurationTask?.description||schemas[section]?.help||(section==='orders'?'Pedidos, envíos y cobros acordados.':'Gestiona los datos de tu negocio.')}</p></div></div>}
    {error&&<div className="error alert" role="alert">{error}<button type="button" className="icon-button" aria-label="Cerrar error" onClick={()=>setError('')}><Icon name="close"/></button></div>}
    {notice&&<div className="success alert" role="status"><Icon name="check"/>{notice}<button type="button" className="icon-button" aria-label="Cerrar aviso" onClick={()=>setNotice('')}><Icon name="close"/></button></div>}
    {opening&&<div className="admin-action-feedback" aria-busy={opening.loading}>{opening.loading?<p role="status">Preparando {opening.record?.title||opening.record?.customerName||'el editor'}…</p>:<div className="error" role="alert">{opening.error}<button type="button" className="text-button" onClick={()=>openEditor(opening.kind,opening.record)}>Reintentar apertura</button></div>}</div>}
-   {isConfiguration?<ConfigurationNavigation view={view} onNavigate={navigate} interactionLocked={busy||interaction.busy||workspaceInteraction.busy}/>:<AreaNavigation view={view} onNavigate={navigate} interactionLocked={busy||interaction.busy||workspaceInteraction.busy}/>}
+   {isConfiguration?<ConfigurationNavigation view={view} onNavigate={navigate} interactionLocked={busy||interaction.busy||workspaceInteraction.busy||assistantMutation}/>:<AreaNavigation view={view} onNavigate={navigate} interactionLocked={busy||interaction.busy||workspaceInteraction.busy||assistantMutation}/>}
    {section==='home'&&<AdminOverview api={api} view={view} onViewChange={changeView} onCreateOrder={()=>openEditor('orders',null)} onImport={()=>navigate({section:'orders',tab:'imports'})} onCreateProduct={()=>openEditor('products',null)} onConfigureCash={configureCash} onNavigate={navigate} onOpenOrder={id=>openEditor('orders',{id})} revision={businessRevision}/>}
    {section==='settings'&&<div aria-busy={settingsResource.loading}>{settingsResource.loading&&<p role="status">{settings?'Actualizando…':'Cargando configuración…'}</p>}{!settings&&settingsResource.loading&&<div className="static-skeleton" aria-hidden="true"/>}{settingsResource.error&&<div className="error" role="alert">{settingsResource.error}<button type="button" className="text-button" onClick={()=>retry('settings')}>Reintentar</button></div>}</div>}
    {schemas[section]&&<ContentList kind={section} resource={resources[section]} view={{...view,q:query}} onViewChange={changeView} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>retry(section)}/>}
-   {section==='orders'&&<OrdersWorkspace key={'orders:'+workspaceEpoch} api={api} resource={ordersResource} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>loadOrders(accepted.current)} onInteractionStateChange={reportWorkspaceInteraction} onCreateProduct={createProductForImport} onMutation={businessChanged}/>}
+   {section==='orders'&&<OrdersWorkspace key={'orders:'+workspaceEpoch} api={api} resource={ordersResource} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>loadOrders(accepted.current)} onInteractionStateChange={reportWorkspaceInteraction} onCreateProduct={createProductForImport} onMutation={businessChanged} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
    {section==='reports'&&<ReportsWorkspace key={'reports:'+workspaceEpoch} api={api} view={view} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
-   {section==='cash'&&<CashWorkspace key={'cash:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
-   {section==='advertising'&&<AdvertisingWorkspace key={'advertising:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
-   {section==='business'&&<BusinessSettings key={'business:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onCreateOrder={()=>openEditor('orders',null)} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
-   {section==='settings'&&settings&&<form className={`settings-form ${configurationStyles.vitrinaForm}`} onSubmit={saveSettings} aria-busy={busy} aria-describedby="vitrina-form-help">
-    <div className={configurationStyles.formIntro}><div><strong>{savedPublication?'Estado guardado: vitrina publicada':'Estado guardado: modo preparación'}</strong>{Boolean(settings.launchApproved)!==savedPublication&&<p>Selección pendiente: {settings.launchApproved?'publicar la vitrina':'volver a modo preparación'}. Se aplicará al guardar.</p>}<p id="vitrina-form-help">Confirma con «Guardar configuración». No hay guardado automático.</p></div></div>
-    <nav className={configurationStyles.formIndex} aria-label="Secciones de datos de la vitrina">{settingsGroups.map((group,index)=><button type="button" className="button subtle" key={group.key} onClick={()=>{const heading=document.getElementById(`settings-${group.key}`);heading?.focus({preventScroll:true});heading?.scrollIntoView({block:'start'});}}><span aria-hidden="true">{index+1}</span>{group.action}</button>)}</nav>
-    <fieldset className="auth-fieldset" disabled={busy}>
-     {settingsGroups.map(group=><section className="settings-group" key={group.key} aria-labelledby={`settings-${group.key}`}>
-      <h2 id={`settings-${group.key}`} tabIndex={-1}>{group.title}</h2><p className={configurationStyles.groupDescription}>{group.description}</p>
-      <div className="settings-fields">{group.fields.map(name=><div className={`settings-field settings-field--${name}`} key={name}><Field field={settingsFieldByName.get(name)} value={settings[name]} onChange={value=>setSettings(previous=>({...previous,[name]:value}))} all={all} api={api}/></div>)}</div>
-      {group.key==='contact'&&<div className="whatsapp-preview" aria-labelledby="whatsapp-preview-title"><h3 id="whatsapp-preview-title">Mensaje de ejemplo</h3><p>{String(settings.whatsappTemplate||'').replaceAll('{producto}','producto de ejemplo')}</p><small>Solo es texto de ejemplo: no se envía ni responde automáticamente. {'{producto}'} se sustituye por la referencia al abrir la consulta en la vitrina.</small></div>}
-      {group.key==='publication'&&<p className="small muted">Al guardar con «Publicar la vitrina» activado, la página pública mostrará los contenidos publicados y guardados. Desactivarlo vuelve a mostrar la preparación. No publica borradores, compra un dominio ni conecta pagos.</p>}
-     </section>)}
-     <div className="settings-save-bar"><span className="small" role="status">{busy?'Guardando configuración…':settingsDirty?'Cambios sin guardar':'Configuración al día'}</span><button type="submit" className="button primary">{busy?'Guardando…':'Guardar configuración'}<Icon name="check" size={16}/></button></div>
-    </fieldset>
-   </form>}
+   {section==='cash'&&<CashWorkspace key={'cash:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
+   {section==='advertising'&&<AdvertisingWorkspace key={'advertising:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
+   {section==='business'&&view.tab==='assistant'&&<AssistantSettings api={api} assistantBusy={assistantMutation} onInteractionStateChange={reportWorkspaceInteraction}/>}
+   {section==='business'&&view.tab!=='assistant'&&<BusinessSettings key={'business:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onCreateOrder={()=>openEditor('orders',null)} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
+   {section==='settings'&&settings&&<StorefrontSettingsForm key="storefront-settings" settings={settings} all={all} api={api} onSettingsChange={setSettings} onSave={persistSettings} onCommitted={current=>{setSettings(current);settingsSnapshot.current=JSON.stringify(current);setNotice('Configuración guardada.');businessChanged();}} onError={message=>setError(message)} dirty={settingsDirty} busy={busy} savedPublication={savedPublication}/>}
  {section==='users'&&<UserManagement key={userRevision} api={api} onInteractionStateChange={reportInteraction} />}
  </main></div>
  {editing&&editing.kind!=='orders'&&<RecordEditor key={editing.kind+':'+(editing.record.id||'new')+':'+editing.revision} kind={editing.kind} record={editing.record} all={all} api={api} onClose={closeEditor} onSaved={saved} onReload={reloadEditor} onInteractionStateChange={reportInteraction}/>}
- {editing?.kind==='orders'&&<OrderEditor key={(editing.record?.id||'new-order')+':'+editing.revision} record={editing.record} all={all} api={api} onClose={closeEditor} onSaved={saved} onReload={reloadEditor} onInteractionStateChange={reportInteraction}/>}
+ {editing?.kind==='orders'&&<OrderEditor key={(editing.record?.id||'new-order')+':'+editing.revision} record={editing.record} all={all} api={api} onClose={closeEditor} onSaved={saved} onReload={reloadEditor} onInteractionStateChange={reportInteraction} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
  {cashAction&&<BusinessActionDialog action={cashAction.action} context={cashAction.context} api={api} onClose={()=>{setCashAction(null);reportInteraction({dirty:false,busy:false});}} onSaved={record=>{setCashAction(null);reportInteraction({dirty:false,busy:false});businessChanged();setNotice('Cuenta '+record.name+' guardada.'+(record.warnings?.length?' '+record.warnings.join(' '):''));}} onInteractionStateChange={reportInteraction}/>}
- </div>;
+ </div>
+ <AssistantConsole api={api} view={view} onNavigate={navigate} brandName={settings?.brandName} open={assistantOpen} onClose={()=>setAssistantOpen(false)}/>
+ </AssistantBridgeProvider>;
 }

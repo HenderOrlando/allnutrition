@@ -1,4 +1,6 @@
 'use client';
+import { useAssistantForm } from './AssistantBridge';
+import { assistantFormDescriptor } from '@/lib/assistant/forms.mjs';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Field } from './Fields';
 import useDialog from './useDialog';
@@ -65,23 +67,23 @@ function initial(action,context){
     occurredOn:today,effectiveOn:today,receivedOn:today,incurredOn:expense?.id?expense.incurredOn:context.expenseOnly?null:today,closingOn:today,
     amountMinor:action==='expense'?expense?.amountMinor??null:action==='collection'?order?.paymentSummary?.outstandingMinor??null:action==='refund'?order?.paymentSummary?.refundDueMinor??null:action==='pay-expense'?expense?.outstandingMinor??null:action==='expense-recovery'?expense?.creditMinor??null:action==='payroll-pay'?payroll?.amountToPayMinor??null:null,
     accountId:action==='expense'?null:contextualAccount,expensePaymentMode:'pending',holder:'business',shipmentId:shipment?.id||expense?.shipmentId||null,method:'Transferencia',reference:'',reason:'',concept:action==='income'?'owner_funding':expense?.concept||'',description:'',supplier:expense?.supplier||'',category:expense?.category||'other',allowCredit:false,
-    expenseId:expense?.id,sourceKey:expense?.sourceKey,reviewConfirmed:false,settlementId:settlement?.id,payrollId:payroll?.id,personId:payroll?.personId||expense?.personId||null,startOn:payroll?.startOn||today.slice(0,8)+'01',endOnExclusive:payroll?.endOnExclusive||'',
+    expenseId:expense?.id,sourceKey:expense?.sourceKey,reviewConfirmed:false,settlementId:settlement?.id,payrollId:payroll?.id,personId:payroll?.personId||expense?.personId||context.person?.id||null,startOn:payroll?.startOn||today.slice(0,8)+'01',endOnExclusive:payroll?.endOnExclusive||'',
     closingId:closing?.id,cashEntryId:entry?.id,documentId:context.documentId||entry?.sourceId||'',documentType:context.documentType||'collection',
     fromAccountId:account?.active?account.id:null,toAccountId:null,countedMinor:null,shippingCreditMinor:0,mode:'opening_balance',
     inventoryOpeningIncluded:'',
     lines:action==='settlement-confirm'?remainingSettlement(settlement):action==='settlement-save'?(settlement?.lines||[]):action==='return'?(order?.items||[]).map(l=>({lineId:l.lineId,quantity:0,condition:'recoverable'})):[],
     assignments:(order?.items||[]).map(l=>({lineId:l.lineId,quantity:order?.shipments?.length?0:l.quantity})),
     lineCosts:(order?.items||[]).map(l=>({lineId:l.lineId,selected:l.unitCostMinor==null,unitCostMinor:l.unitCostMinor,components:l.components?.map(c=>({productId:c.productId,unitCostMinor:c.unitCostMinor}))||[]})),
-    receiptAmountMinor:null,refundAmountMinor:null,receiptOn:'',refundOn:'',sourceId:settlement?.sourceId||null,externalKey:settlement?.externalId||'',reportedOn:settlement?.reportedOn||today,netMinor:settlement?.netMinor??null,
+    receiptAmountMinor:null,refundAmountMinor:null,receiptOn:'',refundOn:'',sourceId:settlement?.sourceId||context.source?.id||null,externalKey:settlement?.externalId||'',reportedOn:settlement?.reportedOn||today,netMinor:settlement?.netMinor??null,
     bonusMinor:0,discountMinor:0,name:account?.name||'',type:account?.type||'cash',active:account?.active??true,
-    responsibleId:account?.responsibleId||null,newPersonName:'',openingOn:account?.openingOn||today,
+    responsibleId:account?.responsibleId||context.person?.id||null,newPersonName:'',openingOn:account?.openingOn||today,
     openingBalanceMinor:null,minimumMinor:account?.minimumMinor??null,closingEnabled:account?.closingEnabled??false,
     closingTime:account?.closingTime??null,toleranceMinor:account?.toleranceMinor??0};
 }
-export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInteractionStateChange=()=>{},configuration=false}){
+export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInteractionStateChange=()=>{},onAssistantRegistered,configuration=false}){
   const [form,setForm]=useState(()=>initial(action,context)),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loaded,setLoaded]=useState(false),[accounts,setAccounts]=useState([]),[people,setPeople]=useState([]),[sources,setSources]=useState([]),[preview,setPreview]=useState(null),[invalid,setInvalid]=useState({});
   const requestId=useRef(crypto.randomUUID()),baseline=useRef(JSON.stringify(form)),errorRef=useRef(null),sequence=useRef(0);
-  const lastPayload=useRef(null),confirmRequest=useRef({key:null,id:crypto.randomUUID()});
+  const lastPayload=useRef(null),confirmRequest=useRef({key:null,id:crypto.randomUUID()}),preparedPayroll=useRef(null);
   const personRequestId=useRef(crypto.randomUUID());
   const personName=useRef(null);
   const fieldId=useId(),expenseAccountSuggestion=useRef(null);
@@ -97,8 +99,20 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const expenseEdit=action==='expense'&&!!context.expense?.id;
   const expenseOnly=action==='expense'&&context.expenseOnly===true;
   const expenseReview=action==='expense'&&Boolean(context.expense?.sourceAsOf||context.expense?.importIdentity||expenseOnly&&!context.expense?.id&&context.shipment?.costObservations?.shipping_out?.sourceAsOf);
+  if(preview)preparedPayroll.current=preview;
+  const payrollReview=preparedPayroll.current;
+  const assistantAction=action==='payroll-prepare'&&payrollReview?'payroll-confirm':action;
+  const assistantTarget=`business-action:${assistantAction}`;
+  const assistantAvailable=Boolean(assistantFormDescriptor(assistantTarget));
+  const assistantEntity=action==='account-save'?context.account:action==='link-shipment'?context.shipment:['expense','pay-expense','expense-recovery'].includes(action)?context.expense:['settlement-save','settlement-confirm'].includes(action)?context.settlement:action==='payroll-prepare'&&payrollReview?{id:payrollReview.id||payrollReview.payrollId,version:payrollReview.version}:['payroll-prepare','payroll-confirm','payroll-pay'].includes(action)?context.payroll:action==='cash-reopen'?context.closing:action==='cash-reverse'?context.entry:action==='document-reverse'?{id:context.documentId||context.entry?.sourceId,version:context.documentVersion}:action==='cash-close'?context.account:['collection','refund','return','complete-costs','resolve-legacy-payment'].includes(action)?context.order:null;
+  const assistantEntityId=assistantEntity?.id||null;
+  const assistantVersion=assistantEntity?.version??null;
   const dirty=JSON.stringify(form)!==baseline.current||Object.values(invalid).some(Boolean);
-  useEffect(()=>{onInteractionStateChange({busy,dirty});},[busy,dirty,onInteractionStateChange]);
+  const assistantValues={...payload(),...(action==='payroll-prepare'&&payrollReview?{payrollId:payrollReview.id||payrollReview.payrollId,version:payrollReview.version??form.version}:{})};
+  const assistant=useAssistantForm({target:assistantTarget,entityId:assistantEntityId,recordVersion:assistantVersion,values:Object.fromEntries(Object.entries(assistantValues).filter(([key])=>!['allowCredit','reviewConfirmed','inventoryOpeningIncluded','active','closingEnabled','type'].includes(key))),dirty,busy:busy||!loaded||!assistantAvailable||Object.values(invalid).some(Boolean),referenceChoices:{accountId:accounts.filter(item=>item.active&&(action!=='cash-close'||item.type==='cash')).map(item=>item.id),fromAccountId:accounts.filter(item=>item.active).map(item=>item.id),toAccountId:accounts.filter(item=>item.active&&item.id!==form.fromAccountId).map(item=>item.id),personId:people.filter(item=>item.active||item.id===form.personId).map(item=>item.id),responsibleId:people.filter(item=>item.active||item.id===form.responsibleId).map(item=>item.id),sourceId:sources.filter(item=>item.active||item.id===form.sourceId).map(item=>item.id),shipmentId:(context.order?.shipments||[]).map(item=>item.id),lineId:(context.order?.items||[]).map(line=>line.lineId),assignments:Object.fromEntries((context.order?.items||[]).map(line=>[line.lineId,Number(line.quantity)]))},applyPatch:applyAssistantPatch});
+  useEffect(()=>{if(loaded&&assistantAvailable)onAssistantRegistered?.({formId:assistant.formId,target:assistantTarget,entityId:assistantEntityId,recordVersion:assistantVersion});},[loaded,assistantAvailable,assistant.formId,assistantTarget,assistantEntityId,assistantVersion,onAssistantRegistered]);
+  const assistantBusy=assistantAvailable&&assistant.assistantBusy,interactionBusy=busy||assistantBusy;
+  useEffect(()=>{onInteractionStateChange({busy:interactionBusy,dirty});},[interactionBusy,dirty,onInteractionStateChange]);
   useEffect(()=>()=>onInteractionStateChange({busy:false,dirty:false}),[onInteractionStateChange]);
   useEffect(()=>{if(error)errorRef.current?.focus();},[error]);
   async function load(){
@@ -145,6 +159,16 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       ...(key==='type'&&value!=='cash'?{closingEnabled:false,closingTime:null}:{})
     }));setPreview(null);
   };
+  function applyAssistantPatch(patch){
+    for(const [key,value] of Object.entries(patch)){
+      if(['allowCredit','reviewConfirmed','inventoryOpeningIncluded','active','closingEnabled','type'].includes(key))continue;
+      if(key==='lineCosts'){
+        set(key,form.lineCosts.map(line=>{const proposed=value.find(item=>item.lineId===line.lineId);return proposed?{...line,...proposed,selected:true}:{...line,selected:false};}));
+      }else if(key==='lines'&&['return','settlement-confirm'].includes(action)){
+        set(key,form.lines.map(line=>{const proposed=value.find(item=>(item.lineId||item.collectionId)===(line.lineId||line.collectionId));return proposed?{...line,...proposed}:action==='return'?{...line,quantity:0}:{...line,grossMinor:0,deductions:line.deductions.map(item=>({...item,amountMinor:0}))};}));
+      }else set(key,value);
+    }
+  }
   const input=(key,title,{required=false,type='text',nullable=false,disabled=false,description=''}={})=>{
     const id=`${fieldId}-${key}`,help=`${id}-help`;
     return <div className="field" key={key}><label htmlFor={id}>{title}{required?' *':''}</label><input id={id} type={type} name={key} value={form[key]??''} required={required} disabled={disabled} aria-describedby={help} maxLength={key==='reason'?2000:300} onInvalid={e=>e.currentTarget.setAttribute('aria-invalid','true')} onInput={e=>{if(e.currentTarget.validity.valid)e.currentTarget.removeAttribute('aria-invalid');}} onChange={e=>set(key,nullable&&!e.target.value?null:e.target.value)}/><small id={help} className="muted field-description">{required?'Obligatorio.':'Opcional.'} {description}</small></div>;
@@ -207,22 +231,32 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
     if(action==='account-save'&&context.account?.id)delete out.openingBalanceMinor;
     return out;
   }
+  async function commitWithAssistant(body,saveUnassisted){
+    setError('');
+    try{
+      const result=await assistant.submitAssisted({payload:body,saveUnassisted,onCommitted:async response=>{baseline.current=JSON.stringify(form);await onSaved(response);}});
+      if(result.postCommitError)setError('Guardado; vista pendiente de actualizar. '+(result.postCommitError.message||''));
+      if(result.reason==='changed')setError('El formulario cambió mientras se guardaba. Revisa los valores e inténtalo de nuevo.');
+    }catch(cause){setError(cause.message);}
+  }
   async function submit(event){
-    event.preventDefault();if(busy||action==='cash-close'&&!closingReady||(action==='link-shipment'&&!context.order?.id))return;setBusy(true);setError('');
-    let committed=false;
-    try {
-      const accountEdit=action==='account-save'&&context.account?.id;
-      const path=action==='account-save'?'/api/admin/business/accounts'+(accountEdit?'/'+encodeURIComponent(context.account.id):''):'/api/admin/business/actions/'+action;
-      const body=payload(),key=JSON.stringify({...body,requestId:undefined});if(lastPayload.current!==null&&lastPayload.current!==key)requestId.current=crypto.randomUUID();lastPayload.current=key;body.requestId=requestId.current;
-      const response=await api(path,{method:accountEdit?'PUT':'POST',body:JSON.stringify(body)});
-      if(action==='payroll-prepare'){setPreview(response);return;}
-      committed=true;baseline.current=JSON.stringify(form);await onSaved(response);
-    }catch(cause){setError(committed?'Guardado; vista pendiente de actualizar. '+cause.message:cause.message);}finally{setBusy(false);}
+    event.preventDefault();if(busy||assistantBusy||!loaded||Object.values(invalid).some(Boolean)||action==='cash-close'&&!closingReady||(action==='link-shipment'&&!context.order?.id))return;
+    const accountEdit=action==='account-save'&&context.account?.id;
+    const path=action==='account-save'?'/api/admin/business/accounts'+(accountEdit?'/'+encodeURIComponent(context.account.id):''):'/api/admin/business/actions/'+action;
+    const body=payload(),key=JSON.stringify({...body,requestId:undefined});if(lastPayload.current!==null&&lastPayload.current!==key)requestId.current=crypto.randomUUID();lastPayload.current=key;body.requestId=requestId.current;
+    const save=async()=>{setBusy(true);try{return await api(path,{method:accountEdit?'PUT':'POST',body:JSON.stringify(body)});}catch(cause){setError(cause.message);return false;}finally{setBusy(false);}};
+    if(action==='payroll-prepare'){
+      const response=await save();if(response!==false)setPreview(response);
+      return;
+    }
+    await commitWithAssistant(body,save);
   }
   async function confirmPrepared(){
-    if(busy||!preview)return;setBusy(true);setError('');
-    let committed=false;
-    try {const body={...payload(),payrollId:preview.id||preview.payrollId,version:preview.version||form.version};const key=JSON.stringify({...body,requestId:undefined});if(confirmRequest.current.key!==key)confirmRequest.current={key,id:crypto.randomUUID()};body.requestId=confirmRequest.current.id;const response=await api('/api/admin/business/actions/payroll-confirm',{method:'POST',body:JSON.stringify(body)});committed=true;baseline.current=JSON.stringify(form);await onSaved(response);}catch(cause){setError(committed?'Guardado; vista pendiente de actualizar. '+cause.message:cause.message);}finally{setBusy(false);}
+    if(busy||assistantBusy||!preview)return;
+    const body={...payload(),payrollId:preview.id||preview.payrollId,version:preview.version??form.version},key=JSON.stringify({...payload(),requestId:undefined});
+    if(confirmRequest.current.key!==key)confirmRequest.current={key,id:crypto.randomUUID()};
+    body.requestId=confirmRequest.current.id;
+    await commitWithAssistant(body,async()=>{setBusy(true);try{return await api('/api/admin/business/actions/payroll-confirm',{method:'POST',body:JSON.stringify(body)});}catch(cause){setError(cause.message);return false;}finally{setBusy(false);}});
   }
   const order=context.order;
   const settlementAmountsValid=form.lines.every(l=>validMoney(l.grossMinor)&&(l.deductions||[]).every(d=>validMoney(d.amountMinor)))&&!Object.values(invalid).some(Boolean);
@@ -234,11 +268,11 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   }[action];
   const reviewAccount=id=>accounts.find(a=>a.id===id)?.name;
   const reviewDate=action==='expense'&&!payingExpense?form.incurredOn:action==='settlement-save'?form.reportedOn:action==='settlement-confirm'?form.receivedOn:form.effectiveOn;
-  return <form onSubmit={submit} aria-busy={busy} className={`business-action-form ${styles.actionForm}`}>
+  return <form onSubmit={submit} aria-busy={interactionBusy} className={`business-action-form ${styles.actionForm}`}>
     {expenseOnly&&<h3>{context.expense?.id?'Corregir':'Registrar'} flete / costo de envío</h3>}
     {error&&<div ref={errorRef} tabIndex={-1} className="error" role="alert">{error}{!loaded&&<button type="button" className="text-button" onClick={load}>Reintentar</button>}</div>}
     {!loaded&&!error&&<p role="status">Cargando datos de la acción…</p>}
-    <fieldset className="editor-fieldset" disabled={busy||!loaded}>
+    <fieldset className="editor-fieldset" disabled={interactionBusy||!loaded}>
       {actionGuidance[action]&&<p className={styles.formGuide}>{expenseOnly?'Registra solo el costo de la transportadora. No cambia el total del cliente ni mueve caja. Los pagos anteriores se conservan y se gestionan por separado.':action==='expense'&&context.expense?.id?'Corrige el gasto con un motivo. Sus pagos anteriores se conservan; un sobrepago permanece como crédito para recuperar.':actionGuidance[action]}</p>}
       {actionExamples[action]&&<details><summary>Ver ejemplo de esta operación</summary><p><strong>Ejemplo ficticio:</strong> {actionExamples[action]}</p></details>}
       {action==='account-save'&&<>
@@ -343,7 +377,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         <p>Neto de líneas vinculadas: {display(net)}</p>
       </>}
       {['payroll-prepare','payroll-confirm'].includes(action)&&<>
-        <div className="product-form-grid">{personSelect()}{input('startOn','Inicio del período',{required:true,type:'date'})}{input('endOnExclusive','Fecha de corte (este día no se incluye)',{required:true,type:'date'})}{amount('bonusMinor','Bonificación (COP)')}{amount('discountMinor','Descuento interno (COP)')}</div>{form.discountMinor>0&&reason()}
+        <div className="product-form-grid">{personSelect()}{input('startOn','Inicio del período',{required:true,type:'date'})}{input('endOnExclusive','Fecha de corte (este día no se incluye)',{required:true,type:'date'})}{amount('bonusMinor','Bonificación (COP)')}{amount('discountMinor','Descuento interno (COP)')}</div>{(form.bonusMinor>0||form.discountMinor>0)&&reason()}
         <p className="hint">Para incluir septiembre completo, usa el 1 de septiembre como inicio y el 1 de octubre como fecha de corte.</p>
         <p className="hint">Control interno, no liquidación laboral legal ni nómina electrónica. Los anticipos no duplican costo; créditos de comisión se compensan antes de pagar.</p>
         {preview&&<section className="form-section" aria-live="polite"><h4>Revisión del período · {cashStateLabels[preview.state]||'Estado no disponible'}</h4><dl className="summary-values">{[['Devengado','earnedMinor'],['Obligaciones pendientes','outstandingMinor'],['Créditos del período','creditMinor'],['Créditos disponibles anteriores','availableCreditMinor'],['Anticipos disponibles','advanceAvailableMinor'],['Anticipos a aplicar','advanceToApplyMinor'],['Anticipos aplicados','advanceAppliedMinor'],['Pago nuevo propuesto','amountToPayMinor']].filter(([,key])=>preview[key]!=null).map(([title,key])=><div key={key}><dt>{title}</dt><dd>{display(preview[key])}</dd></div>)}</dl><p>Días por materializar: {preview.missingDayCount??0}. Confirmar registra devengos una sola vez; pagar es una acción separada.</p>{(preview.obligations||[]).map(e=><p key={e.id}>{expenseCategoryLabels[e.category]||e.concept||'Gasto registrado'} · {display(e.amountMinor)}</p>)}{(preview.carriedCredits||[]).map(e=><p key={e.id}>Crédito {expenseCategoryLabels[e.category]||'Gasto registrado'} · {display(e.creditMinor)}</p>)}<button className="button primary" type="button" onClick={confirmPrepared}>Confirmar período revisado</button></section>}
@@ -361,7 +395,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         </dl><p>{reviewEffect}</p><p className={styles.queryHelp}>Revisa el hecho y sus soportes. No se proyectan saldos futuros con el saldo actual.</p>
       </section>}
     </fieldset>
-    <footer className="editor-footer"><span role="status">{busy?'Guardando…':dirty?'Cambios sin guardar':''}</span>{onCancel&&<button type="button" className="button subtle" disabled={busy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={busy||!loaded||Object.values(invalid).some(Boolean)||action==='cash-close'&&!closingReady||(action==='link-shipment'&&!context.order?.id)}>{expenseOnly?'Guardar costo de envío':action==='expense'?(expenseEdit?'Guardar corrección del gasto':payingExpense?'Registrar gasto y pago':'Guardar gasto pendiente'):configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':titles[action]||'Guardar'}</button></footer>
+    <footer className="editor-footer"><span role="status">{busy?'Guardando…':assistantBusy?'Aplicando asistencia…':dirty?'Cambios sin guardar':''}</span>{assistantAvailable&&<button type="button" className="button subtle" disabled={interactionBusy||!loaded} onClick={assistant.openAssistant}>Ayúdame con este formulario</button>}{onCancel&&<button type="button" className="button subtle" disabled={interactionBusy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={interactionBusy||!loaded||Object.values(invalid).some(Boolean)||action==='cash-close'&&!closingReady||(action==='link-shipment'&&!context.order?.id)}>{expenseOnly?'Guardar costo de envío':action==='expense'?(expenseEdit?'Guardar corrección del gasto':payingExpense?'Registrar gasto y pago':'Guardar gasto pendiente'):configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':titles[action]||'Guardar'}</button></footer>
   </form>;
 }
 function candidateLabel(row){return [row.orderNumber?`AN-${row.orderNumber}`:'Sin pedido',row.tracking||row.concept||row.category,row.date||'Fecha desconocida'].filter(Boolean).join(' · ');}
@@ -370,10 +404,10 @@ function FinanceCandidatePicker({api,type,source,collection,excluded,onSelect}){
   useEffect(()=>{const current=++seq.current;setData(null);if(!source||!expanded)return;setLoading(true);setError('');const params=new URLSearchParams({candidates:type,source,page:String(page),q});if(collection)params.set('collection',collection);api('/api/admin/finance/settlements?'+params).then(value=>{if(current===seq.current)setData(value);}).catch(cause=>{if(current===seq.current)setError(cause.message);}).finally(()=>{if(current===seq.current)setLoading(false);});return()=>{seq.current++;};},[api,type,source,collection,q,page,retry,expanded]);
   return <details className="finance-candidates" onToggle={e=>setExpanded(e.currentTarget.open)}><summary>{type==='collections'?'Buscar y añadir cobro':'Buscar y añadir gasto o crédito'}</summary>{!source?<p>Elige una cuenta de plataforma.</p>:<><label className="field">Buscar por pedido, guía o concepto<input value={q} onChange={e=>{setQ(e.target.value);setPage(1);}} maxLength={100}/></label>{loading&&<p role="status">Actualizando candidatos…</p>}{error&&<p role="alert">{error}<button type="button" onClick={()=>setRetry(x=>x+1)}>Reintentar</button></p>}{data&&<><ul>{data.records.map(row=><li key={row.id}><span>{candidateLabel(row)} · Disponible: {display(row.availableGrossMinor??row.availableMinor)}</span><button type="button" className="button subtle" disabled={loading||excluded.includes(row.id)} onClick={()=>onSelect(row)}>{excluded.includes(row.id)?'Vinculado':'Añadir'}</button></li>)}</ul>{!data.records.length&&<p>No hay registros elegibles para esta búsqueda.</p>}<div className="cash-pagination"><button type="button" disabled={loading||page===1} onClick={()=>setPage(p=>p-1)}>Anterior</button><span>Página {page} · {data.total} registros</span><button type="button" disabled={loading||page*20>=data.total} onClick={()=>setPage(p=>p+1)}>Siguiente</button></div></>}</>}</details>;
 }
-export default function BusinessActionDialog({action,context,api,onClose,onSaved,onInteractionStateChange=()=>{},configuration=false}){
+export default function BusinessActionDialog({action,context,api,onClose,onSaved,onInteractionStateChange=()=>{},onAssistantRegistered,configuration=false}){
   const ref=useRef(null),[interaction,setInteraction]=useState({busy:false,dirty:false});
   const close=useDialog(ref,{...interaction,onClose});
   const callback=useRef(onInteractionStateChange);callback.current=onInteractionStateChange;
   const report=useRef(state=>{setInteraction(state);callback.current(state);}).current;
-  return <dialog ref={ref} className={`editor-drawer ${styles.actionDialog}`} aria-labelledby="business-action-title"><header><div><p className="eyebrow">Operación del negocio</p><h2 id="business-action-title" tabIndex={-1} data-dialog-initial-focus>{configuration&&action==='account-save'?(context.account?.id?'Editar cuenta':'Crear cuenta'):titles[action]}</h2></div><button type="button" className="icon-button" onClick={close} disabled={interaction.busy} aria-label="Cerrar formulario"><Icon name="close"/></button></header><div className="drawer-body"><BusinessActionForm action={action} context={context} api={api} onSaved={onSaved} onCancel={close} onInteractionStateChange={report} configuration={configuration}/></div></dialog>;
+  return <dialog ref={ref} className={`editor-drawer ${styles.actionDialog}`} aria-labelledby="business-action-title"><header><div><p className="eyebrow">Operación del negocio</p><h2 id="business-action-title" tabIndex={-1} data-dialog-initial-focus>{configuration&&action==='account-save'?(context.account?.id?'Editar cuenta':'Crear cuenta'):titles[action]}</h2></div><button type="button" className="icon-button" onClick={close} disabled={interaction.busy} aria-label="Cerrar formulario"><Icon name="close"/></button></header><div className="drawer-body"><BusinessActionForm action={action} context={context} api={api} onSaved={onSaved} onCancel={close} onInteractionStateChange={report} onAssistantRegistered={onAssistantRegistered} configuration={configuration}/></div></dialog>;
 }

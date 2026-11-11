@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Field } from './Fields';
 import useDialog from './useDialog';
+import { useAssistantForm } from './AssistantBridge.jsx';
 import styles from './AdvertisingWorkspace.module.css';
 
 const ROOT = '/api/admin/social';
@@ -172,14 +173,26 @@ function Recommendations({ analysis, stale, commercialStale, onAction, onAnalyze
   </section>;
 }
 function ResultActionDialog({ action, campaignId, api, requestIds, onClose, onSaved, onInteractionStateChange }) {
-  const ref = useRef(null), errorRef = useRef(null), controllers = useRef(new Set()), mounted = useRef(true), searchSequence = useRef(0);
+  const ref = useRef(null), errorRef = useRef(null), controllers = useRef(new Set()), mounted = useRef(true), searchSequence = useRef(0), submitLocked = useRef(false);
   const [reason, setReason] = useState(''), [acknowledged, setAcknowledged] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [query, setQuery] = useState(''), [search, setSearch] = useState({ q: '', page: 1 }), [candidates, setCandidates] = useState(null), [searching, setSearching] = useState(false), [searchError, setSearchError] = useState('');
   const initialRecord = action.record ? { ...action.record, recordId: action.record.id, link: { ...action.record.link, campaignId } } : null;
   const [selected, setSelected] = useState(initialRecord), [unlink, setUnlink] = useState(false);
   const isLink = action.type === 'link', dirty = Boolean(reason || acknowledged || selected?.recordId !== initialRecord?.recordId || unlink);
-  const close = useDialog(ref, { busy, dirty, onClose });
-  useEffect(() => { onInteractionStateChange({ dirty, busy }); }, [dirty, busy, onInteractionStateChange]);
+  const assistant = useAssistantForm({
+    target: 'advertising-result-action',
+    entityId: action.record?.id || action.recommendation?.id || null,
+    recordVersion: action.record?.link?.version ?? action.recommendation?.version ?? null,
+    values: { reason }, dirty, busy,
+    enabled: isLink || action.type === 'dismiss',
+    generationKey: JSON.stringify([campaignId, action.type, action.kind, selected?.recordId, selected?.link?.version, unlink, acknowledged]),
+    applyPatch: patch => {
+      if (Object.keys(patch).some(key => key !== 'reason')) throw new Error('La selección y confirmación de esta acción son manuales.');
+      if (Object.hasOwn(patch, 'reason')) changeReason(patch.reason);
+    },
+  });
+  const close = useDialog(ref, { busy: busy || assistant.assistantBusy, dirty, onClose });
+  useEffect(() => { onInteractionStateChange({ dirty, busy: busy || assistant.assistantBusy }); }, [dirty, busy, assistant.assistantBusy, onInteractionStateChange]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; for (const controller of controllers.current) controller.abort(); onInteractionStateChange({ dirty: false, busy: false }); }; }, [onInteractionStateChange]);
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
   useEffect(() => {
@@ -193,37 +206,45 @@ function ResultActionDialog({ action, campaignId, api, requestIds, onClose, onSa
   }, [api, campaignId, isLink, action.kind, search]);
   const title = isLink ? action.record ? 'Rectificar vínculo declarado' : `Vincular ${action.kind === 'order' ? 'pedido' : 'gasto publicitario'} existente` : action.type === 'dismiss' ? 'Descartar propuesta con motivo' : 'Crear borrador con esta idea';
   const changingOrigin = selected?.link?.campaignId && selected.link.campaignId !== campaignId;
+  function changeReason(value) { setReason(value); setAcknowledged(false); }
   async function submit(event) {
     event.preventDefault();
-    if (busy || isLink && !selected) return;
+    if (submitLocked.current || busy || assistant.assistantBusy || isLink && !selected) return;
     if ((isLink || action.type === 'dismiss') && !reason.trim()) { setError('Escribe un motivo para conservar la trazabilidad.'); return; }
     if (!acknowledged) { setError('Confirma explícitamente el alcance de esta acción.'); return; }
     const body = isLink ? { kind: action.kind, recordId: selected.recordId, campaignId: unlink ? null : campaignId, version: selected.link?.version ?? 0, reason: reason.trim() } : { action: action.type, version: action.recommendation.version, ...(action.type === 'dismiss' ? { reason: reason.trim() } : {}) };
     const path = isLink ? `${ROOT}/campaigns/${encodeURIComponent(campaignId)}/links` : `${ROOT}/recommendations/${encodeURIComponent(action.recommendation.id)}/actions`;
     const key = `${path}:${JSON.stringify(body)}`;
     if (!requestIds.current.has(key)) requestIds.current.set(key, crypto.randomUUID());
-    const controller = new AbortController(); controllers.current.add(controller); setBusy(true); setError('');
-    try {
-      const result = await api(path, { method: 'POST', body: JSON.stringify({ ...body, requestId: requestIds.current.get(key) }), signal: controller.signal });
-      if (!mounted.current || controller.signal.aborted) return;
-      requestIds.current.delete(key);
-      await onSaved(result, isLink ? 'link' : action.type);
-    } catch (cause) { if (cause.name !== 'AbortError' && mounted.current && !controller.signal.aborted) setError(`${cause.message}${cause.status === 409 ? ' El registro cambió: cierra y vuelve a abrir para revisar su versión actual.' : ' Si la respuesta se perdió, reintentar la misma acción conserva su identificador; no se crea otra intención.'}`); }
-    finally { controllers.current.delete(controller); if (mounted.current) setBusy(false); }
+    const saveUnassisted = async () => {
+      const controller = new AbortController(); controllers.current.add(controller); submitLocked.current = true; setBusy(true); setError('');
+      try {
+        const result = await api(path, { method: 'POST', body: JSON.stringify({ ...body, requestId: requestIds.current.get(key) }), signal: controller.signal });
+        if (!mounted.current || controller.signal.aborted) return false;
+        requestIds.current.delete(key);
+        await onSaved(result, isLink ? 'link' : action.type);
+        return result;
+      } catch (cause) {
+        if (cause.name !== 'AbortError' && mounted.current && !controller.signal.aborted) setError(`${cause.message}${cause.status === 409 ? ' El registro cambió: cierra y vuelve a abrir para revisar su versión actual.' : ' Si la respuesta se perdió, reintentar la misma acción conserva su identificador; no se crea otra intención.'}`);
+        return false;
+      } finally { controllers.current.delete(controller); submitLocked.current = false; if (mounted.current) setBusy(false); }
+    };
+    await saveUnassisted();
   }
-  return <dialog ref={ref} className={styles.dialog} aria-labelledby="social-results-action-title" style={{ maxWidth: 'min(48rem, calc(100vw - 2rem))', overflowWrap: 'anywhere' }}><header className={styles.dialogHeader}><h2 id="social-results-action-title">{title}</h2><button type="button" className="button subtle" onClick={close} disabled={busy}>Cerrar</button></header><div className={styles.dialogBody}>
-    {isLink && <><p>Origen declarado por el administrador, no atribución automática. No cambia etiquetas históricas ni crea pedidos, gastos o pagos. Un registro solo puede pertenecer a una campaña.</p><form method="post" onSubmit={event => { event.preventDefault(); setSearch({ q: query.trim(), page: 1 }); }}><div className={styles.fieldGrid}><Field field={{ name: 'linkSearch', label: action.kind === 'order' ? 'Buscar por número o etiqueta histórica' : 'Buscar por concepto o etiqueta histórica', max: 200 }} value={query} onChange={setQuery}/><button type="submit" className="button subtle" disabled={busy || searching}>Buscar registros</button></div></form>
+  return <dialog ref={ref} className={styles.dialog} aria-labelledby="social-results-action-title" inert={assistant.assistantBusy} style={{ maxWidth: 'min(48rem, calc(100vw - 2rem))', overflowWrap: 'anywhere' }}><header className={styles.dialogHeader}><h2 id="social-results-action-title">{title}</h2><button type="button" className="button subtle" onClick={close} disabled={busy || assistant.assistantBusy}>Cerrar</button></header><div className={styles.dialogBody}>
+    {isLink && <><p>Origen declarado por el administrador, no atribución automática. No cambia etiquetas históricas ni crea pedidos, gastos o pagos. Un registro solo puede pertenecer a una campaña.</p><form method="post" onSubmit={event => { event.preventDefault(); if (!busy && !assistant.assistantBusy) setSearch({ q: query.trim(), page: 1 }); }}><fieldset disabled={busy || assistant.assistantBusy} className="editor-fieldset"><div className={styles.fieldGrid}><Field field={{ name: 'linkSearch', label: action.kind === 'order' ? 'Buscar por número o etiqueta histórica' : 'Buscar por concepto o etiqueta histórica', max: 200 }} value={query} onChange={setQuery}/><button type="submit" className="button subtle" disabled={busy || searching || assistant.assistantBusy}>Buscar registros</button></div></fieldset></form>
       {searching && <p role="status">Consultando candidatos locales…</p>}{searchError && <p role="alert" className={styles.error}>{searchError} Los candidatos anteriores no se consideran una búsqueda nueva.</p>}
       {candidates && <><p>Resultados para «{candidates.q || 'todos'}» · página {candidates.page} · {candidates.total} registros.</p><div className={styles.choiceList}>{candidates.items.map(item => <article className={styles.card} key={item.recordId}><p><strong>{action.kind === 'order' ? `Pedido ${item.number}` : item.concept}</strong> · {money(item.totalMinor ?? item.amountMinor, 'COP')}</p><p>Etiqueta histórica: {item.marketingCampaign || item.campaign || 'Sin etiqueta'}. No crea vínculo por coincidencia.</p>{item.link && <p>Vínculo actual: {item.link.campaignName || item.link.campaignId} · versión {item.link.version} · {item.link.actorId} · {date(item.link.updatedAt)} · motivo: {item.link.reason}</p>}<button type="button" className="button subtle" disabled={busy || searching || Boolean(searchError)} aria-pressed={selected?.recordId === item.recordId} onClick={() => { setSelected(item); setUnlink(false); setAcknowledged(false); }}>{item.link?.campaignId && item.link.campaignId !== campaignId ? 'Cambiar vínculo a esta campaña' : item.link ? 'Rectificar vínculo de esta campaña' : 'Seleccionar para vincular'}</button></article>)}</div>{!candidates.items.length && <p>No hay registros coincidentes elegibles. Los gastos candidatos pertenecen únicamente a Publicidad.</p>}<div className={styles.pagination}><button type="button" className="button subtle" disabled={busy || searching || candidates.page <= 1} onClick={() => setSearch({ q: candidates.q, page: candidates.page - 1 })}>Anterior</button><button type="button" className="button subtle" disabled={busy || searching || candidates.page * candidates.pageSize >= candidates.total} onClick={() => setSearch({ q: candidates.q, page: candidates.page + 1 })}>Siguiente</button></div></>}
     </>}
     <form method="post" onSubmit={submit} aria-busy={busy} className={styles.stack}>
       {error && <div role="alert" tabIndex={-1} ref={errorRef} className={styles.error}>{error}</div>}
-      <fieldset disabled={busy} className="editor-fieldset">
+      <fieldset disabled={busy || assistant.assistantBusy} className="editor-fieldset">
         {isLink && selected && <><p>Seleccionado: {action.kind === 'order' ? `Pedido ${selected.number}` : selected.concept} · versión del vínculo {selected.link?.version ?? 0} {selected.link ? '(existente)' : '(nuevo)'}</p>{changingOrigin && <p className={styles.warning}>Cambiar vínculo: se retirará de {selected.link.campaignName || selected.link.campaignId} y se asociará a esta campaña. Ambas evaluaciones comerciales deberán recalcularse.</p>}{selected.link?.campaignId === campaignId && <label className={styles.checkRow}><input type="checkbox" checked={unlink} onChange={event => { setUnlink(event.target.checked); setAcknowledged(false); }}/>Retirar este vínculo sin borrar el pedido/gasto original</label>}</>}
         {!isLink && action.type === 'duplicate-from-recommendation' && <><p>Se creará un borrador nuevo vinculado a la publicación y a esta idea, sin fechas, aceptación, IDs remotos, estimación ni vínculos comerciales anteriores. El presupuesto no aumenta y no se autoriza publicación ni gasto.</p><p>Idea: {text(action.recommendation.proposedChange?.text || action.recommendation.proposedChange)}</p><p>Debes aportar o editar la imagen o video o su texto y confirmar el cambio cuando corresponda.</p></>}
-        {(isLink || action.type === 'dismiss') && <Field field={{ name: 'reason', label: 'Motivo de la rectificación o decisión', type: 'textarea', required: true, max: 500, description: 'Entre 1 y 500 caracteres. Se conserva con actor, fecha y versión para auditoría.' }} value={reason} onChange={setReason}/>}
-        <label className={styles.checkRow}><input type="checkbox" required checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} data-dialog-initial-focus/>{isLink ? changingOrigin ? 'Confirmo cambiar explícitamente el origen declarado a esta campaña.' : unlink ? 'Confirmo retirar solo el vínculo declarado, conservando el documento original.' : 'Confirmo este origen declarado, no una atribución causal.' : action.type === 'dismiss' ? 'Confirmo descartar esta propuesta con el motivo indicado.' : 'Confirmo crear solo un borrador para revisión, sin publicación ni inversión.'}</label>
-      </fieldset><div className={styles.actions}><button type="button" className="button subtle" disabled={busy} onClick={close}>Cancelar</button><button type="submit" className="button primary" disabled={busy || isLink && !selected}>{busy ? 'Guardando…' : isLink ? changingOrigin ? 'Cambiar vínculo' : unlink ? 'Retirar vínculo' : 'Guardar vínculo' : action.type === 'dismiss' ? 'Descartar propuesta' : 'Crear próximo borrador'}</button></div>
+        {(isLink || action.type === 'dismiss') && <Field field={{ name: 'reason', label: 'Motivo de la rectificación o decisión', type: 'textarea', required: true, max: 500, description: 'Entre 1 y 500 caracteres. Se conserva con actor, fecha y versión para auditoría.' }} value={reason} onChange={changeReason}/>}
+        {(isLink || action.type === 'dismiss') && <button type="button" className="button subtle" disabled={assistant.assistantBusy || busy} onClick={assistant.openAssistant}>Ayúdame con el motivo</button>}
+        <label className={styles.checkRow}><input type="checkbox" required checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/>{isLink ? 'Confirmo el registro seleccionado y el cambio de vínculo declarado; no atribuye ventas ni modifica dinero.' : action.type === 'dismiss' ? 'Revisé esta propuesta y confirmo que la descarto con el motivo indicado.' : 'Confirmo que se creará solo un borrador nuevo; no autoriza publicación ni inversión.'}</label>
+      </fieldset><div className={styles.actions}><button type="button" className="button subtle" disabled={busy || assistant.assistantBusy} onClick={close}>Cancelar</button><button type="submit" className="button primary" disabled={busy || assistant.assistantBusy || isLink && !selected}>{busy ? 'Guardando…' : isLink ? changingOrigin ? 'Cambiar vínculo' : unlink ? 'Retirar vínculo' : 'Guardar vínculo' : action.type === 'dismiss' ? 'Descartar propuesta' : 'Crear próximo borrador'}</button></div>
     </form>
   </div></dialog>;
 }

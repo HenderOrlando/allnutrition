@@ -24,9 +24,7 @@ async function settingsFixture(page) {
     return response.json();
   };
   await navigate(page, 'Configuración');
-  const selector = page.getByRole('navigation', { name: 'Vistas de configuración', exact: true }).getByRole('combobox', { name: 'Cambiar de tarea', exact: true });
-  if (await selector.isVisible()) await selector.selectOption('social');
-  else await openConfigurationTask(page, 'social');
+  await openConfigurationTask(page, 'social');
   await expect(page).toHaveURL(url => url.searchParams.get('section') === 'business' && url.searchParams.get('tab') === 'social');
   await expect(formFor(page)).toBeVisible();
   return { get, put };
@@ -68,7 +66,7 @@ test('redes sociales: configuración dinámica, custodia, CAS y navegación sin 
     const keep = async dialog => { discardCount++; await dialog.dismiss(); };
     page.on('dialog', keep);
     try {
-      await page.getByRole('navigation', { name: 'Vistas de configuración', exact: true }).getByRole('combobox', { name: 'Cambiar de tarea', exact: true }).selectOption('rules');
+      await openConfigurationTask(page, 'rules');
     } finally { page.off('dialog', keep); }
     expect(discardCount).toBe(1);
     await expect(page).toHaveURL(url => url.searchParams.get('tab') === 'social');
@@ -139,9 +137,7 @@ test('redes sociales: configuración dinámica, custodia, CAS y navegación sin 
 
 async function openShippingSettings(page) {
   await navigate(page, 'Configuración');
-  const selector = page.getByRole('navigation', { name: 'Vistas de configuración', exact: true }).getByRole('combobox', { name: 'Cambiar de tarea', exact: true });
-  if (await selector.isVisible()) await selector.selectOption('shipping-integrations');
-  else await openConfigurationTask(page, 'shipping-integrations');
+  await openConfigurationTask(page, 'shipping-integrations');
   await expect(page).toHaveURL(url => url.searchParams.get('section') === 'business' && url.searchParams.get('tab') === 'shipping');
 }
 

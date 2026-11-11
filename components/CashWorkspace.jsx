@@ -1,5 +1,5 @@
 'use client';
-import {useEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useRef,useState} from 'react';
 import ImportedData from './ImportedData';
 import BusinessActionDialog from './BusinessActionDialog';
 import CashGuide from './CashGuide';
@@ -29,13 +29,14 @@ function resultText(name,result,context){
   if(name==='expense')return result.amountMinor==null?'Costo registrado sin importe confirmado; no se movió dinero.':context.expense?.id?'Gasto corregido; se conservó el historial de pagos, sin otro movimiento de dinero.':result.paidMinor>0?'Gasto y pago registrados. Pendiente: '+money(result.outstandingMinor)+'.':'Gasto pendiente registrado; no se movió dinero.';
   return {'account-save':'Cuenta guardada. Apertura y movimientos históricos conservados.',income:'Ingreso no comercial registrado; no aumenta las ventas.',transfer:'Transferencia registrada: salida y entrada entre cuentas propias, sin cambio del total.','cash-close':'Cierre registrado con la comparación devuelta al guardar; no ajusta el dinero.','cash-reopen':'Cierre reabierto con motivo; su historia se conserva.','pay-expense':'Pago registrado. Pendiente del gasto: '+money(result.expense?.outstandingMinor)+'.','expense-recovery':'Recuperación registrada; entra dinero sin reducir otra vez el gasto.',advance:'Anticipo registrado; salida real que se considera al revisar el sueldo.','settlement-save':'Declaración guardada; no confirma recepción de dinero.','settlement-confirm':'Recepción registrada. Neto de este recibo: '+money(result.receipt?.netMinor)+'.','payroll-prepare':'Sueldo confirmado como obligación; no registra un pago.','payroll-confirm':'Sueldo confirmado como obligación; no registra un pago.','payroll-pay':'Pago de sueldo registrado.','cash-reverse':'Reversión registrada; el original se conserva.','document-reverse':'Documento revertido completo; se conserva la historia.'}[name]||'Operación registrada.';
 }
-export default function CashWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInteractionStateChange,onMutation,revision}){
+export default function CashWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInteractionStateChange,onMutation,revision,assistantOpenRequest,onAssistantOpenHandled}){
   const tab=view.tab||'overview',period=view.period||'month',anchor=view.anchor||bogotaDate();
   const [data,setData]=useState(null),[overview,setOverview]=useState(null),[detail,setDetail]=useState(null),[closings,setClosings]=useState(null),[closingPage,setClosingPage]=useState(1),[loading,setLoading]=useState(false),[error,setError]=useState(''),[retry,setRetry]=useState(0),[action,setAction]=useState(null),[notice,setNotice]=useState('');
   const [catalogs,setCatalogs]=useState({people:[],sources:[]}),[dataKey,setDataKey]=useState('');
   const seq=useRef(0),interaction=useRef({busy:false,dirty:false});
   const headingRef=useRef(null),accountHeadingRef=useRef(null),detailHeadingRef=useRef(null),accountOpener=useRef(null),detailOpener=useRef(null),accountReturn=useRef(null),skipFocusRecord=useRef(null),pendingFocus=useRef(null),operationsRef=useRef(null);
   const pendingReturn=useRef(null);
+  const assistantOpening=useRef(null),assistantHandled=useRef(null);
   const bounds=periodBounds(period,anchor),record=view.record;
   const queryKey=JSON.stringify([tab,record,view.account,view.q,view.page,view.status,view.seller,view.source,view.category,bounds.startDate,bounds.endDateExclusive,revision,retry,closingPage]);
   const isLoading=loading||dataKey!==queryKey,ready=!isLoading&&!error;
@@ -71,6 +72,55 @@ export default function CashWorkspace({api,view,onViewChange,onOpenOrder,onNavig
     }).catch(cause=>{if(current===seq.current){setError(cause.message);setDataKey(queryKey);}}).finally(()=>{if(current===seq.current)setLoading(false);});
     return()=>{seq.current++;};
   },[api,queryKey]);
+  useEffect(()=>{
+    const request=assistantOpenRequest,open=request?.open;
+    if(!request||open?.owner!=='cash'||!open.target?.startsWith('business-action:')||assistantHandled.current===request.requestId||assistantOpening.current===request.requestId)return;
+    if(action||interaction.current.busy||interaction.current.dirty){setError('Conserva tu formulario actual antes de abrir otra propuesta de Ali.');return;}
+    const name=open.target.slice('business-action:'.length);
+    const allowed=['income','transfer','expense','expense-recovery','pay-expense','settlement-save','settlement-confirm','cash-close','cash-reopen','cash-reverse','document-reverse','payroll-confirm','payroll-pay','advance'];
+    if(!allowed.includes(name)){setError('Esta operación debe abrirse desde su espacio correspondiente.');return;}
+    let live=true;
+    (async()=>{
+      try{
+        const context={},resources={account:'accounts',person:'people',platform:'platforms',source:'sources'},financial={expense:'expenses',settlement:'settlements',payroll:'payroll',closing:'closings',entry:'movements'};
+        let documentRef=null;
+        for(const [role,ref] of Object.entries(open.refs||{})){
+          let value;
+          if(resources[role])value=await api(`/api/admin/business/${resources[role]}/${encodeURIComponent(ref.id)}`);
+          else if(financial[role])value=await api(`/api/admin/finance/${financial[role]}?${new URLSearchParams({record:ref.id})}`);
+          else if(role==='document'){
+            documentRef=ref;
+            continue;
+          }else throw new Error('La propuesta contiene una referencia ajena a Caja.');
+          if(!value||value.id!==ref.id||(ref.version!=null&&value.version!==ref.version))throw new Error('Una referencia cambió. Pide a Ali revisar los datos actuales.');
+          context[role]=value;
+        }
+        if(documentRef){
+          const ref=documentRef,type=ref.documentType;
+          const document=type==='settlement'?context.settlement
+            :type==='settlement_receipt'?context.settlement?.receipts?.find(item=>item.id===ref.id)
+            :type==='expense_payment'?[...(context.expense?.payments||[]),...(context.expense?.activePayments||[])].find(item=>item.id===ref.id)
+            :type==='payroll_payment'&&context.payroll?.id===ref.id?context.payroll
+            :['payroll_payment','advance'].includes(type)&&context.entry&&(context.entry.id===ref.id||context.entry.sourceId===ref.id)?context.entry:null;
+          const matchesId=document&&(document.id===ref.id||type==='payroll_payment'&&document.sourceId===ref.id);
+          const siblings=type==='settlement_receipt'?context.settlement?.receipts:type==='expense_payment'?context.expense?.payments:null;
+          if(!matchesId||document.reversalOf||document.reversed||siblings?.some(item=>item.reversalOf===ref.id)||(ref.version!=null&&document.version!==ref.version))throw new Error('El documento cambió o no pertenece a las referencias verificadas.');
+          context.documentId=ref.id;context.documentType=type;context.documentVersion=ref.version??1;
+        }
+        const required={'expense-recovery':'expense','pay-expense':'expense','settlement-confirm':'settlement','cash-reopen':'closing','cash-reverse':'entry','payroll-pay':'payroll'};
+        if(required[name]&&!context[required[name]]||name==='document-reverse'&&!context.documentId)throw new Error('Falta el registro real de esta operación.');
+        if(!live||interaction.current.busy||interaction.current.dirty)return;
+        assistantOpening.current=request.requestId;
+        setAction({name,context,requestId:request.requestId});setError('');
+      }catch(cause){if(live)setError(cause.message);}
+    })();
+    return()=>{live=false;};
+  },[assistantOpenRequest,api,action]);
+  const assistantRegistered=useCallback(binding=>{
+    const request=assistantOpenRequest;
+    if(!request||assistantOpening.current!==request.requestId||assistantHandled.current===request.requestId||binding.target!==request.open.target||(binding.entityId??null)!==(request.open.entityId??null)||binding.recordVersion!==request.expectedVersion)return;
+    assistantHandled.current=request.requestId;onAssistantOpenHandled?.(request.requestId);
+  },[assistantOpenRequest,onAssistantOpenHandled]);
   async function saved(result){
     const {name,context}=action;
     setAction(null);setNotice({name,result,text:resultText(name,result,context)});
@@ -202,6 +252,6 @@ export default function CashWorkspace({api,view,onViewChange,onOpenOrder,onNavig
       </div>
       <p className={styles.queryHelp}>Este listado usa las fechas del hecho; los registros sin fecha no entran en el período. {tab==='payroll'?'Control interno de remuneración, no nómina legal.':''}</p>
     </>}
-    {action&&<BusinessActionDialog key={action.name} action={action.name} context={action.context} api={api} onClose={()=>setAction(null)} onSaved={saved} onInteractionStateChange={reportInteraction}/>}
+    {action&&<BusinessActionDialog key={action.name+':'+(action.requestId||'manual')} action={action.name} context={action.context} api={api} onClose={()=>setAction(null)} onSaved={saved} onInteractionStateChange={reportInteraction} onAssistantRegistered={assistantRegistered}/>}
   </section>;
 }

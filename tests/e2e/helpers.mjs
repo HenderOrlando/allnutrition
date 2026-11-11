@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { adminAreas, adminSections } from '../../lib/admin-view.mjs';
+import { adminTasks } from '../../components/admin-tasks.mjs';
 
 export async function login(page){
  await page.goto('/admin/login');
@@ -30,21 +31,28 @@ export async function navigate(page,destination){
  if(section.area==='products'){
   await selectWorkspace(page,'Vistas de productos',destination);
  }else if(section.id!==area.id){
-  const subnav=page.getByRole('navigation',{name:'Vistas de configuración',exact:true});
-  const selector=subnav.getByRole('combobox',{name:'Cambiar de tarea',exact:true});
-  if(await selector.isVisible())await selector.selectOption(section.id);
-  else await openConfigurationTask(page,section.id);
+  await openConfigurationTask(page,section.id);
  }
  await expect(page).toHaveURL(url=>(url.searchParams.get('section')||'home')===section.id);
 }
 
 export async function openConfigurationTask(page,id){
- const task=page.locator(`[data-configuration-task="${id}"]`);
- if(!await task.isVisible())await page.locator('[data-configuration-advanced] > summary').click();
- await task.click();
+ const task=adminTasks.find(task=>task.id===id);
+ if(!task)throw new Error(`Tarea de configuración desconocida: ${id}`);
+ const nav=page.getByRole('navigation',{name:'Vistas de configuración',exact:true});
+ await expect(nav).toBeVisible();
+ const selector=nav.getByRole('combobox');
+ if(await selector.isVisible()){
+  await selector.selectOption(id);
+ }else{
+  const directory=nav.locator('details');
+  if(!await directory.evaluate(element=>element.open))await directory.locator('summary').click();
+  await nav.getByRole('button',{name:task.action||task.label,exact:true}).click();
+ }
 }
 
 export async function signOut(page){
+ const loggingOut=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/auth/logout'&&response.request().method()==='POST');
  const button=page.getByRole('button',{name:'Cerrar sesión',exact:true}).and(page.locator(':visible'));
  if(await button.count()){
   await button.click();
@@ -53,6 +61,7 @@ export async function signOut(page){
   await nav.getByRole('button',{name:'Más',exact:true}).click();
   await page.getByRole('dialog',{name:'Todas tus secciones',exact:true}).getByRole('button',{name:'Cerrar sesión',exact:true}).click();
  }
+ expect((await loggingOut).status()).toBe(200);
 }
 
 export async function selectWorkspace(scope,label,destination){

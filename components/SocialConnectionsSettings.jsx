@@ -252,18 +252,18 @@ function settingsForm(settings) {
 
 function SocialSettingsForm({ api, settings, report, onSaved, disabled }) {
   const [form, setForm] = useState(() => settingsForm(settings)), [saved, setSaved] = useState(settings), [busy, setBusy] = useState(false), [error, setError] = useState(''), [conflict, setConflict] = useState(false), [notice, setNotice] = useState('');
-  const baseline = useRef(JSON.stringify(form)), current = useRef(form), errorRef = useRef(null), requests = useRef(new Set()), locked = useRef(false), rid = useRequestIds();
-  current.current = form;
+  const baseline = useRef(JSON.stringify(form)), current = useRef(form), savedVersion = useRef(settings.version), errorRef = useRef(null), requests = useRef(new Set()), locked = useRef(false), rid = useRequestIds();
   const dirty = JSON.stringify(form) !== baseline.current;
   useEffect(() => {
-    if (JSON.stringify(current.current) !== baseline.current) return;
+    // A delayed refresh of an acknowledged version must not replace a newer local edit.
+    if (settings.version <= savedVersion.current || JSON.stringify(current.current) !== baseline.current) return;
     const next = settingsForm(settings);
-    baseline.current = JSON.stringify(next); current.current = next; setForm(next); setSaved(settings);
+    savedVersion.current = settings.version; baseline.current = JSON.stringify(next); current.current = next; setForm(next); setSaved(settings);
   }, [settings]);
   useEffect(() => { report('settings', { dirty, busy }); }, [dirty, busy, report]);
   useEffect(() => () => { for (const controller of requests.current) controller.abort(); report('settings', { dirty: false, busy: false }); }, [report]);
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
-  const set = (key, value) => { setForm(previous => ({ ...previous, [key]: value })); setNotice(''); };
+  const set = (key, value) => { const next = { ...current.current, [key]: value }; current.current = next; setForm(next); setNotice(''); };
   async function submit(event) {
     event.preventDefault(); if (locked.current) return;
     locked.current = true; setBusy(true); setError(''); setNotice('');
@@ -272,7 +272,7 @@ function SocialSettingsForm({ api, settings, report, onSaved, disabled }) {
       const { appSecret, ...options } = form, payload = { ...options, ...(appSecret ? { appSecret } : {}) };
       const result = await api(ROOT + '/settings', { method: 'PUT', body: JSON.stringify({ ...payload, requestId: rid('settings-save', payload) }), signal: controller.signal });
       const next = settingsForm(result);
-      baseline.current = JSON.stringify(next); current.current = next; setForm(next); setSaved(result); setConflict(false);
+      savedVersion.current = result.version; baseline.current = JSON.stringify(next); current.current = next; setForm(next); setSaved(result); setConflict(false);
       report('settings', { dirty: false, busy: true }); setNotice('Opciones guardadas. Los procesos en marcha usarán esta configuración en su próxima operación. No se publicó ni activó ningún anuncio.');
       await onSaved();
     } catch (cause) {
@@ -285,7 +285,7 @@ function SocialSettingsForm({ api, settings, report, onSaved, disabled }) {
     const controller = new AbortController(); requests.current.add(controller);
     try {
       const result = await api(ROOT + '/settings', { signal: controller.signal }), next = settingsForm(result);
-      baseline.current = JSON.stringify(next); current.current = next; setForm(next); setSaved(result); setConflict(false); setNotice('Configuración vigente cargada. Revisa los valores antes de guardar.');
+      savedVersion.current = result.version; baseline.current = JSON.stringify(next); current.current = next; setForm(next); setSaved(result); setConflict(false); setNotice('Configuración vigente cargada. Revisa los valores antes de guardar.');
     } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); }
     finally { requests.current.delete(controller); locked.current = false; setBusy(false); }
   }

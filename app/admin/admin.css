@@ -271,7 +271,7 @@
   .admin-theme .admin-topbar {left:0;height:56px;padding:0 16px}
   .admin-theme .list-toolbar {top:56px}
   .admin-theme .admin-topbar .admin-brand img {width:36px;height:36px}
-  .admin-theme .admin-bottom-nav {position:fixed;inset:auto 0 0;z-index:30;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;background:var(--admin-surface);border-top:1px solid var(--admin-line);padding:8px 8px calc(8px + env(safe-area-inset-bottom))}
+  .admin-theme .admin-bottom-nav {position:fixed;inset:auto 0 0;z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;background:var(--admin-surface);border-top:1px solid var(--admin-line);padding:8px 8px calc(8px + env(safe-area-inset-bottom))}
   .admin-theme .admin-bottom-nav button {display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px;border:0;border-radius:12px;padding:8px 4px;background:none;font-size:14px;min-height:56px}
   .admin-theme .admin-bottom-nav button.active {background:var(--admin-apricot);color:var(--admin-accent-hover);font-weight:700}
 .admin-theme .admin-content {padding:16px 16px calc(96px + env(safe-area-inset-bottom))}

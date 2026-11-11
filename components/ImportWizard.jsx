@@ -11,7 +11,9 @@ import ImportHistory from './ImportHistory';
 import ImportDecisionDialog from './ImportDecisionDialog';
 import ImportedData from './ImportedData';
 import ImportReviewEffects, { InventoryOpeningControls, ReviewExpenses } from './ImportReviewEffects';
+import { useAssistantBridge, useAssistantForm } from './AssistantBridge';
 import { formatMoneyMinor } from '@/lib/business/money.mjs';
+import { readAdminView } from '@/lib/admin-view.mjs';
 import styles from './OrderExperience.module.css';
 
 const MAX_BYTES=10*1024*1024;
@@ -22,6 +24,7 @@ const LINE_FIELDS=new Set(importFields.filter(field=>field.scope==='line').map(f
 const FIELD_DEFINITIONS=new Map(importFields.map(field=>[field.value,field]));
 const STATE_LABELS={uploaded:'Archivo recibido',previewing:'Preparando revisión',review:'Por revisar',queued:'Importación en cola',applying:'Importando',completed:'Importación completada',completed_with_errors:'Importación parcial: quedan pendientes',failed:'Requiere corrección',expired:'Archivo vencido',cancelled:'Importación cancelada'};
 const COMMERCIAL_FIELDS=importFields.filter(field=>field.scope==='order'&&field.effect==='commercial'&&!['sellerExternalKey','shippingCharge'].includes(field.value));
+const ASSISTANT_CELL_FIELDS=new Set(['shippingType','shipmentReference','cancellationReason','shipmentNotes','expenseConcept','expenseSupplier','expenseReference','expenseNotes','expenseCampaign','orderAdditionalField','expenseAdditionalField','additionalField']);
 const RESULT_LABELS={created:'Operaciones nuevas',updated:'Operaciones actualizadas',unchanged:'Sin cambios',conflict:'Conflictos',rejected:'Rechazados',applied:'Aplicados',new:'Nuevos',valid:'Válidos',invalid:'Con errores',omitted:'Omitidos',errors:'Con excepciones',groupsProcessed:'Grupos procesados',settlementsProcessed:'Liquidaciones procesadas',settlementsPending:'Liquidaciones pendientes de aplicación'};
 const RESOLUTION_LABELS={link_product:'Vincular producto',link_person:'Vincular vendedor',link_order:'Vincular pedido',link_shipment:'Vincular envío',link_expense:'Vincular gasto importado',duplicate:'Marcar fila duplicada',independent_record:'Confirmar operación independiente',additional_quantity:'Contar como cantidad adicional',status:'Asignar estado externo',review_policy:'Aprobar política histórica',review_authority:'Revisar autoridad o rectificación',accept_formulas:'Aceptar valores guardados de fórmulas',omit_group:'Omitir grupo completo',omit_settlement_package:'Excluir paquete Heka completo',commercial_update:'Completar o corregir datos del pedido',cell_value:'Completar o corregir celda',line_costs:'Completar costos históricos',opening_observation:'Clasificar hecho frente al conteo'};
 const RESOLUTION_GROUPS=[
@@ -81,7 +84,7 @@ function cutoffDate(value){if(!value)return '';if(!value.includes('T'))return va
 function rowExternalKey(action,row){const values=row.normalized?.values||{};if(action==='link_product')return row.normalized?.lines?.[0]?.productExternalKey||'';if(action==='link_person')return values.sellerExternalKey||'';if(action==='link_order')return values.externalOrderId||'';if(action==='link_shipment')return values.externalShipmentId||values.tracking||'';return '';}
 const resolutionIdentity=item=>json([item.action,item.action==='cell_value'?null:item.entityKey||null,item.sheet||null,item.rowNumber?Number(item.rowNumber):null,item.action==='cell_value'?null:item.externalKey||null,item.action==='cell_value'?item.columnIndex:null]);
 
-export default function ImportWizard({api,view:inputView,onViewChange,onNavigate,onInteractionStateChange,onCreateProduct,onMutation}){
+export default function ImportWizard({api,view:inputView,onViewChange,onNavigate,onInteractionStateChange,onCreateProduct,onMutation,assistantOpenRequest,onAssistantOpenHandled}){
  const view=inputView||{},isNew=view.batch==='new',savedBatchId=isNew?'':view.batch||'';
  const errorRef=useRef(null),headingRef=useRef(null),currentBatch=useRef(null),loadSequence=useRef(0),sourceSequence=useRef(0),profileSequence=useRef(0),lookupSequence=useRef(0),mounted=useRef(true),baseline=useRef(''),lastNotification=useRef('');
  const prefillContext=useRef(''),diagnosticRef=useRef(null),requestBusy=useRef(false),listSequence=useRef(0),optionsSequence=useRef(0),navigation=useRef(onViewChange);
@@ -90,7 +93,9 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  const mappingRootRef=useRef(null),focusColumnProblems=useRef(false);
  const stepHeadingRef=useRef(null);
  const fileHelpId=useId();
- const [sheetFocus,setSheetFocus]=useState(''),[readingOpen,setReadingOpen]=useState(false),[mappingInteraction,setMappingInteraction]=useState(false);
+ const assistantBridge=useAssistantBridge(),assistantOpenNotice=useRef('');
+ const [assistantOpenContext,setAssistantOpenContext]=useState(null);
+ const [sheetFocus,setSheetFocus]=useState(''),[readingOpen,setReadingOpen]=useState(false),[mappingInteraction,setMappingInteraction]=useState(false),[platformCreatorOpen,setPlatformCreatorOpen]=useState(false),[profileNameOpen,setProfileNameOpen]=useState(false);
  const [decision,setDecision]=useState(null),decisionRef=useRef(null),decisionContext=useRef('');
  const [batch,setBatch]=useState(null),[listResource,setListResource]=useState({data:null,loading:false,error:''}),[options,setOptions]=useState({platforms:[],sources:[],loading:false,error:''}),[platforms,setPlatforms]=useState([]),[sources,setSources]=useState([]),[profiles,setProfiles]=useState([]),[platformId,setPlatformId]=useState(''),[sourceId,setSourceId]=useState(''),[profileId,setProfileId]=useState(''),[platformName,setPlatformName]=useState(''),[sourceName,setSourceName]=useState(''),[advancedSource,setAdvancedSource]=useState(false),[profileName,setProfileName]=useState(''),[file,setFile]=useState(null),[workbookConfig,setWorkbookConfig]=useState(blankConfig),[activeSheet,setActiveSheet]=useState(''),[inventoryOpening,setInventoryOpening]=useState(null),[resolutions,setResolutions]=useState([]),[step,setStep]=useState(1),[busy,setBusy]=useState(''),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[page,setPage]=useState(1),[rowState,setRowState]=useState(''),[includeValidOnly,setIncludeValidOnly]=useState(false),[resolver,setResolver]=useState(null),[lookup,setLookup]=useState([]),[lookupQuery,setLookupQuery]=useState(''),[lookupLoading,setLookupLoading]=useState(false),[rules,setRules]=useState([]),[statusDraft,setStatusDraft]=useState('');
  const config=workbookConfig.sheets.find(sheet=>sheet.sheetName===activeSheet)||blankSheetConfig(activeSheet);
@@ -176,9 +181,120 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  const draft=json({config:workbookConfig,resolutions,profileId,inventoryOpening}),draftChanged=!!batch&&draft!==baseline.current;
  const dirty=!cancelled&&(!!resolver||!!decision||mappingInteraction||!!statusDraft||!!profileName||canEditDraft&&draftChanged||!batch?.fileHash&&!!(file||platformName||sourceName));
  const reportMappingInteraction=useCallback(({open})=>setMappingInteraction(open),[]);
+ const assistantSheet=workbookConfig.sheets.find(sheet=>sheet.sheetName===activeSheet);
+ const assistantSheetWork=assistantSheet?sheetWork((batch?.workbook?.sheets||[]).find(sheet=>sheet.name===activeSheet)||{name:activeSheet}):null;
+ const assistantConfig={formatVersion:2,sheets:assistantSheet?[{...assistantSheet,columns:[...assistantSheet.columns,...(assistantSheetWork?.pending||[]).filter(column=>!assistantSheet.columns.some(existing=>existing.index===column.index))].sort((left,right)=>left.index-right.index)}]:[]};
+ const applyImportAssistantPatch=patch=>{
+  if(!canEditDraft||step!==2||!assistantSheet?.enabled)throw new Error('Abre la hoja editable antes de aplicar este mapeo.');
+  const proposed=patch.config?.sheets;
+  if(!Array.isArray(proposed)||proposed.length!==1||proposed[0].sheetName!==activeSheet)throw new Error('La propuesta debe corresponder solo a la hoja activa.');
+  const sheet=proposed[0],allowed=['sheetName','headerRow','dateFormat','decimalSeparator','groupSeparator','layout','purpose','columns'];
+  if(Object.keys(sheet).some(key=>!allowed.includes(key)))throw new Error('Las decisiones y confirmaciones de importación se revisan manualmente.');
+  if(sheet.headerRow!=null&&Number(sheet.headerRow)!==Number(assistantSheet.headerRow)&&sheet.columns?.length)throw new Error('Cambia el encabezado y lee sus muestras antes de proponer las columnas.');
+  const known=new Map(assistantConfig.sheets[0].columns.map(column=>[column.index,column]));
+  const columns=(sheet.columns||[]).map(column=>{
+   const original=known.get(column.index);
+   if(!original||column.header!=null&&column.header!==original.header)throw new Error('La propuesta contiene una columna ajena a las muestras de esta hoja.');
+   if(Object.keys(column).some(key=>!['index','header','destination','group','fieldName'].includes(key)))throw new Error('La propuesta contiene controles de columna no permitidos.');
+   return {index:original.index,header:original.header,patch:Object.fromEntries(['destination','group','fieldName'].filter(key=>Object.hasOwn(column,key)).map(key=>[key,column[key]]))};
+  });
+  let layout=assistantSheet.layout;
+  if(Object.hasOwn(sheet,'purpose')&&sheet.purpose!==assistantSheet.purpose){
+   updateConfig('purpose',sheet.purpose,{assisted:true});
+   layout=sheet.purpose==='expenses'?'expense_rows':['allocations','component_costs','observations'].includes(sheet.purpose)?'relation_rows':'item_rows';
+  }
+  if(Object.hasOwn(sheet,'layout')&&sheet.layout!==layout)updateConfig('layout',sheet.layout,{assisted:true});
+  for(const key of ['headerRow','dateFormat','decimalSeparator','groupSeparator'])if(Object.hasOwn(sheet,key)&&sheet[key]!==assistantSheet[key])updateConfig(key,sheet[key],{assisted:true});
+  for(const column of columns)changeColumn(column.index,column.header,column.patch);
+  setIncludeValidOnly(false);
+ };
+ const resolverColumn=resolver?.action==='cell_value'?workbookConfig.sheets.find(sheet=>sheet.sheetName===resolver.sheet)?.columns.find(column=>column.index===Number(resolver.columnIndex)):null;
+ const resolverValueField=resolver?.cellType==='text'&&ASSISTANT_CELL_FIELDS.has(resolverColumn?.destination)?FIELD_DEFINITIONS.get(resolverColumn.destination):null;
+ const applyResolverAssistantPatch=patch=>{
+  if(!resolver||!canEditDraft)throw new Error('Abre primero la resolución en su ubicación real.');
+  if(Object.keys(patch).some(key=>!['reason','value'].includes(key)))throw new Error('La acción, ubicación, identidad y decisiones de esta resolución son manuales.');
+  if(Object.hasOwn(patch,'reason')&&(typeof patch.reason!=='string'||patch.reason.length>2000))throw new Error('El motivo admite hasta 2000 caracteres.');
+  if(Object.hasOwn(patch,'value')&&(!resolverValueField||typeof patch.value!=='string'||patch.value.length>resolverValueField.max))throw new Error('Solo puedes completar el texto informativo de la celda abierta.');
+  if(Object.hasOwn(patch,'reason'))setResolverField('reason',patch.reason);
+  if(Object.hasOwn(patch,'value'))setResolverField('value',patch.value);
+ };
+ const resolverAssistant=useAssistantForm({
+  target:'import-resolver',entityId:batch?.id||null,recordVersion:batch?.version??null,
+  enabled:Boolean(resolver&&canEditDraft),generationKey:json(resolver),
+  values:resolver?{reason:resolver.reason,...(resolverValueField?{value:String(resolver.value??'')}:{})}:{},
+  dirty:Boolean(resolver),busy:!!busy||loading||!!decision||mappingInteraction,
+  applyPatch:applyResolverAssistantPatch,
+ });
+ const platformNameAssistant=useAssistantForm({
+  target:'import-platform-name',values:{name:platformName},dirty:Boolean(platformName),busy:!!busy||loading||!!decision,
+  enabled:step===1&&!batch&&(ownFiles||platformCreatorOpen),generationKey:json([ownFiles,platformId]),
+  applyPatch:patch=>{if(Object.hasOwn(patch,'name'))setPlatformName(patch.name);},
+ });
+ const sourceNameAssistant=useAssistantForm({
+  target:'import-source-name',values:{name:sourceName},dirty:Boolean(sourceName),busy:!!busy||loading||!!decision,
+  enabled:step===1&&!batch&&Boolean(platformId)&&advancedSource,generationKey:platformId,
+  applyPatch:patch=>{if(Object.hasOwn(patch,'name'))setSourceName(patch.name);},
+ });
+ const profileNameAssistant=useAssistantForm({
+  target:'import-profile-name',entityId:batch?.id||null,recordVersion:batch?.version??null,values:{name:profileName},dirty:Boolean(profileName),busy:!!busy||loading||workLocked||previewing||!!decision||!!resolver,
+  enabled:Boolean(batch?.fileHash)&&profileNameOpen,generationKey:json([batch?.id,profileId,sourceId]),
+  applyPatch:patch=>{if(Object.hasOwn(patch,'name'))setProfileName(patch.name);},
+ });
+ const importAssistant=useAssistantForm({
+  target:'import-draft',entityId:batch?.id||null,recordVersion:batch?.version??null,
+  enabled:canEditDraft&&step===2&&Boolean(assistantSheet?.enabled),generationKey:activeSheet,
+  values:{config:assistantConfig},dirty:canEditDraft&&draftChanged,
+  busy:!!busy||loading||!!resolver||!!decision||mappingInteraction||!!previewing,
+  applyPatch:applyImportAssistantPatch,
+ });
+ const assistantLocked=()=>importAssistant.assistantBusy||resolverAssistant.assistantBusy||platformNameAssistant.assistantBusy||sourceNameAssistant.assistantBusy||profileNameAssistant.assistantBusy;
+ const interactionBusy=Boolean(busy)||assistantLocked();
+ useEffect(()=>{
+  const request=assistantOpenRequest,open=request?.open,destination=readAdminView(open?.view);
+  setAssistantOpenContext(null);
+  if(!request||open?.owner!=='imports'||!open.target?.startsWith('import-')||destination.section!=='orders'||destination.tab!=='imports')return;
+  const controller=new AbortController();
+  const paths={platform:'platforms',source:'sources'};
+  Promise.all(Object.entries(open.refs||{}).map(async([role,ref])=>{
+   if(!paths[role]||!ref?.id||![role,paths[role]].includes(ref.kind))throw new Error('La apertura no corresponde a un origen de importación permitido.');
+   const record=await api(`/api/admin/business/${paths[role]}/${encodeURIComponent(ref.id)}`,{signal:controller.signal});
+   if(record.id!==ref.id||(record.version??null)!==ref.version)throw new Error('El origen cambió. Vuelve a revisar la propuesta con sus datos actuales.');
+   return [role,record];
+  })).then(entries=>{if(!controller.signal.aborted)setAssistantOpenContext({requestId:request.requestId,refs:Object.fromEntries(entries)});}).catch(cause=>{if(!controller.signal.aborted)setError(cause.message);});
+  return()=>controller.abort();
+ },[api,assistantOpenRequest]);
+ useEffect(()=>{
+  const request=assistantOpenRequest,open=request?.open;
+  if(!request||assistantOpenContext?.requestId!==request.requestId||busy||loading||assistantLocked())return;
+  const destination=readAdminView(open.view),current=readAdminView(view);
+  if(current.section!=='orders'||current.tab!=='imports'||(destination.batch||'new')!==(current.batch||'new'))return;
+  const batchMatches=open.entityId==null?!batch&&isNew:batch?.id===open.entityId;
+  if(!batchMatches)return;
+  const explain=text=>{if(assistantOpenNotice.current!==`${request.requestId}:${text}`){assistantOpenNotice.current=`${request.requestId}:${text}`;setNotice(text);}};
+  const platform=assistantOpenContext.refs.platform,source=assistantOpenContext.refs.source;
+  if(platform&&source&&source.platformId!==platform.id){explain('La cuenta no pertenece al origen de esta propuesta. Revisa los registros antes de continuar.');return;}
+  if(platform&&platformId!==platform.id||source&&sourceId!==source.id){explain('Selecciona el origen y la cuenta verificados de la propuesta en el formulario; no cambiamos su identidad por ti.');return;}
+  const handles={'import-draft':importAssistant,'import-resolver':resolverAssistant,'import-platform-name':platformNameAssistant,'import-source-name':sourceNameAssistant,'import-profile-name':profileNameAssistant};
+  const handle=handles[open.target];
+  if(!handle)return;
+  if(assistantBridge.snapshot().some(form=>form.formId===handle.formId&&form.target===open.target&&form.entityId===(open.entityId??null)&&!form.busy)){
+   onAssistantOpenHandled?.(request.requestId);return;
+  }
+  if(open.target==='import-resolver'){explain('Abre la resolución de la hoja, fila o celda concreta que quieres completar. Ali no elige ubicaciones ni decisiones por ti.');return;}
+  if(dirty){explain('Conservamos tus cambios. Abre el formulario indicado para revisar la propuesta sin descartar este borrador.');return;}
+  if(open.target==='import-draft'){
+   const selected=workbookConfig.sheets.find(sheet=>sheet.sheetName===activeSheet&&sheet.enabled)||workbookConfig.sheets.find(sheet=>sheet.enabled);
+   if(!canEditDraft||!selected){explain('Elige e incluye la hoja real que quieres mapear antes de aplicar la propuesta.');return;}
+   setStep(2);setActiveSheet(selected.sheetName);
+  }else if(open.target==='import-platform-name'){setStep(1);setOwnFiles(true);}
+  else if(open.target==='import-source-name'){
+   if(!platformId){explain('Elige un origen real antes de crear otra cuenta.');return;}
+   setStep(1);setAdvancedSource(true);
+  }else if(open.target==='import-profile-name')setProfileNameOpen(true);
+ },[assistantOpenRequest,assistantOpenContext,assistantBridge,view,batch,isNew,busy,loading,dirty,activeSheet,workbookConfig,canEditDraft,platformId,sourceId,onAssistantOpenHandled]);
  decisionContext.current=json([batch?.id,batch?.version,draft,activeSheet,selectedGroups,fileCutoff,file?.name]);
  function decide(presentation){
-  if(resolver||mappingInteraction)return Promise.resolve(false);
+  if(resolver||mappingInteraction||assistantLocked())return Promise.resolve(false);
   decisionRef.current?.resolve(false);
   return new Promise(resolve=>{const next={...presentation,context:decisionContext.current,resolve};decisionRef.current=next;setDecision(next);});
  }
@@ -195,7 +311,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  const diagnosticKey=diagnostic?[diagnosticText(diagnostic),diagnosticLocation(diagnostic),diagnosticValue(diagnostic.code),diagnosticValue(diagnostic.phase)].join('|'):'';
  currentBatch.current=batch;
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;requestBusy.current=false;loadSequence.current++;sourceSequence.current++;profileSequence.current++;lookupSequence.current++;};},[]);
- useEffect(()=>{onInteractionStateChange?.({dirty,busy:!!busy});},[dirty,busy,onInteractionStateChange]);
+ useEffect(()=>{onInteractionStateChange?.({dirty,busy:interactionBusy});},[dirty,interactionBusy,onInteractionStateChange]);
  useEffect(()=>()=>onInteractionStateChange?.({dirty:false,busy:false}),[onInteractionStateChange]);
  useEffect(()=>{if(error&&!busy){if(focusColumnProblems.current){const problem=focusColumnProblems.current;focusColumnProblems.current=false;requestAnimationFrame(()=>{const target=mappingRootRef.current?.querySelector(Number.isInteger(problem.index)?`[data-import-column="${problem.index}"] [data-import-destination]`:'[data-import-column-issues]');(target||errorRef.current)?.focus();});}else errorRef.current?.focus();}},[error,busy]);
  useEffect(()=>{if(diagnosticKey)diagnosticRef.current?.focus();},[diagnosticKey]);
@@ -298,7 +414,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
   api('/api/admin/business/profiles?'+new URLSearchParams({source:sourceId})).then(data=>{if(sequence===profileSequence.current&&mounted.current)setProfiles(records(data));}).catch(cause=>{if(sequence===profileSequence.current)setError(cause.message);});
  },[sourceId,api,resourceRetry]);
  async function perform(label,fn){
-  if(requestBusy.current||cancellationRequested.current)return;
+  if(requestBusy.current||cancellationRequested.current||assistantLocked())return;
   requestBusy.current=true;loadSequence.current++;setLoading(false);setBusy(label);setError('');setOperationError(null);setNotice('');
   const controller=new AbortController();operationAbort.current=controller;
   const pending=(async()=>{
@@ -310,7 +426,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
   try{return await pending;}finally{if(pendingOperation.current===pending)pendingOperation.current=null;}
  }
  async function discardImport(){
-  if(cancellationRequested.current)return;
+  if(cancellationRequested.current||assistantLocked())return;
   const target=currentBatch.current,creation=pendingCreation.current,active=pendingOperation.current,controller=operationAbort.current;
   if(target&&!target.canCancel)return;
   if(!await decide({title:target?.acceptedRevision?'Cancelar importación':'Descartar archivo',description:'Se detendrá lo pendiente cuando el servidor confirme la cancelación.',items:[{key:target?.id||'file',label:target?.filename||file?.name||'Archivo en carga',detail:target?.acceptedRevision?'Importación aceptada; sus operaciones confirmadas se conservan.':'Archivo privado de esta importación.'}],warning:'El original se descartará de forma irreversible. No se deshacen pedidos, inventario ni cobros ya confirmados. Si el servidor terminó primero, la cancelación puede rechazarse.',confirmLabel:'Descartar original y cancelar'}))return;
@@ -441,15 +557,16 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  }
  async function commit(){await perform('commit',async()=>{if(commitBlockedReason)throw new Error(commitBlockedReason);const data=await api(`/api/admin/imports/${encodeURIComponent(batch.id)}/commit`,{method:'POST',signal:operationAbort.current?.signal,body:json({version:batch.version,previewHash:batch.preview.previewHash,includeValidOnly,requestId:requestId()})});if(cancellationRequested.current)return;acceptBatch(data);setStep(4);onMutation?.({type:'import',batchId:data.id,state:data.state});});}
  async function download(kind){await perform('download',async()=>{const path=kind==='template'?'/api/admin/imports/template':`/api/admin/imports/${encodeURIComponent(batch.id)}/${kind}`,blob=await api(path,{responseType:'blob',signal:operationAbort.current?.signal});if(cancellationRequested.current)return;const url=URL.createObjectURL(blob),anchor=document.createElement('a'),names={template:'plantilla-negocio.xlsx',file:batch?.filename,expanded:`${batch?.filename?.replace(/\.[^.]+$/,'')||'negocio'} - con operacion.xlsx`,prepared:`datos-preparados-${batch?.id}.xlsx`,errors:`errores-${batch?.id}.xlsx`};try{anchor.href=url;anchor.download=safeName(names[kind]);document.body.appendChild(anchor);anchor.click();anchor.remove();}finally{setTimeout(()=>URL.revokeObjectURL(url),1000);}});}
- function updateConfig(key,value){setConfig(old=>{
-  if(key==='purpose')return {...old,purpose:value,layout:value==='expenses'?'expense_rows':['allocations','component_costs','observations'].includes(value)?'relation_rows':'item_rows',identityMode:'provided',defaults:{},expenseGroupNames:{},expenseCategoryMap:{},columns:old.columns.map(column=>({...column,destination:column.destination==='ignore'||isImportFieldAllowed(column.destination,value)?column.destination:'',group:0}))};
-  return {...old,[key]:value,...(key==='layout'?{identityMode:value==='item_rows'||value==='relation_rows'?'provided':old.identityMode,columns:old.columns.map(column=>({...column,group:0})),...(value!=='expense_columns'?{expenseGroupNames:{}}:{})}:{})};
+ function updateConfig(key,value,{assisted=false}={}){setConfig(old=>{
+  const humanControls=assisted?Object.fromEntries(['identityMode','defaults','expenseGroupNames','expenseCategoryMap'].map(name=>[name,old[name]])):{};
+  if(key==='purpose')return {...old,purpose:value,layout:value==='expenses'?'expense_rows':['allocations','component_costs','observations'].includes(value)?'relation_rows':'item_rows',identityMode:'provided',defaults:{},expenseGroupNames:{},expenseCategoryMap:{},...humanControls,columns:old.columns.map(column=>({...column,destination:column.destination==='ignore'||isImportFieldAllowed(column.destination,value)?column.destination:'',group:0}))};
+  return {...old,[key]:value,...(key==='layout'?{identityMode:value==='item_rows'||value==='relation_rows'?'provided':old.identityMode,columns:old.columns.map(column=>({...column,group:0})),...(value!=='expense_columns'?{expenseGroupNames:{}}:{}),...humanControls}:{})};
  });setIncludeValidOnly(false);}
  function changeColumn(index,header,patch){setConfig(old=>{const columns=[...old.columns],position=columns.findIndex(column=>column.index===index),previous={...(columns[position]||{})};if(patch.destination!==undefined&&patch.destination!==previous.destination)delete previous.fieldName;const next={destination:'ignore',group:0,...previous,index,header:normalizedHeader(header),...patch},definition=FIELD_DEFINITIONS.get(next.destination);if(definition?.type!=='additional')delete next.fieldName;if(!(definition?.scope==='line'&&old.layout==='order_rows'||definition?.scope==='expense_line'&&old.layout==='expense_columns'))next.group=0;if(position<0)columns.push(next);else columns[position]=next;return {...old,columns};});setIncludeValidOnly(false);}
  function addResolutions(items){const keys=new Set(items.map(resolutionIdentity));setResolutions(old=>[...old.filter(item=>!keys.has(resolutionIdentity(item))),...items]);setIncludeValidOnly(false);}
  function addResolution(item){addResolutions([item]);}
  async function openResolver(action,context={}){
-  if(!canEditDraft)return;
+  if(!canEditDraft||assistantLocked())return;
   if(resolver&&!window.confirm('Hay una resolución sin guardar. ¿Descartarla?'))return;
   const group=groups.find(group=>groupKey(group)===(context.entityKey||groupKey(context))),items=group?.lines||[],unit=group?.units?.[0];
   let value=['review_authority','commercial_update'].includes(action)?{}:'';
@@ -478,7 +595,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  },[api]);
  useEffect(()=>{if(!resolver?.action?.startsWith('link_'))return;const timer=setTimeout(()=>{void searchLookup(resolver.action,lookupQuery);},250);return()=>{clearTimeout(timer);lookupSequence.current++;};},[resolver?.action,lookupQuery,searchLookup]);
  async function applyResolution(event){
-  event.preventDefault();const {action,entityKey,sheet,rowNumber,externalKey,internalId,value,reason,columnIndex,cellType}=resolver;
+  event.preventDefault();if(!resolver||busy||assistantLocked())return;const {action,entityKey,sheet,rowNumber,externalKey,internalId,value,reason,columnIndex,cellType}=resolver;
   let resolvedValue=value;
   if(action==='review_policy')resolvedValue={ruleVersionId:value};
   if(action==='accept_formulas')resolvedValue=true;
@@ -543,7 +660,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
   {kind:'template',label:'Plantilla vacía',description:'Tablas vacías e instrucciones para preparar un archivo nuevo.',available:true}
  ];
  const savedStatus=cancelled?'Archivo descartado':fileUnavailable?'Archivo no disponible':workLocked||previewing||batch?.state==='uploaded'&&batch?.fileHash?'Procesando en el servidor':dirty?'Sin guardar':hasPreview?'Revisión actualizada':'Guardado; falta revisar';
- function goToStep(next){if(!!busy||workLocked||showResult||next>1&&!batch?.fileHash||next>2&&!columnsConfirmed||next===4&&!hasPreview)return;setIncludeValidOnly(false);setStep(next);}
+ function goToStep(next){if(!!busy||assistantLocked()||workLocked||showResult||next>1&&!batch?.fileHash||next>2&&!columnsConfirmed||next===4&&!hasPreview)return;setIncludeValidOnly(false);setStep(next);}
  const showWizard=!!batch||isNew;
  const issueCounts=useMemo(()=>{const issues=new Map();for(const group of groups)for(const code of new Set((group.errors||[]).map(issue=>issue.code||'Otros datos')))issues.set(code,(issues.get(code)||0)+1);return issues;},[groups]);
  const filteredGroups=groups.filter(group=>(!pendingOnly||group.errors?.length>0)&&(!issueFilter||(group.errors||[]).some(issue=>(issue.code||'Otros datos')===issueFilter))),groupPages=Math.max(1,Math.ceil(filteredGroups.length/20)),shownGroups=filteredGroups.slice((groupPage-1)*20,groupPage*20);
@@ -592,7 +709,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  const stateChanged=operationError?.status===409&&operationError.operation!=='download';
  const lookupOptions=resolver?.action==='link_product'?lookup.filter(item=>(!resolver.giftOnly||item.kind==='products'&&item.productType==='gift')&&(item.id===resolver.internalId||!lookupQuery||[item.title,item.name,item.sku,item.presentation].some(value=>String(value||'').toLocaleLowerCase('es').includes(lookupQuery.toLocaleLowerCase('es'))))):lookup;
  const selectedProduct=resolver?.action==='link_product'?productRecords.find(item=>item.id===resolver.internalId):null;
- return <section className={`admin-card ${styles.wizard}`} aria-label="Importar Excel">
+ return <section className={`admin-card ${styles.wizard}`} aria-label="Importar Excel" aria-busy={interactionBusy} inert={assistantLocked()}>
   {showWizard&&<header className="admin-heading"><div><p className="eyebrow">Incorporar mi negocio · Excel</p><h2 ref={headingRef} tabIndex={-1}>Importar Excel</h2><p className="muted">Pedidos, envíos y gastos, sin confirmar cobros ni pagos.</p></div><div className="admin-actions">{batch&&<button type="button" className="button subtle" disabled={!!busy} onClick={startNewBatch}>Nueva importación</button>}{(batch?batch.canCancel:!!file)&&<button type="button" className="button subtle" disabled={busy==='cancel'} onClick={discardImport}>{busy==='cancel'?'Cancelando…':batch?.acceptedRevision?'Cancelar importación':'Descartar archivo'}</button>}</div></header>}
   {showWizard&&!showResult&&<><ol className={`order-progress ${styles.progress}`} aria-label="Pasos de importación">{['Archivo','Hojas y columnas','Revisar datos','Confirmar'].map((label,index)=>{const number=index+1,saved=number===1?!!batch?.fileHash:number===2?columnsConfirmed:number===3?reviewReady:false,reason=number>1&&!batch?.fileHash?'Primero guarda el archivo':number>2&&!columnsConfirmed?'Completa las hojas y columnas':number===4&&!hasPreview?'Genera una revisión actualizada':'';return <li key={label} aria-current={step===number?'step':undefined} data-saved={saved}><button type="button" className="text-button" disabled={!!busy||workLocked||!!reason} onClick={()=>goToStep(number)}><strong>{number}. {label}</strong></button><span>{step===number?'Estás aquí':saved?'Guardado':reason||'Por confirmar'}</span></li>;})}</ol>
   <div className={styles.stepGuide}><p className={styles.sectionLabel}>Paso {step} de 4</p><h3 ref={stepHeadingRef} tabIndex={-1}>{STEP_GUIDANCE[step-1][0]}</h3><p>{STEP_GUIDANCE[step-1][1]}</p></div></>}
@@ -624,7 +741,15 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    <h3>¿De dónde viene tu archivo?</h3>
    <p>El origen permite reconocer las mismas operaciones en próximas cargas. No es una cuenta bancaria.</p>
    {options.error&&<div className="error" role="alert"><p>No se pudieron actualizar los orígenes. {options.error}</p><button type="button" className="button subtle" onClick={loadOptions}>Reintentar opciones</button></div>}
-   {!batch&&<><button type="button" className="button subtle" aria-expanded={ownFiles} disabled={!!busy} onClick={()=>setOwnFiles(value=>!value)}>Crear un origen para mis archivos</button>{ownFiles&&<form onSubmit={addOwnSource} className={styles.importProposal}><label className="field">Nombre del origen<input required maxLength={150} value={platformName} onChange={event=>setPlatformName(event.target.value)}/></label><p className="small muted">Se creará una cuenta Principal para conservar las identidades de tus archivos.</p><button className="button subtle" disabled={!!busy}>Crear origen</button></form>}</>}
+   {!batch&&<>
+    <button type="button" className="button subtle" aria-expanded={ownFiles} disabled={!!busy} onClick={()=>setOwnFiles(value=>!value)}>Crear un origen para mis archivos</button>
+    {ownFiles&&<form onSubmit={addOwnSource} className={styles.importProposal}>
+     <label className="field">Nombre del origen<input required maxLength={150} value={platformName} onChange={event=>setPlatformName(event.target.value)}/></label>
+     <button type="button" className="button subtle" disabled={!!busy||platformNameAssistant.assistantBusy} onClick={()=>platformNameAssistant.openAssistant()}>Ayúdame con el nombre</button>
+     <p className="small muted">Se creará una cuenta Principal para conservar las identidades de tus archivos.</p>
+     <button className="button subtle" disabled={!!busy||platformNameAssistant.assistantBusy}>Crear origen</button>
+    </form>}
+   </>}
    <form onSubmit={upload}>
     <fieldset disabled={!!busy||!!batch?.fileHash} className={`field ${styles.importGroup}`}><legend>Origen y configuración</legend>
      <label className="field">Origen<select required disabled={!!batch} value={platformId} onChange={event=>{setPlatformId(event.target.value);setSourceId('');setProfileId('');setAdvancedSource(false);}}><option value="">Elige un origen existente</option>{platforms.map(platform=><option key={platform.id} disabled={!platform.active&&!batch} value={platform.id}>{platform.name}{platform.active?'':' · Archivado'}</option>)}</select></label>
@@ -644,8 +769,16 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
     </div>
    </form>
    <button type="button" className="button subtle" disabled={!!busy} onClick={()=>download('template')}>Descargar plantilla</button>
-   {!batch&&!ownFiles&&<details><summary>Crear origen de una plataforma</summary><form onSubmit={addPlatform}><label className="field">Nombre de la plataforma<input required maxLength={150} value={platformName} onChange={event=>setPlatformName(event.target.value)}/></label><button className="button subtle" disabled={!!busy}>Crear plataforma y cuenta Principal</button></form></details>}
-   {!batch&&platformId&&advancedSource&&<form onSubmit={addSource}><label className="field">Nombre de la otra cuenta<input required maxLength={150} value={sourceName} onChange={event=>setSourceName(event.target.value)}/></label><button className="button subtle" disabled={!!busy}>Crear cuenta independiente</button></form>}
+   {!batch&&!ownFiles&&<details onToggle={event=>setPlatformCreatorOpen(event.currentTarget.open)}><summary>Crear origen de una plataforma</summary><form onSubmit={addPlatform}>
+    <label className="field">Nombre de la plataforma<input required maxLength={150} value={platformName} onChange={event=>setPlatformName(event.target.value)}/></label>
+    <button type="button" className="button subtle" disabled={!!busy||platformNameAssistant.assistantBusy} onClick={()=>platformNameAssistant.openAssistant()}>Ayúdame con el nombre</button>
+    <button className="button subtle" disabled={!!busy||platformNameAssistant.assistantBusy}>Crear plataforma y cuenta Principal</button>
+   </form></details>}
+   {!batch&&platformId&&advancedSource&&<form onSubmit={addSource}>
+    <label className="field">Nombre de la otra cuenta<input required maxLength={150} value={sourceName} onChange={event=>setSourceName(event.target.value)}/></label>
+    <button type="button" className="button subtle" disabled={!!busy||sourceNameAssistant.assistantBusy} onClick={()=>sourceNameAssistant.openAssistant()}>Ayúdame con el nombre</button>
+    <button className="button subtle" disabled={!!busy||sourceNameAssistant.assistantBusy}>Crear cuenta independiente</button>
+   </form>}
   </>}
   {batch&&[2,3].includes(step)&&savedProductLinks.length>0&&<details aria-label="Vínculos de productos guardados"><summary>Vínculos guardados · {savedProductLinks.length}</summary><p>Persisten aunque salgas o recargues. Guardar un vínculo no crea otro producto ni aplica la operación; genera una revisión actualizada al terminar.</p>{savedProductLinks.map(link=><article className={styles.importProposal} key={resolutionIdentity(link)}><p><strong>{link.externalKey}</strong> → {productRecords.find(item=>item.id===link.internalId)?.title||'Referencia guardada'}</p>{link.sheet&&<p>{link.sheet}{link.rowNumber?` · fila ${link.rowNumber}`:''}</p>}<button type="button" className="button subtle" disabled={!!busy||!canEditDraft} onClick={()=>openResolver('link_product',{...link,allRows:!link.entityKey&&!link.sheet&&!link.rowNumber})}>Cambiar vínculo de {link.externalKey}</button></article>)}</details>}
   {batch&&[2,3].includes(step)&&batch.pendingProductLinks?.length>0&&<section aria-label="Productos por vincular"><h4>Vincula cada referencia una sola vez</h4><p>{hasPreview?'Puedes guardar los vínculos uno tras otro.':'Pendientes de la última revisión: puedes seguir vinculando y revisar todos los cambios al terminar. Esta lista no permite importar sin una revisión actualizada.'}</p>{batch.pendingProductLinks.map(({externalKey,count,giftOnly})=><article key={externalKey} className={styles.importProposal}><strong>{externalKey}</strong><p>{count} operaciones usan esta referencia.{giftOnly?' Esta referencia corresponde a un obsequio con componentes.':''} El vínculo corresponde a este origen, no al nombre o teléfono de sus clientes.</p><button type="button" className="button subtle" disabled={!!busy||!canEditDraft||previewing} onClick={()=>openResolver('link_product',{externalKey,giftOnly,allRows:true})}>Vincular o crear {externalKey}</button></article>)}</section>}
@@ -679,9 +812,9 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
       </div></details>
      {config.purpose==='orders'&&<label className="checkbox-field"><input type="checkbox" checked={!!config.oneOrderPerGuide} onChange={event=>updateConfig('oneOrderPerGuide',event.target.checked)}/><span>Cada guía corresponde a un pedido: usar la guía como identidad solo con datos comerciales completos.</span></label>}
      {(config.purpose==='expenses'||config.purpose==='orders'&&config.layout==='order_rows')&&<label className="checkbox-field"><input type="checkbox" checked={config.identityMode==='generated'} onChange={event=>updateConfig('identityMode',event.target.checked?'generated':'provided')}/><span>{config.purpose==='orders'?'Confirmo que cada fila representa un pedido y un envío. Generar identidades técnicas si no hay IDs; la guía real permanece vacía.':'Generar identidad técnica para cada gasto sin ID. Conservaré estos IDs en el archivo preparado para las próximas cargas.'}</span></label>}
-     <div ref={mappingRootRef} data-import-config="columns" tabIndex={-1}><ImportColumnMapping config={config} headers={headers} sampleRows={sampleRows} columnCount={sampleColumns} disabled={!!busy||!canEditDraft} onChangeColumn={changeColumn} onIgnoreUnassigned={columns=>ignorePendingSheets([{sheetName:activeSheet,columns}])} onNextSheet={focusNextSheet} onInteractionStateChange={reportMappingInteraction}/></div>
-     {['orders','tracking','settlements'].includes(config.purpose)&&<StatusMapping config={config} headers={headers} sampleRows={sampleRows} disabled={!!busy||!canEditDraft||previewing||batch.fileExpired} onChange={value=>updateConfig('statusMap',value)} statusDraft={statusDraft} setStatusDraft={setStatusDraft}/>}
-     <div data-import-config="defaults" tabIndex={-1}><SheetFixedValues config={config} onChange={value=>updateConfig('defaults',value)}/></div>
+     <div ref={mappingRootRef} data-import-config="columns" tabIndex={-1}><ImportColumnMapping config={config} headers={headers} sampleRows={sampleRows} columnCount={sampleColumns} disabled={!!busy||loading||importAssistant.assistantBusy||!canEditDraft} onChangeColumn={changeColumn} onIgnoreUnassigned={columns=>ignorePendingSheets([{sheetName:activeSheet,columns}])} onNextSheet={focusNextSheet} onInteractionStateChange={reportMappingInteraction}/></div>
+     <button type="button" className="button subtle" disabled={!!busy||loading||importAssistant.assistantBusy||!canEditDraft||!activeSheet||!samplesCurrent} onClick={()=>importAssistant.openAssistant()}>Ayúdame con este mapeo</button>
+     {['orders','tracking','settlements'].includes(config.purpose)&&<StatusMapping config={config} headers={headers} sampleRows={sampleRows} disabled={!!busy||loading||importAssistant.assistantBusy||!canEditDraft||previewing||batch.fileExpired} onChange={value=>updateConfig('statusMap',value)} statusDraft={statusDraft} setStatusDraft={setStatusDraft}/>}
      {config.purpose==='expenses'&&config.layout==='expense_columns'&&<fieldset className="order-line"><legend>Nombres de las campañas</legend><p>Cantidad y unitario comparten grupo; cada campaña debe tener un nombre distinto.</p>{[...new Set(config.columns.filter(column=>FIELD_DEFINITIONS.get(column.destination)?.scope==='expense_line').map(column=>column.group||0))].sort((a,b)=>a-b).map(group=><label className="field" key={group}>Grupo de campaña {group+1}<input required maxLength={200} value={config.expenseGroupNames?.[group]||''} onChange={event=>updateConfig('expenseGroupNames',{...config.expenseGroupNames,[group]:event.target.value})}/></label>)}</fieldset>}
      {config.purpose==='expenses'&&<ExpenseCategoryMapping config={config} sampleRows={sampleRows} onChange={value=>updateConfig('expenseCategoryMap',value)}/>}
      </>}
@@ -742,9 +875,10 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
   </>}
   {batch&&[3,4].includes(step)&&<SourceRows batch={batch} page={page} rowState={rowState} query={rowQuery} location={rowLocation} open={sourceRowsOpen} onToggle={setSourceRowsOpen} busy={!!busy||loading} onClearLocation={()=>{setRowLocation(null);setPage(1);void loadBatch(batch.id,{state:rowState,q:rowQuery});}} onFilter={state=>{setRowLocation(null);setRowState(state);setPage(1);void loadBatch(batch.id,{state,q:rowQuery});}} onSearch={q=>{setRowLocation(null);setRowQuery(q);setPage(1);void loadBatch(batch.id,{state:rowState,q});}} onPage={next=>{setPage(next);void loadBatch(batch.id,{targetPage:next,state:rowState,q:rowQuery,...rowLocation||{}});}} onResolve={step===3&&canEditDraft?(action,row)=>openResolver(action,{entityKey:row.entityKey||row.groupKey,sheet:row.sheet,rowNumber:row.rowNumber,columnIndex:row.columnIndex,original:row.original,externalKey:rowExternalKey(action,row)}):undefined}/>}
   {decision&&<ImportDecisionDialog {...decision} onConfirm={()=>finishDecision(true)} onClose={()=>finishDecision(false)}/>}
-  {resolver&&canEditDraft&&<ResolutionDialog title={RESOLUTION_LABELS[resolver.action]} submitLabel={resolver.action==='link_product'?'Guardar vínculo':'Preparar corrección'} busy={!!busy} onClose={closeResolver} onSubmit={applyResolution}>
+  {resolver&&canEditDraft&&<ResolutionDialog title={RESOLUTION_LABELS[resolver.action]} submitLabel={resolver.action==='link_product'?'Guardar vínculo':'Preparar corrección'} busy={!!busy||resolverAssistant.assistantBusy} onClose={closeResolver} onSubmit={applyResolution}>
    {error&&<div className="error" role="alert" tabIndex={-1} ref={errorRef}>{stateChanged&&<h3>El estado cambió; revisa antes de continuar</h3>}<p>{diagnosticText(error)}</p><button type="button" className="button subtle" disabled={!!busy} onClick={stateChanged?reloadSaved:refreshStatus}>{stateChanged?'Recargar lo guardado':'Actualizar estado'}</button></div>}
-   <fieldset className="field" disabled={!!busy}>
+   <button type="button" className="button subtle" disabled={!!busy||resolverAssistant.assistantBusy} onClick={()=>resolverAssistant.openAssistant()}>Ayúdame con esta resolución</button>
+   <fieldset className="field" disabled={!!busy||resolverAssistant.assistantBusy}>
     {resolver.entityKey&&<p>{groupCaption(groups.find(group=>groupKey(group)===resolver.entityKey)||{})}</p>}
     {(resolver.sheet||resolver.rowNumber||resolver.externalKey)&&<p>Ubicación conocida: {resolver.sheet||'Hoja por elegir'}{resolver.rowNumber?` · fila ${resolver.rowNumber}`:''}{resolver.externalKey?` · Referencia ${resolver.externalKey}`:''}</p>}
     {(resolver.bulkRows||resolver.bulkObservations||resolver.bulkKeys)&&<section><h3>Aplica solo a la selección mostrada</h3><ul>{resolver.bulkRows?.map(ref=><li key={json([ref.sheet,ref.rowNumber])}>{ref.sheet} · fila {ref.rowNumber} · una identidad técnica distinta por fila; no es una corrección ni una copia</li>)}{resolver.bulkObservations?.map(ref=><li key={ref.externalKey}>{ref.sheet} · fila {ref.rowNumber} · {ref.label} · observación {ref.externalKey}</li>)}{resolver.bulkKeys?.map(key=><li key={key}>{groupCaption(groups.find(group=>groupKey(group)===key)||{key})}</li>)}</ul><label className="checkbox-field"><input type="checkbox" required/><span>Revisé todos los elementos de esta selección y confirmo que comparten esta decisión.</span></label></section>}
@@ -776,7 +910,13 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
     <label className="field">Motivo de la resolución<input required={['review_policy','review_authority','commercial_update','omit_group','duplicate','independent_record','cell_value','line_costs','opening_observation','link_expense','additional_quantity'].includes(resolver.action)} maxLength={2000} value={resolver.reason} onChange={event=>setResolverField('reason',event.target.value)}/></label>
    </fieldset>
   </ResolutionDialog>}
-  {batch?.fileHash&&<section aria-label="Guardar configuración reutilizable"><details><summary>Guardar una configuración para próximas importaciones</summary><form onSubmit={saveProfile}><label className="field">Nombre de la configuración<input required maxLength={150} value={profileName} onChange={event=>setProfileName(event.target.value)}/></label>{profileId&&<p>Se actualizará la configuración seleccionada. Las revisiones aceptadas no se modifican.</p>}<button className="button subtle" disabled={!!busy||workLocked||previewing}>Guardar configuración</button>{profileId&&<button type="button" className="button subtle" disabled={!!busy||workLocked||previewing} onClick={()=>setProfileId('')}>Guardar como configuración nueva</button>}</form></details></section>}
+  {batch?.fileHash&&<section aria-label="Guardar configuración reutilizable"><details open={profileNameOpen} onToggle={event=>setProfileNameOpen(event.currentTarget.open)}><summary>Guardar una configuración para próximas importaciones</summary><form onSubmit={saveProfile}>
+   <label className="field">Nombre de la configuración<input required maxLength={150} value={profileName} onChange={event=>setProfileName(event.target.value)}/></label>
+   <button type="button" className="button subtle" disabled={!!busy||workLocked||previewing||profileNameAssistant.assistantBusy} onClick={()=>profileNameAssistant.openAssistant()}>Ayúdame con el nombre</button>
+   {profileId&&<p>Se actualizará la configuración seleccionada. Las revisiones aceptadas no se modifican.</p>}
+   <button className="button subtle" disabled={!!busy||workLocked||previewing||profileNameAssistant.assistantBusy}>Guardar configuración</button>
+   {profileId&&<button type="button" className="button subtle" disabled={!!busy||workLocked||previewing||profileNameAssistant.assistantBusy} onClick={()=>setProfileId('')}>Guardar como configuración nueva</button>}
+  </form></details></section>}
   {batch?.fileHash&&<section aria-label="Archivos y descargas" className={styles.importDownloads}><h3>Archivos y descargas</h3>{downloadItems.map(item=><article key={item.kind}><h4>{item.label}</h4><p>{item.description}</p><p>{item.available?'Disponible':`No disponible · ${item.reason}`}</p><button type="button" className="button subtle" disabled={!!busy||!item.available} onClick={()=>download(item.kind)}>Descargar {item.label.toLocaleLowerCase('es')}</button></article>)}<p className="small muted">Original privado: 7 días si abandonas la importación, 90 días después de finalizar. No convertimos XLS, XLSB ni archivos con macros.</p></section>}
  </section>;
 }

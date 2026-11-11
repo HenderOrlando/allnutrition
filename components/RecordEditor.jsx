@@ -1,4 +1,5 @@
 'use client';
+import { useAssistantForm } from './AssistantBridge';
 import { useState,useRef,useEffect,useMemo } from 'react';
 import { schemas,slugify,emptyRecord,contentStates,money } from '@/lib/schema.mjs';
 import { formatMoneyMinor, MAX_MONEY_MINOR } from '@/lib/business/money.mjs';
@@ -55,16 +56,35 @@ const fieldHelp={
  buttonText:'Déjalo vacío si no necesitas un botón de contacto.',
  items:'Solo productos normales, sin repetir referencias. Cantidades de 1 a 999 por referencia.'
 };
+function recordForm(kind,record){
+ return {...emptyRecord(kind),...record,...(['products','combos'].includes(kind)&&record.id&&record.orderable==null?{orderable:kind==='products'&&record.productType==='gift'||record.status==='published'}:{})};
+}
 
-export default function RecordEditor({kind,record,all,api,onClose,onSaved,onReload,onInteractionStateChange}){
+export default function RecordEditor({kind,record:providedRecord,all,api,onClose,onSaved,onReload,onInteractionStateChange}){
  const schema=schemas[kind];
  const configurationContent=['faqs','messages','shipping'].includes(kind);
- const [initialForm]=useState(()=>({...emptyRecord(kind),...record,...(['products','combos'].includes(kind)&&record.id&&record.orderable==null?{orderable:kind==='products'&&record.productType==='gift'||record.status==='published'}:{})}));
+ const [record,setRecord]=useState(providedRecord);
+ const [initialForm]=useState(()=>recordForm(kind,providedRecord));
  const [form,setForm]=useState(initialForm),[busy,setBusy]=useState(false),[uploadingImage,setUploadingImage]=useState(false),[error,setError]=useState(null);
  const [invalidCostDraft,setInvalidCostDraft]=useState(false);
- const initialSnapshot=useMemo(()=>JSON.stringify(initialForm),[initialForm]);
+ const [initialSnapshot,setInitialSnapshot]=useState(()=>JSON.stringify(initialForm));
  const dirty=useMemo(()=>invalidCostDraft||JSON.stringify(form)!==initialSnapshot,[form,initialSnapshot,invalidCostDraft]);
- const interactionBusy=busy||uploadingImage;
+ const formBusy=busy||uploadingImage;
+ const assistantTarget=`record:${kind}`;
+ const assistant=useAssistantForm({
+  target:assistantTarget,entityId:record.id||null,recordVersion:record.version??null,values:form,dirty,busy:formBusy,
+  referenceChoices:{catalogIds:(all.catalogs||[]).map(item=>item.id),'items.productId':(all.products||[]).map(item=>item.id)},
+  applyPatch:patch=>{
+   if(Object.hasOwn(patch,'productType'))setInvalidCostDraft(false);
+   setForm(old=>Object.entries(patch).reduce((next,[field,value])=>changedForm(next,field,value),old));
+  },
+  acceptAutomaticResult:record.id&&record.status==='draft'?({result})=>{
+   if(result?.id!==record.id||!Number.isSafeInteger(result.version))throw new Error('No se recibió la ficha guardada para actualizar este editor.');
+   const next=recordForm(kind,result);
+   setRecord(result);setForm(next);setInitialSnapshot(JSON.stringify(next));setInvalidCostDraft(false);setError(null);
+  }:undefined
+ });
+ const interactionBusy=formBusy||assistant.assistantBusy;
  const dialog=useRef(null),errorSummary=useRef(null);
  const close=useDialog(dialog,{busy:interactionBusy,dirty,onClose});
  const sections=kind==='products'?productSections:contentSections[kind];
@@ -74,11 +94,16 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
  useEffect(()=>()=>onInteractionStateChange({dirty:false,busy:false}),[onInteractionStateChange]);
  useEffect(()=>{if(error)errorSummary.current?.focus();},[error]);
 
- const change=(field,value)=>setForm(old=>({...old,[field]:value,
+ function changedForm(old,field,value){return {...old,[field]:value,
   ...(field==='title'&&!record.id&&(!old.slug||old.slug===slugify(old.title))?{slug:slugify(value)}:{}),
   ...(kind==='products'&&field==='productType'?(value==='gift'?{unitCostMinor:null,costEffectiveOn:null,...(!record.id?{orderable:true}:{})}:{items:[],...(!record.id?{orderable:old.status==='published'}:{})}):{}),
   ...(field==='status'&&value==='published'&&!record.id&&(kind==='combos'||kind==='products'&&(old.productType||'product')==='product')?{orderable:true}:{})
- }));
+ };}
+ const change=(field,value)=>setForm(old=>changedForm(old,field,value));
+ function blockAssistantInteraction(event){
+  if(!assistant.assistantBusy)return;
+  event.preventDefault();event.stopPropagation();
+ }
  function goToSection(key){
   setActiveSection(key);
   const heading=dialog.current?.querySelector(`#form-section-${key}`);
@@ -89,14 +114,18 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
  function showError(failure){setError({message:failure.message,status:failure.status});}
  async function save(event){
   event.preventDefault();
-  if(interactionBusy)return;
-  setBusy(true);setError(null);
-  let saved;
+  if(formBusy||assistant.assistantBusy)return;
+  setError(null);
   try{
-   saved=await api(`/api/admin/${kind}${record.id?`/${record.id}`:''}`,{method:record.id?'PUT':'POST',body:JSON.stringify(form)});
-  }catch(failure){showError(failure);return;}
-  finally{setBusy(false);}
-  await onSaved({kind,record:saved,operation:record.id?'update':'create'});
+   const result=await assistant.submitAssisted({payload:form,saveUnassisted:async payload=>{
+    setBusy(true);
+    try{return await api(`/api/admin/${kind}${record.id?`/${record.id}`:''}`,{method:record.id?'PUT':'POST',body:JSON.stringify(payload)});}
+    catch(failure){showError(failure);return false;}
+    finally{setBusy(false);}
+   },onCommitted:async saved=>await onSaved({kind,record:saved,operation:record.id?'update':'create'})});
+   if(result.postCommitError)showError(new Error('Guardado; vista pendiente de actualizar. '+(result.postCommitError.message||'')));
+   if(result.reason==='changed')showError(new Error('El formulario cambió mientras se guardaba. Revisa los valores e inténtalo de nuevo.'));
+  }catch(failure){showError(failure);}
  }
  async function remove(){
   if(interactionBusy||!record.id||!window.confirm(`¿Eliminar este ${schema.singular}? Esta acción es irreversible y no se puede deshacer.`))return;
@@ -178,7 +207,7 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
  </>;
 
  return (
-  <dialog ref={dialog} className={`editor-drawer ${styles.editor}${configurationContent?' '+configurationStyles.contentEditor:''}`} aria-labelledby="editor-title">
+  <dialog ref={dialog} className={`editor-drawer ${styles.editor}${configurationContent?' '+configurationStyles.contentEditor:''}`} aria-labelledby="editor-title" onClickCapture={blockAssistantInteraction} onChangeCapture={blockAssistantInteraction} onSubmitCapture={blockAssistantInteraction}>
    <header role={configurationContent?'presentation':undefined}>
     <div><p className="eyebrow">{schema.label}</p><h2 id="editor-title" tabIndex="-1" data-dialog-initial-focus>{record.id?'Editar':'Crear'} {schema.singular}</h2></div>
     <button type="button" className="icon-button" aria-label="Cerrar editor" onClick={close} disabled={interactionBusy}><Icon name="close"/></button>
@@ -224,6 +253,7 @@ export default function RecordEditor({kind,record,all,api,onClose,onSaved,onRelo
      </div>
      <footer className="editor-footer">
       <span className="unsaved-flag" role="status">{dirty?'Cambios sin guardar':'Sin cambios pendientes'}</span>
+      <button type="button" className="button subtle" onClick={assistant.openAssistant} disabled={interactionBusy}>Ayúdame con este formulario</button>
       <button type="button" className="button subtle" onClick={close} disabled={interactionBusy}>{configurationContent?'Cancelar edición':'Cancelar'}</button>
       <button type="submit" className="button primary" disabled={interactionBusy}>{busy?'Procesando…':uploadingImage?'Subiendo imagen…':record.id?'Guardar cambios':`Crear ${schema.singular}`}<Icon name="check" size={16}/></button>
      </footer>

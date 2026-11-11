@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Field } from './Fields';
 import useDialog from './useDialog';
+import { useAssistantForm } from './AssistantBridge';
 import BusinessActionDialog from './BusinessActionDialog';
 import BusinessOnboarding from './BusinessOnboarding';
 import SocialConnectionsSettings from './SocialConnectionsSettings';
@@ -66,40 +67,73 @@ function CommissionFields({value,onChange,onInvalid}) {
 function PolicyFields({form,set,onInvalid}) {
   return <><Input label="Vigente desde (Bogotá)" type="date" required value={form.effectiveOn} onChange={value=>set('effectiveOn',value)}/><Select label="Reconocer la venta" required value={form.saleRecognition} onChange={value=>set('saleRecognition',value)} options={Object.entries(SALE)}/><CommissionFields value={form.commission} onChange={value=>set('commission',value)} onInvalid={onInvalid}/><details><summary>Fechas de gastos logísticos</summary><div className="product-form-grid"><Select label="Flete de ida" required value={form.shippingExpenseDate} onChange={value=>set('shippingExpenseDate',value)} options={[["dispatch_date","Fecha real de recogida"],["charge_date","Fecha real del cargo"]]}/><Select label="Flete de retorno" required value={form.returnExpenseDate} onChange={value=>set('returnExpenseDate',value)} options={[["charge_date","Fecha real del cargo"],["returned_date","Fecha real de retorno recibido"]]}/><Select label="Cargo de plataforma" required value={form.platformFeeExpenseDate} onChange={value=>set('platformFeeExpenseDate',value)} options={[["charge_date","Fecha real del cargo"],["settlement_date","Primer recibo que paga el cargo"]]}/></div><p>Si falta la fecha real, el gasto queda pendiente de fecha; no se sustituye por la importación.</p></details></>;
 }
-function SettingsEditor({editor,data:loadedData,api,onClose,onSaved,onInteractionStateChange}) {
+function SettingsEditor({editor,data:loadedData,api,onClose,onSaved,onInteractionStateChange,onAssistantRegistered}) {
   const data=useRef(loadedData).current;
-  const [form,setForm]=useState(()=>initialEditor(editor,data)),[busy,setBusy]=useState(false),[error,setError]=useState(''),[invalid,setInvalid]=useState({});
+  const [form,setForm]=useState(()=>initialEditor(editor,data)),[busy,setBusy]=useState(false),[error,setError]=useState(''),[invalid,setInvalid]=useState({}),[policyAcknowledged,setPolicyAcknowledged]=useState(false);
   const ref=useRef(null),errorRef=useRef(null),baseline=useRef(JSON.stringify(form)),request=useRef({id:crypto.randomUUID(),payload:null});
-  const dirty=JSON.stringify(form)!==baseline.current||Object.values(invalid).some(Boolean);
-  const close=useDialog(ref,{busy,dirty,onClose});
-  const callback=useRef(onInteractionStateChange);callback.current=onInteractionStateChange;
-  useEffect(()=>{callback.current({busy,dirty});},[busy,dirty]);
-  useEffect(()=>()=>callback.current({busy:false,dirty:false}),[]);
+  const dirty=JSON.stringify(form)!==baseline.current||policyAcknowledged||Object.values(invalid).some(Boolean);
+  const assistantTarget=`settings:${editor.kind}`;
+  const assistantValues=editor.kind==='person'?{name:form.name,salaryAgreements:form.salaryAgreements,commissionOverrides:form.commissionOverrides,reason:form.reason}
+    : editor.kind==='platform'||editor.kind==='source'?{name:form.name,platformId:form.platformId,reason:form.reason}
+    : editor.kind==='policy'?{effectiveOn:form.effectiveOn,saleRecognition:form.saleRecognition,commission:form.commission,shippingExpenseDate:form.shippingExpenseDate,returnExpenseDate:form.returnExpenseDate,platformFeeExpenseDate:form.platformFeeExpenseDate,reason:form.reason}
+    : editor.kind==='preferences'?{defaultReceiptAccountId:form.defaultReceiptAccountId,defaultPaymentAccountId:form.defaultPaymentAccountId,reportsStartOn:form.reportsStartOn,reportGenerationTime:form.reportGenerationTime,reportPeriods:form.reportPeriods,alertDefaults:form.alertDefaults,reason:form.reason}
+    : editor.kind==='alert-rule'?form:{responsibleId:form.responsibleId,reason:form.reason};
+  const assistantVersion=editor.row?.version??(['policy','preferences'].includes(editor.kind)?data.settings.version:null);
+  const assistant=useAssistantForm({target:assistantTarget,entityId:editor.row?.id||null,recordVersion:assistantVersion,values:assistantValues,dirty,busy:busy||!!Object.values(invalid).some(Boolean),referenceChoices:{responsibleId:data.people.filter(person=>person.active||person.id===form.responsibleId||person.id===form.alertDefaults?.responsibleId).map(person=>person.id),platformId:data.platforms.filter(platform=>platform.active||platform.id===form.platformId).map(platform=>platform.id),defaultReceiptAccountId:data.accounts.filter(account=>account.active).map(account=>account.id),defaultPaymentAccountId:data.accounts.filter(account=>account.active).map(account=>account.id)},applyPatch:applyAssistantPatch});
+  useEffect(()=>{onAssistantRegistered?.({formId:assistant.formId,target:assistantTarget,entityId:editor.row?.id||null,recordVersion:assistantVersion});},[assistant.formId,assistantTarget,editor.row?.id,assistantVersion,onAssistantRegistered]);
+  const interactionBusy=busy||assistant.assistantBusy;
+  const close=useDialog(ref,{busy:interactionBusy,dirty,onClose});
+  useEffect(()=>{onInteractionStateChange({busy:interactionBusy,dirty});},[interactionBusy,dirty,onInteractionStateChange]);
+  useEffect(()=>()=>onInteractionStateChange({busy:false,dirty:false}),[onInteractionStateChange]);
   useEffect(()=>{if(error)errorRef.current?.focus();},[error]);
   const set=(key,value)=>setForm(old=>({...old,[key]:value}));
   const personOptions=data.people.filter(person=>person.active||person.id===form.responsibleId||person.id===form.alertDefaults?.responsibleId).map(person=>[person.id,person.name+(person.active?'':' (archivado)')]);
   const updateRow=(field,index,key,value)=>setForm(old=>({...old,[field]:old[field].map((row,i)=>i===index?{...row,[key]:value}:row)}));
   function addSalary() {set('salaryAgreements',[...form.salaryAgreements,{id:crypto.randomUUID(),enabled:true,amountPerPeriodMinor:null,frequency:'monthly',effectiveFrom:bogotaDate(),effectiveTo:null,payDayOffset:0}]);}
   function addCommission() {set('commissionOverrides',[...form.commissionOverrides,{id:crypto.randomUUID(),effectiveOn:bogotaDate(),enabled:false,mode:'percent',rateBps:0,fixedMinor:0,basis:'net_products',earnWhen:'business_received'}]);}
+  function applyAssistantPatch(patch){
+    for(const field of ['salaryAgreements','commissionOverrides']){
+      if(!patch[field])continue;
+      for(const proposed of patch[field]){
+        if(!form[field].some(row=>row.id===proposed.id))throw new Error('Agrega primero la vigencia en el formulario para que Ali complete sus datos sin cambiar su identidad.');
+      }
+      for(const saved of editor.row?.[field]||[]){
+        const proposed=patch[field].find(row=>row.id===saved.id);
+        if(!proposed)throw new Error('Los convenios y vigencias guardados no se eliminan desde este formulario.');
+        const unchanged=Object.keys(saved).every(key=>field==='salaryAgreements'&&key==='effectiveTo'||JSON.stringify(proposed[key])===JSON.stringify(saved[key]));
+        if(!unchanged)throw new Error('La vigencia guardada se conserva. Agrega otra vigencia para cambiar sus condiciones.');
+      }
+    }
+    for(const [field,value] of Object.entries(patch)){
+      if(['id','version','userId','active','state','setupPolicyConfirmed','platformId'].includes(field))continue;
+      set(field,value);
+    }
+  }
   async function submit(event) {
-    event.preventDefault();if(busy||Object.values(invalid).some(Boolean))return;setBusy(true);setError('');let committed=false;
-    try {
-      let path,body,method='PUT';const row=editor.row;
-      if(editor.kind==='person'||editor.kind==='platform'||editor.kind==='source') {const resource={person:'people',platform:'platforms',source:'sources'}[editor.kind];path='/api/admin/business/'+resource+(row?'/'+encodeURIComponent(row.id):'');method=row?'PUT':'POST';body={...form,...(row?{version:row.version}:{})};}
-      else if(editor.kind==='policy') {path='/api/admin/business/settings';const {reason,...policy}=form;body={...cleanSettings(data.settings),rulesVersions:[...data.settings.rulesVersions,policy],setupPolicyConfirmed:true,reason};}
-      else if(editor.kind==='preferences') {path='/api/admin/business/settings';body={...form};}
-      else if(editor.kind==='alert-rule') {path='/api/admin/alert-rules/'+encodeURIComponent(row.id);body={...form,version:row.version,responsibleId:form.responsibleId||null};}
-      else {path='/api/admin/alerts/'+encodeURIComponent(row.id);body={version:row.version,responsibleId:form.responsibleId||null,reason:form.reason,...(form.state?{state:form.state}:{})};}
-      const fingerprint=JSON.stringify(body);
-      if(request.current.payload!==fingerprint)request.current={id:crypto.randomUUID(),payload:fingerprint};
-      const result=await api(path,{method,body:JSON.stringify({...body,requestId:request.current.id})});
-      committed=true;baseline.current=JSON.stringify(form);await onSaved(result);
-    }catch(cause){setError((committed?'Guardado; vista pendiente de actualizar. ':'')+cause.message);}finally{setBusy(false);}
+    event.preventDefault();if(busy||assistant.assistantBusy||Object.values(invalid).some(Boolean)||editor.kind==='policy'&&!policyAcknowledged)return;
+    let path,body,method='PUT';const row=editor.row;
+    if(editor.kind==='person'||editor.kind==='platform'||editor.kind==='source') {const resource={person:'people',platform:'platforms',source:'sources'}[editor.kind];path='/api/admin/business/'+resource+(row?'/'+encodeURIComponent(row.id):'');method=row?'PUT':'POST';body={...form,...(row?{version:row.version}:{})};}
+    else if(editor.kind==='policy') {path='/api/admin/business/settings';const {reason,...policy}=form;body={...cleanSettings(data.settings),rulesVersions:[...data.settings.rulesVersions,policy],setupPolicyConfirmed:policyAcknowledged,reason};}
+    else if(editor.kind==='preferences') {path='/api/admin/business/settings';body={...form};}
+    else if(editor.kind==='alert-rule') {path='/api/admin/alert-rules/'+encodeURIComponent(row.id);body={...form,version:row.version,responsibleId:form.responsibleId||null};}
+    else {path='/api/admin/alerts/'+encodeURIComponent(row.id);body={version:row.version,responsibleId:form.responsibleId||null,reason:form.reason,...(form.state?{state:form.state}:{})};}
+    const fingerprint=JSON.stringify(body);
+    if(request.current.payload!==fingerprint)request.current={id:crypto.randomUUID(),payload:fingerprint};
+    body={...body,requestId:request.current.id};
+    setError('');
+    try{
+      const result=await assistant.submitAssisted({payload:body,onCommitted:async response=>{baseline.current=JSON.stringify(form);await onSaved(response);},saveUnassisted:async()=>{
+        setBusy(true);
+        try{return await api(path,{method,body:JSON.stringify(body)});}catch(cause){setError(cause.message);return false;}finally{setBusy(false);}
+      }});
+      if(result.postCommitError)setError('Guardado; vista pendiente de actualizar. '+(result.postCommitError.message||''));
+      if(result.reason==='changed')setError('El formulario cambió. Revisa los valores e inténtalo de nuevo.');
+    }catch(cause){setError(cause.message);}
   }
   const title={person:editor.row?'Editar persona':'Crear persona',platform:editor.row?'Editar plataforma':'Crear plataforma',source:editor.row?'Editar cuenta de plataforma':'Crear otra cuenta de plataforma',policy:'Agregar vigencia de reglas',preferences:'Editar preferencias del negocio','alert-rule':'Configurar aviso',alert:'Atender alerta'}[editor.kind];
   const submitLabel={person:editor.row?'Guardar persona':'Crear persona',platform:editor.row?'Guardar plataforma':'Crear plataforma',source:editor.row?'Guardar cuenta de plataforma':'Crear cuenta de plataforma',policy:'Agregar vigencia',preferences:'Guardar preferencias','alert-rule':'Guardar aviso',alert:'Guardar atención'}[editor.kind];
-  return <dialog ref={ref} className={`editor-drawer business-settings-dialog ${styles.settingsDialog}`} aria-labelledby="settings-editor-title"><header><h2 id="settings-editor-title" tabIndex={-1} data-dialog-initial-focus>{title}</h2><button type="button" className="button subtle" disabled={busy} onClick={close}>Cerrar formulario</button></header><form className={styles.settingsForm} onSubmit={submit} aria-busy={busy}><div className="drawer-body">
-    {error&&<div className="error" tabIndex={-1} role="alert" ref={errorRef}>{error}</div>}<fieldset className="editor-fieldset" disabled={busy}>
+  return <dialog ref={ref} className={`editor-drawer business-settings-dialog ${styles.settingsDialog}`} aria-labelledby="settings-editor-title"><header><h2 id="settings-editor-title" tabIndex={-1} data-dialog-initial-focus>{title}</h2><button type="button" className="button subtle" disabled={interactionBusy} onClick={close}>Cerrar formulario</button></header><form className={styles.settingsForm} onSubmit={submit} aria-busy={interactionBusy}><div className="drawer-body">
+    {error&&<div className="error" tabIndex={-1} role="alert" ref={errorRef}>{error}</div>}<fieldset className="editor-fieldset" disabled={interactionBusy}>
     {['person','platform','source'].includes(editor.kind)&&<fieldset className={styles.fieldGroup}><legend>{editor.kind==='person'?'Identificar persona':editor.kind==='platform'?'Identificar plataforma':'Identificar cuenta de plataforma'}</legend><Input label="Nombre" required value={form.name} onChange={value=>set('name',value)}/><label className="checkbox-field"><input type="checkbox" checked={form.active} onChange={event=>set('active',event.target.checked)}/>Activo para nuevos registros</label>{editor.row&&<p className="hint">Archivar conserva los pedidos, movimientos y demás historia.</p>}</fieldset>}
     {editor.kind==='person'&&<><p>No requiere correo ni contraseña. Esta persona puede ser responsable o vendedor; no es automáticamente el administrador que guarda.</p><details><summary>Vincular usuario de acceso (opcional)</summary><Select label="Usuario existente" value={form.userId} onChange={value=>set('userId',value)} options={data.users.map(user=>[user.id,user.email])} empty="Sin usuario vinculado"/></details>
       <details><summary>Sueldos internos ({form.salaryAgreements.length} convenios)</summary><p>Control interno, no liquidación laboral legal. El importe corresponde a un período, distribuido por días calendario. No tener convenio significa que no aplica sueldo fijo.</p>{form.salaryAgreements.map((agreement,index)=>{const saved=editor.row?.salaryAgreements?.some(row=>row.id===agreement.id);return <fieldset className="settings-subform" key={agreement.id}><legend>Convenio {index+1}{saved?' · guardado':''}</legend>{saved?<><p>{FREQUENCY[agreement.frequency]} · {money(agreement.amountPerPeriodMinor)} · desde {agreement.effectiveFrom} · {agreement.enabled?'Activo':'Inactivo'}</p><Input label="Último día de vigencia (opcional)" type="date" value={agreement.effectiveTo} min={agreement.effectiveFrom} onChange={value=>updateRow('salaryAgreements',index,'effectiveTo',value||null)}/><p className="hint">Para cambiar importe o frecuencia, cierra la vigencia y agrega otro convenio. Los devengos y períodos confirmados no se reescriben.</p></>:<><Field field={{name:'salary-'+index,label:'Sueldo por período (COP)',type:'moneyOptionalMinor',required:true}} value={agreement.amountPerPeriodMinor} onChange={value=>updateRow('salaryAgreements',index,'amountPerPeriodMinor',value)} onDraftInvalid={value=>setInvalid(old=>({...old,['salary-'+agreement.id]:value}))}/><Select label="Frecuencia" required value={agreement.frequency} options={Object.entries(FREQUENCY)} onChange={value=>updateRow('salaryAgreements',index,'frequency',value)}/><div className="product-form-grid"><Input label="Vigente desde" type="date" required value={agreement.effectiveFrom} onChange={value=>updateRow('salaryAgreements',index,'effectiveFrom',value)}/><Input label="Vigente hasta (inclusive, opcional)" type="date" value={agreement.effectiveTo} onChange={value=>updateRow('salaryAgreements',index,'effectiveTo',value||null)}/><Input label="Días después del período para pagar" type="number" min={0} max={90} required value={agreement.payDayOffset} onChange={value=>updateRow('salaryAgreements',index,'payDayOffset',value)}/></div><button type="button" className="text-button" onClick={()=>{set('salaryAgreements',form.salaryAgreements.filter((_,i)=>i!==index));setInvalid(old=>{const next={...old};delete next['salary-'+agreement.id];return next;});}}>Quitar convenio nuevo</button></>}</fieldset>;})}<button type="button" className="button subtle" onClick={addSalary}>Agregar convenio</button></details>
@@ -107,7 +141,7 @@ function SettingsEditor({editor,data:loadedData,api,onClose,onSaved,onInteractio
     </>}
     {editor.kind==='platform'&&<p>Una plataforma es el origen comercial del archivo, no la transportadora. Al crearla se guarda automáticamente la cuenta Principal.</p>}
     {editor.kind==='source'&&<p>Plataforma: {data.platforms.find(platform=>platform.id===form.platformId)?.name}. La cuenta no puede cambiar de plataforma. Sus perfiles comparten identidades; otra cuenta conserva identidades independientes.</p>}
-    {editor.kind==='policy'&&<><p>Se agrega una versión efectiva nueva. Los pedidos conservan su regla histórica; esto no recalcula ni cambia precios, costos o caja anteriores.</p><PolicyFields form={form} set={set} onInvalid={value=>setInvalid(old=>({...old,policy:value}))}/><label className="checkbox-field"><input type="checkbox" required/>Revisé la fecha de vigencia y entiendo que no cambia los pedidos anteriores.</label></>}
+    {editor.kind==='policy'&&<><p>Se agrega una versión efectiva nueva. Los pedidos conservan su regla histórica; esto no recalcula ni cambia precios, costos o caja anteriores.</p><PolicyFields form={form} set={set} onInvalid={value=>setInvalid(old=>({...old,policy:value}))}/><label className="checkbox-field"><input type="checkbox" required checked={policyAcknowledged} onChange={event=>setPolicyAcknowledged(event.target.checked)}/>Revisé la fecha de vigencia y entiendo que no cambia los pedidos anteriores.</label></>}
     {editor.kind==='preferences'&&<><p>Moneda COP · zona America/Bogota. No se configura otro proveedor ni se inicia un proceso desde este formulario.</p><div className="product-form-grid">{['defaultReceiptAccountId','defaultPaymentAccountId'].map((key,index)=><Select key={key} label={index?'Cuenta predeterminada para pagos':'Cuenta predeterminada para recibos'} value={form[key]} onChange={value=>set(key,value||null)} options={data.accounts.filter(account=>account.active).map(account=>[account.id,account.name])} empty="Sin cuenta predeterminada"/>)}</div><fieldset className="settings-subform"><legend>Informes dentro del panel</legend><Input label="Generar desde la fecha" type="date" required value={form.reportsStartOn} onChange={value=>set('reportsStartOn',value)}/><Input label="Hora local de generación (Bogotá)" type="time" required value={form.reportGenerationTime} onChange={value=>set('reportGenerationTime',value)}/><div className="check-grid">{PERIODS.map(([id,label])=><label className="checkbox-field" key={id}><input type="checkbox" checked={form.reportPeriods.includes(id)} onChange={event=>set('reportPeriods',event.target.checked?[...form.reportPeriods,id]:form.reportPeriods.filter(period=>period!==id))}/>{label}</label>)}</div><p className="hint">06:00 es la hora inicial recomendada. La ejecución requiere un proceso externo activo; guardar preferencias no lo inicia.</p></fieldset><fieldset className="settings-subform"><legend>Avisos generales</legend><Select label="Responsable general" value={form.alertDefaults.responsibleId} onChange={value=>set('alertDefaults',{...form.alertDefaults,responsibleId:value||null})} options={personOptions}/><Input label="Recordatorio cada (horas calendario)" type="number" min={1} max={87600} required value={form.alertDefaults.reminderHours} onChange={value=>set('alertDefaults',{...form.alertDefaults,reminderHours:value})}/></fieldset><label className="checkbox-field"><input type="checkbox" checked={form.setupPolicyConfirmed} onChange={event=>set('setupPolicyConfirmed',event.target.checked)}/>Revisé y acepto las reglas de venta, comisión y fechas logísticas guardadas.</label></>}
     {editor.kind==='alert-rule'&&<><h3>{TYPES[editor.row.type]}</h3><label className="checkbox-field"><input type="checkbox" checked={form.enabled} onChange={event=>set('enabled',event.target.checked)}/>Regla habilitada</label>
       {['shipment_label_stale','shipment_no_update','platform_not_updated'].includes(editor.row.type)&&<Input label="Umbral (horas calendario)" type="number" required min={1} max={87600} value={form.thresholds.hours} onChange={value=>set('thresholds',{hours:value})}/>}
@@ -117,7 +151,7 @@ function SettingsEditor({editor,data:loadedData,api,onClose,onSaved,onInteractio
       {['cash_below_minimum','cash_difference','cash_close_missing'].includes(editor.row.type)&&<p>El saldo mínimo, tolerancia y hora de cierre se configuran por cuenta. Sin parámetros necesarios no se puede acreditar una condición.</p>}
       <Select label="Responsable de esta regla (opcional)" value={form.responsibleId} onChange={value=>set('responsibleId',value)} options={personOptions}/><Input label="Recordatorio cada (horas calendario)" type="number" min={1} max={87600} required value={form.reminderHours} onChange={value=>set('reminderHours',value)}/><p>Habilitar no evalúa la condición ni crea alertas. Eso corresponde al proceso automático cuando esté operativo.</p></>}
     {editor.kind==='alert'&&<><h3>{editor.row.title}</h3><p>{editor.row.reason}</p><Select label="Responsable" value={form.responsibleId} onChange={value=>set('responsibleId',value)} options={personOptions}/><label className="checkbox-field"><input type="checkbox" checked={form.state==='acknowledged'} onChange={event=>set('state',event.target.checked?'acknowledged':'')} disabled={editor.row.state==='acknowledged'}/>En atención</label><p>En atención conserva la condición pendiente. Se resuelve únicamente cuando el problema deja de cumplirse; no se borra ni se oculta una deuda.</p></>}
-    <fieldset className={styles.fieldGroup}><legend>Trazabilidad del cambio</legend><Input label="Motivo del cambio" required={!!editor.row||editor.kind==='policy'} value={form.reason} onChange={value=>set('reason',value)}/></fieldset></fieldset></div><footer className="editor-footer"><span role="status">{busy?'Guardando…':dirty?'Cambios sin guardar':''}</span><button type="button" className="button subtle" disabled={busy} onClick={close}>Cancelar edición</button><button type="submit" className="button primary" disabled={busy||Object.values(invalid).some(Boolean)}>{submitLabel}</button></footer>
+    <fieldset className={styles.fieldGroup}><legend>Trazabilidad del cambio</legend><Input label="Motivo del cambio" required={!!editor.row||editor.kind==='policy'} value={form.reason} onChange={value=>set('reason',value)}/></fieldset></fieldset></div><footer className="editor-footer"><span role="status">{busy?'Guardando…':assistant.assistantBusy?'Aplicando asistencia…':dirty?'Cambios sin guardar':''}</span><button type="button" className="button subtle" disabled={interactionBusy} onClick={assistant.openAssistant}>Ayúdame con este formulario</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={close}>Cancelar edición</button><button type="submit" className="button primary" disabled={interactionBusy||Object.values(invalid).some(Boolean)}>{submitLabel}</button></footer>
   </form></dialog>;
 }
 
@@ -126,12 +160,12 @@ export default function BusinessSettings(props) {
   if(props.view.tab==='shipping')return <ShippingIntegrationSettings {...props}/>;
   return (props.view.tab||'setup')==='setup'?<BusinessOnboarding {...props}/>:<SettingsWorkspace {...props}/>;
 }
-function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInteractionStateChange=noop,onMutation=noop,revision}) {
+function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInteractionStateChange=noop,onMutation=noop,revision,assistantOpenRequest,onAssistantOpenHandled=noop}) {
   const tab=view.tab;
   const [data,setData]=useState(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[editor,setEditor]=useState(null),[accountEditor,setAccountEditor]=useState(null),[severity,setSeverity]=useState('');
-  const sequence=useRef(0),errorRef=useRef(null);
+  const sequence=useRef(0),errorRef=useRef(null),openingSequence=useRef(0),openingBinding=useRef(null),handledOpen=useRef(null),interaction=useRef({busy:false,dirty:false});
   const workspaceRef=useRef(null),alertFocus=useRef({id:'',consumed:false});
-  const reportInteraction=useCallback(state=>{onInteractionStateChange(state);},[onInteractionStateChange]);
+  const reportInteraction=useCallback(state=>{interaction.current=state;onInteractionStateChange(state);},[onInteractionStateChange]);
   useEffect(()=>()=>onInteractionStateChange({busy:false,dirty:false}),[onInteractionStateChange]);
   useEffect(()=>{setEditor(null);setAccountEditor(null);setNotice('');},[tab]);
   useEffect(()=>{if(error)errorRef.current?.focus();},[error]);
@@ -154,6 +188,58 @@ function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInter
   function openAction(action) {if(action.orderId)onOpenOrder(action.orderId);else if(action.view)onNavigate(action.view);}
   const visible=data?.tab===tab?data:null;
   useEffect(()=>{
+    const request=assistantOpenRequest,open=request?.open;
+    if(loading||!data||!request?.requestId||handledOpen.current===request.requestId||open?.owner!=='business'||open.view?.section!=='business'||open.view?.tab!==tab)return;
+    const kind=open.target==='business-action:account-save'?'account':open.target?.startsWith('settings:')?open.target.slice('settings:'.length):null;
+    if(!['account','person','platform','source','policy','preferences','alert-rule','alert'].includes(kind))return;
+    if(openingBinding.current?.requestId===request.requestId)return;
+    if(editor||accountEditor||interaction.current.busy||interaction.current.dirty){
+      setError('Conserva tu formulario actual: ciérralo antes de abrir la propuesta de Ali.');
+      return;
+    }
+    const current=++openingSequence.current;
+    let cancelled=false;
+    async function openVerified(){
+      try{
+        const resourceByRole={person:'people',platform:'platforms',source:'sources',account:'accounts'};
+        const refs={};
+        for(const [role,reference] of Object.entries(open.refs||{})){
+          const resource=resourceByRole[role];
+          if(!resource||reference.kind!==role)throw new Error('La propuesta contiene una referencia que no corresponde a Configuración.');
+          const record=await api('/api/admin/business/'+resource+'/'+encodeURIComponent(reference.id));
+          if(record.id!==reference.id||record.version!==reference.version)throw new Error('La referencia de la propuesta cambió. Pide a Ali revisar los datos actuales.');
+          refs[role]=record;
+        }
+        const [settings,people,accounts,platforms,sources,users]=await Promise.all([
+          api('/api/admin/business/settings'),api('/api/admin/business/people'),api('/api/admin/business/accounts'),api('/api/admin/business/platforms'),api('/api/admin/business/sources'),kind==='person'?api('/api/admin/users'):null
+        ]);
+        let row=null;
+        if(open.entityId){
+          if(['policy','preferences'].includes(kind))throw new Error('La propuesta no corresponde a este formulario de reglas.');
+          const resource={account:'accounts',person:'people',platform:'platforms',source:'sources'}[kind];
+          row=await api(resource?'/api/admin/business/'+resource+'/'+encodeURIComponent(open.entityId):'/api/admin/'+(kind==='alert-rule'?'alert-rules':'alerts')+'/'+encodeURIComponent(open.entityId));
+          if(row.id!==open.entityId)throw new Error('El registro de la propuesta no está disponible.');
+          if(resource&&(!refs[kind]||refs[kind].id!==row.id||refs[kind].version!==row.version))throw new Error('La propuesta no contiene la referencia vigente del registro.');
+        }else if(['alert','alert-rule'].includes(kind))throw new Error('Selecciona una alerta existente antes de abrir su formulario.');
+        if(kind==='source'&&!row&&!refs.platform)throw new Error('La propuesta necesita una plataforma real para crear la cuenta.');
+        if(cancelled||current!==openingSequence.current||interaction.current.busy||interaction.current.dirty)return;
+        setData(old=>({...old,tab,settings,people:people.records,accounts:accounts.records,platforms:platforms.records,sources:sources.records,users:users?.users||old?.users||[]}));
+        openingBinding.current={requestId:request.requestId,target:open.target,entityId:row?.id||null,recordVersion:row?.version??(['policy','preferences'].includes(kind)?settings.version:null)};
+        if(kind==='account')setAccountEditor(row?{...row,assistantPerson:refs.person}:{assistantPerson:refs.person});
+        else setEditor({kind,...(row?{row}:{}),...(kind==='source'?{platformId:row?.platformId||refs.platform.id}:{})});
+        setError('');
+      }catch(cause){if(!cancelled&&current===openingSequence.current)setError(cause.message);}
+    }
+    void openVerified();
+    return()=>{cancelled=true;};
+  },[assistantOpenRequest,api,tab,editor,accountEditor,loading]);
+  const assistantRegistered=useCallback(registration=>{
+    const binding=openingBinding.current;
+    if(!binding||binding.requestId!==assistantOpenRequest?.requestId||handledOpen.current===binding.requestId||registration.target!==binding.target||registration.entityId!==binding.entityId||registration.recordVersion!==binding.recordVersion)return;
+    handledOpen.current=binding.requestId;
+    onAssistantOpenHandled(binding.requestId);
+  },[assistantOpenRequest,onAssistantOpenHandled]);
+  useEffect(()=>{
     const id=tab==='alerts'?(view.record||''):'';
     if(alertFocus.current.id!==id)alertFocus.current={id,consumed:false};
     if(!id||alertFocus.current.consumed)return;
@@ -175,8 +261,8 @@ function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInter
       {!visible.alerts.records.length?<p>No hay alertas persistidas para estos filtros. Esto no confirma que todos los datos estén al día: revisa el estado del proceso.</p>:<ul className="settings-alerts">{visible.alerts.records.map(alert=><li key={alert.id}><AlertCard alert={alert} selected={alert.id===view.record} onClearSelection={()=>onViewChange({record:''})} onEdit={()=>setEditor({kind:'alert',row:alert})} onAction={openAction}/></li>)}</ul>}
       <div className="admin-actions"><button type="button" className="button subtle" disabled={visible.alerts.page<=1||loading} onClick={()=>onViewChange({page:visible.alerts.page-1})}>Ver página anterior</button><span>Página {visible.alerts.page} · {visible.alerts.total} alertas</span><button type="button" className="button subtle" disabled={visible.alerts.page*20>=visible.alerts.total||loading} onClick={()=>onViewChange({page:visible.alerts.page+1})}>Ver página siguiente</button></div></section><section className="settings-card"><h2>Configurar reglas de avisos</h2><p>Define umbrales en horas o días calendario, o la anticipación estimada del agotamiento de existencias en días, semanas o meses, y asigna responsables. No envía correo ni WhatsApp. Habilitar una regla no inicia el proceso automático.</p><ul className="settings-records">{visible.rules.map(rule=><li key={rule.id}><div><strong>{TYPES[rule.type]}</strong><p>{rule.enabled?'Habilitada':'Deshabilitada'}{rule.thresholds.hours?' · '+rule.thresholds.hours+' horas':''}{rule.thresholds.days?' · '+rule.thresholds.days+' días':''}{rule.type==='stock_low'&&STOCK_UNITS[rule.thresholds.unit]?' · anticipación '+rule.thresholds.amount+' '+STOCK_UNITS[rule.thresholds.unit][0].toLowerCase():''} · recordatorio {rule.reminderHours} h</p></div><button type="button" className="button subtle" onClick={()=>setEditor({kind:'alert-rule',row:rule})}>Configurar aviso</button></li>)}</ul></section><AutomationStatus automation={setup.automation}/></>}
     </div>}
-    {editor&&visible&&<SettingsEditor key={editor.kind+':'+(editor.row?.id||'new')} editor={editor} data={visible} api={api} onClose={()=>setEditor(null)} onSaved={saved} onInteractionStateChange={reportInteraction}/>}
-    {accountEditor&&<BusinessActionDialog action="account-save" context={{account:accountEditor.id?accountEditor:undefined}} api={api} onClose={()=>setAccountEditor(null)} onSaved={saved} onInteractionStateChange={reportInteraction} configuration/>}
+    {editor&&visible&&<SettingsEditor key={editor.kind+':'+(editor.row?.id||'new')} editor={editor} data={visible} api={api} onClose={()=>setEditor(null)} onSaved={saved} onInteractionStateChange={reportInteraction} onAssistantRegistered={assistantRegistered}/>}
+    {accountEditor&&<BusinessActionDialog action="account-save" context={{account:accountEditor.id?accountEditor:undefined,person:accountEditor.assistantPerson}} api={api} onClose={()=>setAccountEditor(null)} onSaved={saved} onInteractionStateChange={reportInteraction} onAssistantRegistered={assistantRegistered} configuration/>}
   </section>;
 }
 function PolicySummary({rules}) {

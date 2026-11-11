@@ -109,7 +109,7 @@ function NavigationMenu({ view, user, onNavigate, onSignOut, onClose, interactio
   </dialog>;
 }
 
-function NavigationLauncher({ view, onNavigate, onCreate, onClose, interactionLocked }) {
+function NavigationLauncher({ view, onNavigate, onCreate, onClose, interactionLocked, shortcut }) {
   const ref = useRef(null);
   const titleId = useId();
   const inputId = useId();
@@ -177,6 +177,7 @@ function NavigationLauncher({ view, onNavigate, onCreate, onClose, interactionLo
           onKeyDown={inputKeyDown} onChange={event => setQuery(event.target.value)} />
       </label>
       <p className="launcher-help" id={helpId}>Usa las flechas para recorrer resultados, Enter para abrir y Esc para cerrar.</p>
+      <KeyboardShortcuts shortcut={shortcut} />
       <p className="launcher-count" role="status">{destinations.length + actions.length} resultados</p>
       <div ref={resultsRef} className="launcher-results" onKeyDown={resultKeyDown}>
         {destinations.length > 0 && <section className="nav-group" aria-label="Tareas">
@@ -201,20 +202,9 @@ function NavigationLauncher({ view, onNavigate, onCreate, onClose, interactionLo
   </dialog>;
 }
 
-function KeyboardShortcuts({ shortcut, onClose }) {
-  const ref = useRef(null);
-  const titleId = useId();
-  function dismiss() {
-    ref.current?.close();
-    onClose();
-  }
-  const close = useDialog(ref, { busy: false, dirty: false, onClose: dismiss });
-  return <dialog ref={ref} className="navigation-dialog shortcuts-dialog" aria-labelledby={titleId}>
-    <header>
-      <h2 id={titleId} tabIndex={-1} data-dialog-initial-focus>Atajos de teclado</h2>
-      <button type="button" className="icon-button" aria-label="Cerrar atajos" onClick={close}><Icon name="close" /></button>
-    </header>
-    <div className="navigation-dialog-body">
+function KeyboardShortcuts({ shortcut }) {
+  return <details>
+    <summary>Ayuda de teclado</summary>
       <dl className="shortcuts-list">
         <div><dt><kbd>{shortcut === '⌘ K' ? '⌘' : 'Ctrl'}</kbd> + <kbd>K</kbd></dt><dd>Abrir «Ir a…» fuera de campos editables y diálogos.</dd></div>
         <div><dt><kbd>Tab</kbd> / <kbd>Mayús</kbd> + <kbd>Tab</kbd></dt><dd>Recorrer los controles hacia delante o atrás.</dd></div>
@@ -225,11 +215,10 @@ function KeyboardShortcuts({ shortcut, onClose }) {
         <div><dt><kbd>Esc</kbd></dt><dd>Cerrar el diálogo cuando no hay una operación en curso.</dd></div>
       </dl>
       <p>Si hay cambios sin guardar, se pide confirmación antes de descartarlos al cerrar o cambiar de vista.</p>
-    </div>
-  </dialog>;
+  </details>;
 }
 
-export default function AdminNavigation({ view, user, onNavigate, onCreate, onSignOut, interactionLocked }) {
+export default function AdminNavigation({ view, user, onNavigate, onCreate, onSignOut, onOpenAssistant, interactionLocked }) {
   const [dialog, setDialog] = useState(null);
   const [shortcut, setShortcut] = useState('Ctrl K');
   useEffect(() => {
@@ -280,8 +269,9 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
           onClick={() => openDialog('launcher')}>
           <Icon name="search" size={18} /><span>Ir a…</span><kbd className="launcher-shortcut">{shortcut}</kbd>
         </button>
-        <button type="button" className="button subtle shortcuts-trigger" disabled={interactionLocked}
-          aria-haspopup="dialog" aria-expanded={dialog === 'shortcuts'} onClick={() => openDialog('shortcuts')}>Atajos</button>
+        <button type="button" className="button subtle" aria-haspopup="dialog" onClick={onOpenAssistant}>
+          <Icon name="chat" size={18} /><span>Ali</span>
+        </button>
         <a className="button subtle preview-link" href="/?preview=1" target="_blank" rel="noopener noreferrer"
           aria-label="Ver mi página (abre en otra pestaña)">
           <span className="preview-link-label">Ver mi página</span><Icon name="external" size={18} />
@@ -294,6 +284,9 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
         onClick={() => navigate({ section: section.id })}>
         <Icon name={section.icon} /><span>{section.label}</span>
       </button>)}
+      <button type="button" className="assistant-bottom-trigger" aria-haspopup="dialog" onClick={onOpenAssistant}>
+        <Icon name="chat" /><span>Ali</span>
+      </button>
       <button type="button" className={secondarySection ? 'active' : undefined} disabled={interactionLocked}
         aria-haspopup="dialog" aria-expanded={dialog === 'menu'} onClick={() => openDialog('menu')}>
         <Icon name="menu" /><span>Más</span>
@@ -302,7 +295,6 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
     {dialog === 'menu' && <NavigationMenu view={view} user={user} onNavigate={onNavigate}
       onSignOut={onSignOut} onClose={closeDialog} interactionLocked={interactionLocked} />}
     {dialog === 'launcher' && <NavigationLauncher view={view} onNavigate={onNavigate} onCreate={onCreate}
-      onClose={closeDialog} interactionLocked={interactionLocked} />}
-    {dialog === 'shortcuts' && <KeyboardShortcuts shortcut={shortcut} onClose={closeDialog} />}
+      onClose={closeDialog} interactionLocked={interactionLocked} shortcut={shortcut} />}
   </>;
 }
