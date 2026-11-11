@@ -22,6 +22,12 @@ test('URLSearchParams and resolved Next query objects use the first repeated val
 test('home, settings and users discard all list state',()=>{
  for(const section of ['home','settings','users']) assert.deepEqual(readAdminView({section,q:'test',status:'draft',paymentStatus:'paid',page:'7'}),{...home,section});
 });
+test('assistant settings tab is a canonical, non-list business destination',()=>{
+ const view=readAdminView({section:'business',tab:'assistant'});
+ assert.deepEqual(view,{section:'business',q:'',status:'',paymentStatus:'',page:1,tab:'assistant'});
+ assert.equal(adminHref(view),'/admin?section=business&tab=assistant');
+ assert.deepEqual(readAdminView(new URL(adminHref(view),'https://example.test').searchParams),view);
+});
 
 test('query text is capped at 100 characters without trimming or interpreting it',()=>{
  assert.equal(readAdminView({section:'orders',q:'x'.repeat(101)}).q,'x'.repeat(100));

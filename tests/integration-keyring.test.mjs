@@ -104,6 +104,74 @@ test('missing custody with existing ciphertext blocks the entire ensure before c
   for (const name of ['media', 'sessions', 'control']) assert.deepEqual(await f.keyring.read(name), before[name]);
   assert.equal(openAppSecret(sealed, before.appSecret), 'SYNTHETIC-SECRET');
 });
+test('assistant custody is isolated from social initialization in either order', async t => {
+  const f = await fixture(t);
+  const assistant = await f.keyring.ensureAssistant();
+  assert.equal(assistant.length, 32);
+  assert.deepEqual((await readdir(f.directory)).sort(), ['assistant.key']);
+  const social = await f.keyring.ensure();
+  assert.equal(new Set([...Object.values(social), assistant].map(key => key.toString('base64'))).size, 6);
+  assert.deepEqual((await readdir(f.directory)).sort(), ['appSecret.key', 'assistant.key', 'media.key', 'sessions.key', 'tokens.key']);
+
+  const reverse = await fixture(t);
+  const socialFirst = await reverse.keyring.ensure();
+  const assistantSecond = await reverse.keyring.ensureAssistant();
+  assert.equal(new Set([...Object.values(socialFirst), assistantSecond].map(key => key.toString('base64'))).size, 6);
+  assert.deepEqual((await readdir(reverse.directory)).sort(), ['appSecret.key', 'assistant.key', 'media.key', 'sessions.key', 'tokens.key']);
+});
+
+test('assistant ciphertext with missing assistant custody fails without creating or repairing keys', async t => {
+  const f = await fixture(t);
+  await mkdir(f.directory, { mode: 0o700 });
+  await assert.rejects(() => f.keyring.ensureAssistant({ existingCiphertexts: true }), { code: 'INTEGRATION_KEY_MISSING' });
+  assert.deepEqual(await readdir(f.directory), []);
+  const social = await f.keyring.ensure();
+  assert.deepEqual((await readdir(f.directory)).sort(), ['appSecret.key', 'media.key', 'sessions.key', 'tokens.key']);
+  await assert.rejects(() => f.keyring.ensureAssistant({ existingCiphertexts: true }), { code: 'INTEGRATION_KEY_MISSING' });
+  assert.deepEqual((await readdir(f.directory)).sort(), ['appSecret.key', 'media.key', 'sessions.key', 'tokens.key']);
+  assert.deepEqual(snapshot(await f.keyring.ensure({ existingCiphertexts: true })), snapshot(social));
+});
+test('social initialization never repairs assistant custody, and assistant initialization never repairs social custody', async t => {
+  const assistantLoss = await fixture(t);
+  await assistantLoss.keyring.ensureAssistant();
+  await unlink(join(assistantLoss.directory, 'assistant.key'));
+  await assert.rejects(() => assistantLoss.keyring.ensureAssistant({ existingCiphertexts: true }), { code: 'INTEGRATION_KEY_MISSING' });
+  assert.deepEqual(await readdir(assistantLoss.directory), []);
+  await assistantLoss.keyring.ensure();
+  assert.deepEqual((await readdir(assistantLoss.directory)).sort(), ['appSecret.key', 'media.key', 'sessions.key', 'tokens.key']);
+  await assert.rejects(() => assistantLoss.keyring.ensureAssistant({ existingCiphertexts: true }), { code: 'INTEGRATION_KEY_MISSING' });
+  assert.deepEqual((await readdir(assistantLoss.directory)).sort(), ['appSecret.key', 'media.key', 'sessions.key', 'tokens.key']);
+
+  const socialLoss = await fixture(t);
+  const socialKeys = await socialLoss.keyring.ensure();
+  const preservedAssistant = await socialLoss.keyring.ensureAssistant();
+  await unlink(join(socialLoss.directory, 'tokens.key'));
+  assert.deepEqual(await socialLoss.keyring.ensureAssistant(), preservedAssistant);
+  assert.equal(await socialLoss.keyring.read('tokens'), null);
+  await assert.rejects(() => socialLoss.keyring.ensure({ existingCiphertexts: true }), { code: 'INTEGRATION_KEY_MISSING' });
+  for (const [name, key] of Object.entries(socialKeys)) {
+    if (name !== 'tokens') assert.deepEqual(await socialLoss.keyring.read(name), key);
+  }
+  assert.deepEqual(await socialLoss.keyring.read('assistant'), preservedAssistant);
+});
+test('assistant custody rejects a reused social key', async t => {
+  const f = await fixture(t), social = await f.keyring.ensure();
+  await writeFile(join(f.directory, 'assistant.key'), social.tokens, { mode: 0o600 });
+  await assert.rejects(() => f.keyring.ensureAssistant(), { code: 'INTEGRATION_KEY_REUSED' });
+});
+test('social initialization rejects a preexisting key colliding with assistant custody', async t => {
+  const f = await fixture(t), assistant = await f.keyring.ensureAssistant();
+  await writeFile(join(f.directory, 'appSecret.key'), assistant, { mode: 0o600 });
+  await assert.rejects(() => f.keyring.ensure(), { code: 'INTEGRATION_KEY_REUSED' });
+  assert.deepEqual((await readdir(f.directory)).sort(), ['appSecret.key', 'assistant.key']);
+  assert.equal(await f.keyring.read('tokens'), null);
+});
+test('legacy social import rejects collision with assistant custody before publishing', async t => {
+  const f = await fixture(t), assistant = await f.keyring.ensureAssistant(), legacy = keySet();
+  legacy.tokens = assistant;
+  await assert.rejects(() => f.keyring.importLegacy(legacy), { code: 'INTEGRATION_KEY_REUSED' });
+  assert.deepEqual((await readdir(f.directory)).sort(), ['assistant.key']);
+});
 
 test('configured roots, ancestor directories and key symlinks are rejected without following them', async t => {
   const f = await fixture(t), outside = join(f.root, 'outside');
