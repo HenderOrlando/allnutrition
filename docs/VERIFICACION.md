@@ -1,5 +1,98 @@
 # Verificación v3 — administración de negocio
 
+## Ali · aceptación local completa · ronda 7
+
+El usuario autorizó hasta la novena ronda, sin reiniciar el contador. Esta revisión sincroniza el autosave social con su `nextAttemptAt` persistido, espera el POST real de logout y verifica la lectura e identidad del pedido antes de operar su diálogo. Conserva todas las aserciones previas, las doce operaciones concurrentes, las guardas y los límites internos.
+
+| Comando de la séptima ronda | Código | Resultado observado |
+| --- | ---: | --- |
+| `npm test` | 0 | 1297 aprobadas; 0 fallos; 0 cancelaciones; 1 omisión condicional de PostgreSQL, que se ejecuta por separado |
+| `npm run check` | 0 | 368 archivos; 0 errores de sintaxis/imports locales |
+| `npm run build` | 0 | Compilación, TypeScript y generación completas |
+| `npm run test:postgres` | 0 | 446 aprobadas; 0 fallos, cancelaciones u omisiones |
+| `npm run test:e2e -- --project=desktop` | 0 | 34 aprobadas; sin fallos ni omisiones |
+| `npm run test:e2e -- --project=mobile` | 0 | 34 aprobadas; sin fallos ni omisiones |
+
+Los comandos de aceptación se ejecutan secuencialmente y sin un corte externo que impida terminar PostgreSQL; no se cambian los límites de conexión o consulta ni la durabilidad de la base. Un diagnóstico nativo instrumentado, con el pool predeterminado de una conexión, registró doce pedidos confirmados con números del 1 al 12 y ninguna consulta fallida. No determina el error truncado de R6 ni sustituye su contrato completo.
+
+El contrato completo de PostgreSQL incluyó el motor conversacional de Ali y la numeración de los doce pedidos concurrentes. Terminó sin el corte externo de R6 y sin cambiar el pool, los límites internos o las guardas.
+
+Las seis compuertas terminaron con código 0 sobre la misma revisión, sin recortar escenarios. Los recorridos reales de Ali se detallan en la auditoría integral siguiente; R6 y R7 ajustaron sólo fixtures y sincronización de pruebas, no el código funcional ni sus guardas.
+
+Tras finalizar móvil se detuvieron web, proxy y ambos workers propios. Se retiraron los dos contenedores y sus dos volúmenes etiquetados, custodia/certificados sintéticos y scaffolds. Verificación final: sin oyentes en los puertos de QA, sin recursos Docker con la etiqueta propia y sin claves o scripts temporales en el directorio de aceptación. Evidencia inactiva conservada en `/private/tmp/ali-acceptance-r6.ianxvd`; sin producción, commits ni despliegue. Se mantienen los límites de proveedor y funcionalidad de la auditoría local.
+
+## Ali · retoma autorizada · ronda 6 cerrada sin aceptación global
+
+El usuario autorizó continuar después de detener la quinta ronda; el contador no se reinició. El único cambio de código separa los directorios temporales `secrets` y `control` en `tests/assistant-engine-contract.mjs`. Se conservan la guarda contra rutas anidadas y los escenarios del contrato; las suites se ejecutan sin heredar rutas de custodia para ejercitar el fallback corregido.
+
+| Comando de la sexta ronda | Código | Resultado observado |
+| --- | ---: | --- |
+| `npm test` | 1 | 1295 aprobadas; 2 fallos contabilizados —autosave social y padre—; 1 omisión condicional de PostgreSQL; 0 cancelaciones |
+| `npm run check` | 0 | 368 archivos; 0 errores |
+| `npm run build` | 0 | Compilación y generación completas |
+| `npm run test:postgres` | — | Interrumpido por el límite externo de 3600 s; antes registró un fallo en numeración concurrente de pedidos; sin resumen final |
+| `npm run test:e2e -- --project=desktop` | 1 | 32 aprobadas; 2 fallos: logout en Resultados y reapertura del pedido manual |
+| `npm run test:e2e -- --project=mobile` | 0 | 34 aprobadas; sin fallos ni omisiones |
+
+PostgreSQL de contratos y E2E usan contenedores y volúmenes propios distintos, con `allnutrition_test` y reset autorizado. La instancia E2E nueva se provisionó con `npm run db:migrate` antes de su setup; el primer intento sin esquema devolvió `3F000`, sin cambiar el código ni las guardas. Web compilada, proxy HTTPS y worker real compartieron el entorno E2E aislado; se detuvieron después de finalizar móvil.
+
+El contrato del motor de Ali con SQLite aprobó después de separar la custodia. El fallo restante de la suite general fue `autosave con respuesta perdida se inspecciona standalone y no crea otro draft`: se observó `uncertain` donde se esperaba `confirmed` (`tests/social-browser-jobs-contract.mjs:398`). No se eliminó la aserción ni se repitió la prueba para confirmar el fallo.
+
+La traza desktop registra el POST de logout aún sin respuesta al vencer la espera de URL. En el pedido, el detalle respondió 200 y el snapshot posterior al fallo ya contiene el diálogo y su navegación. No se atribuyó el retraso a una guarda rechazada ni se elevaron timeouts. Móvil terminó sus 34 escenarios completos sin fallos.
+
+Durante esta ronda, el usuario autorizó hasta tres rondas adicionales, de la séptima a la novena. Se mantiene la aceptación completa y el contador acumulado.
+
+PostgreSQL no alcanzó todos los contratos ni acredita todavía el motor de Ali en ese driver. El corte externo impidió emitir el detalle final del fallo concurrente; no se asume una colisión de números ni un error SQL específico. La siguiente ronda conserva las doce operaciones concurrentes y los límites internos; la invocación completa se ejecutará sin el corte externo que interrumpió esta.
+
+## Ali · auditoría integral local · 11 de noviembre de 2026
+
+**Aceptación global no lograda dentro de las cinco rondas autorizadas.** El fallo compartido de `npm test` y `npm run test:postgres` ocurre al preparar el contrato del motor de Ali, antes de sus escenarios: el fallback de `tests/assistant-engine-contract.mjs:80–82` usa el directorio temporal como custodia y anida `control` dentro de él; `lib/integrations/keyring.mjs:82` prohíbe correctamente directorios iguales o anidados. No se relajó esa guarda ni se repitieron estas suites después del límite.
+
+| Comando de la quinta ronda | Código | Resultado |
+| --- | ---: | --- |
+| `npm test` | 1 | 1283 aprobadas; 1 fallo; 1 omisión condicional de PostgreSQL; 0 cancelaciones |
+| `npm run check` | 0 | 368 archivos; 0 errores |
+| `npm run build` | 0 | Compilación y generación completas |
+| `npm run test:postgres` | 1 | 431 aprobadas; 2 fallos contabilizados —contrato del motor y padre—; 0 omisiones/cancelaciones |
+| `npm run test:e2e -- --project=desktop` | 0 | 34 aprobadas; sin fallos ni omisiones |
+| `npm run test:e2e -- --project=mobile` | 0 | 34 aprobadas; sin fallos ni omisiones |
+
+Al cerrar la quinta ronda se detuvieron los runtimes propios y se retiraron ambos contenedores de prueba. Scripts descartables y cookie sintética eliminados; evidencias inactivas conservadas en `/private/tmp/ali-audit-URgAVG`. En ese punto no se inició una sexta ronda; las retomas autorizadas después se registran arriba. No se modificó producción.
+
+- Node `24.14.1`, macOS arm64 y Next.js `16.4.3`. SQLite, administradores, TLS y proveedor HTTP autenticado exclusivamente locales; PostgreSQL 16 propio en dos bases `allnutrition_test` separadas para contratos y E2E. Sin claves reales, Excel comercial, servicios productivos, commits ni despliegue.
+- Configuración real sin reinicio: proveedor A válido, consulta retenida, cambio a B y respuesta A rechazada con **409**, sin propuesta ni cambio comercial. Eliminar la clave deshabilitó nuevos envíos (`ASSISTANT_DISABLED`); reactivarla permitió continuar y vació el campo secreto.
+- Memoria real: pregunta de destinatario conservada al navegar, usar atrás/adelante y recargar; contestarla abrió el pedido nuevo correcto y aplicó los datos anteriores, sin crear otro pedido. Consulta de caja desde Pedidos mantuvo la página, cambió el tema y abrió la cuenta citada. Tras una transferencia, el saldo fue releído, no copiado del historial.
+- Recomendación sustentada en una alerta nativa de disponibilidad cero: conservó su tarea después de consultar Caja y recargar; el seguimiento abrió exactamente el producto afectado. Productos, pedidos y caja permanecieron iguales. Otro administrador recibió **404** al solicitar el hilo ajeno.
+- Familias ejercitadas por chat → diff → valores visibles/dirty: seis editores de contenido, vitrina, pedido, creación/metadatos/eventos de envío, ingreso financiero, persona/convenio parcial, plataforma/origen, reglas/preferencias/alertas/cuenta, etapas iniciales, campaña borrador, nombre de archivo publicitario, razón de vínculo, mapping/resolutor y nombres de importación. Se conservaron campos hermanos, IDs, archivos, consentimientos y aceptaciones humanas; prellenar no guardó estos cambios.
+- Pedido confirmado en el formulario nativo: una creación real, una unidad reservada, ninguna consumida y recibo persistido. Guardados descriptivos automáticos montado/desmontado: texto literal, versión y auditoría reales. Editar manualmente durante la consulta impidió el automático; revisar de nuevo, aplicar y guardar conservó el campo manual y limpió la base de revisión.
+- Transferencia de **1.000 COP**: cancelar dejó los saldos intactos; confirmar creó una sola transferencia y sus dos contrapartidas de **±100.000 centavos**, conservando **100.000 COP** entre ambas cuentas. Se perdió deliberadamente la respuesta después del commit real; repetir desde la UI recuperó el mismo recibo sin duplicar asientos.
+- Ingreso prellenado sin guardarlo: conservó los demás campos y el libro de caja. Un importe mal agrupado siguió editable, bloqueó guardar, pudo corregirse y Escape devolvió el foco al activador. Primer producto desde instalación sin productos: nombre/presentación/SKU visibles; precio, existencias y costo permanecieron vacíos, no cero; caja intacta y cero productos después de descartar.
+- Superficie Chromium inspeccionada en escritorio y perfil móvil iPhone 13. A **390 px** el compositor quedó dentro del viewport, sin desbordamiento; aplicar devolvió el foco y descartar liberó el scroll. La barra inferior mantiene Inicio/Pedidos/Caja/Ali/Más en una fila a **320 y 390 px**, con objetivos mayores de 44 px.
+- Cierre de sesión desde la UI con modelo retenido: logout **200**, respuesta tardía **401**, turno `cancelled`, ninguna propuesta y cookie anterior rechazada con **401**; los hechos comerciales permanecieron idénticos. Noticias externas, WhatsApp y publicación devolvieron el límite de alcance sin propuesta, recibo ni efecto externo.
+- Incidencias previas conservadas: rondas 1–2 rechazadas por contratos; en rondas 3–4, contratos SQLite/PostgreSQL y build aprobaron, pero E2E no. Ronda 4: **29/34 desktop y 30/34 mobile**. Se corrigieron autobloqueos por invalidez/mapping, apertura duplicada, proyección de versión/precio y refrescos sociales que podían sustituir el borrador; no se redujeron escenarios ni se relajaron validaciones.
+- E2E usa web compilada, proxy TLS local y **`npm run business:jobs` real**, con los mismos directorios de medios/custodia y la misma PostgreSQL del setup. `next dev` por sí solo no procesa archivos ni trabajos. Los fallos de arnés por URL relativa o destino de navegación inexistente se corrigieron reanudando desde los efectos observados, sin fingir mutaciones.
+- Límites: protocolo y flujos completos con proveedor sintético autenticado; no aceptación de OpenAI real, integración Meta/Heka productiva, recordatorios programados ni CI remoto.
+
+## Ali · memoria y siguientes pasos · comprobación local
+
+- `node --test tests/assistant-*.test.mjs tests/auth-session.test.mjs`: **33 aprobadas, cero fallos/omisiones**. Continuidad de objetivo y respuestas, pregunta respondida tras un turno intermedio, tarea conservada en turnos posteriores, exclusión de propuestas inactivas y memoria Unicode dentro del límite de persistencia.
+- `npm run check`: **363 archivos JavaScript/JSX**, cero errores de sintaxis/imports locales. `npm run build` completado después de los ajustes finales de interfaz.
+- Runtime compilado en `127.0.0.1:3118`, SQLite/administrador nuevos y proveedor HTTP exclusivamente loopback. En Chromium: inicio rápido, envío, respuesta, recarga, reapertura y enlace real a Productos. GET de detalle **200**, mismo objetivo, respuesta confirmada, pregunta resuelta y tarea sugerida conservada.
+- Superficie final inspeccionada a **1365×900, 390×844 y 320×740**. Sin desbordamiento horizontal del diálogo; plan desplegable, pregunta única y foco visible desde el seguimiento. A 320 px, el plan se cierra al enfocar la respuesta y deja **219 px** para mensajes. Cero entradas de consola JavaScript; se observó un prefetch RSC abortado al navegar durante el acceso inicial.
+- La ejecución general `npm test`, anterior a los últimos ajustes visuales, terminó con **1180 aprobadas, 6 fallos contabilizados y 1 omitida**. Cuatro subpruebas fallaron, más dos suites padre: preparación/reanudación pagada en `social-api-jobs-contract.mjs`, estado incierto en `social-browser-jobs-contract.mjs` y lease perdido en `social-browser.test.mjs`. No se modificaron esos consumidores ni se repitió la suite para ocultar el resultado.
+- Sin PostgreSQL de pruebas, servicios externos ni despliegue. Sólo datos sintéticos; no se guardaron operaciones comerciales. La comprobación no acredita calidad de recomendaciones de un modelo externo ni recordatorios programados.
+
+## Ali · asistente conversacional · comprobación local · 10 de noviembre de 2026
+
+- Node `24.14.1`, macOS arm64; Next.js `16.4.3`. Build con SQLite temporal y URL loopback; proveedor HTTP sintético local. Sin `TEST_DATABASE_URL`, reset de PostgreSQL, servicios productivos ni despliegue.
+- `node --test tests/assistant-*.test.mjs tests/auth-session.test.mjs`: **31 aprobadas, cero fallos/omisiones**. Incluye migración v11, respaldo aislado, custodia, transporte, formularios, propuestas, cancelación durable, logout/reset y contrato de sesión.
+- `npm run check`: **361 archivos JavaScript/JSX**, cero errores de sintaxis/imports locales. `npm run build`: Next compiló y generó las páginas; el manifiesto incluye settings, hilos, turnos, cancelación y propuestas de Ali.
+- Primer intento de `node --test --test-concurrency=2 tests/*.test.mjs`: **1183 aprobadas, 2 fallidas contabilizadas, 1 omitida**. Hubo un solo subtest fallido —y su suite padre— en `social-api-jobs-contract.mjs`: reanudación de video esperaba offset 2048 y observó 1024. El contrato aislado `tests/social-api-jobs.test.mjs` terminó **32/32** tras añadir aserciones explícitas de procesamiento/error. En la segunda ejecución completa, la subprueba de reanudación pasó: **1185 aprobadas, cero fallos, 1 omitida**.
+- Chromium local en `127.0.0.1:3117`, administrador y SQLite sintéticos: GET de configuración e historial/detalle de hilo **200**; PATCH sin CSRF **403**. La configuración omitió la clave; consola visible y navegación a Inicio, Cuentas del negocio y Ali inspeccionadas a **1365×768**. Tras limpiar registros anteriores y recargar Cuentas, cero errores de consola/red y no se reprodujo el aviso de profundidad de actualización.
+- Build de producción ejecutado con `npm run start` en `127.0.0.1:3118`: Inicio y panel Ali renderizaron en Chromium; settings e historial GET **200**, cero errores JavaScript. Sin enviar mensajes. La única respuesta HTTP no exitosa observada fue el favicon **404**.
+- El proveedor de smoke era exclusivamente loopback: **4 solicitudes autorizadas**, `leakedKeyInBody=false`, contexto de formulario recibido y destinos `import-platform-name`/`import-source-name`. Una consulta cancelada quedó `cancelled`; durante turnos activos quedaron bloqueados la eliminación de clave, el reset y el logout. La importación se canceló; sólo se usaron registros sintéticos, incluido un borrador local, sin publicar, cobrar, pagar, confirmar envíos ni gastar.
+- No se ejecutaron PostgreSQL de pruebas, E2E, CI, servicios externos ni despliegue. La evidencia no acredita una conexión real con proveedor ni operaciones comerciales externas.
+
 ## Integraciones dinámicas y Heka · aceptación local · 9 de noviembre de 2026
 
 - Node `24.14.1`, macOS arm64; SQLite y PostgreSQL 17.11 descartables. No se modificaron producción ni sus archivos de configuración. Esta actualización v10 todavía no está desplegada.

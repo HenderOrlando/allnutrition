@@ -1,5 +1,18 @@
 # Cambios — administración v3 y antecedentes
 
+## Ali · memoria, acciones revisadas y seguimiento · comprobación local · 11 de noviembre de 2026
+
+- Conversaciones privadas con objetivo, respuestas confirmadas, referencias y hasta tres próximos pasos persistidos. Navegar, cambiar de tema o recargar no elimina la pregunta pendiente ni las tareas sugeridas; los datos históricos se vuelven a consultar antes de actuar. No añade recordatorios programados.
+- Configuración autenticada del proveedor y modelo sin reinicio, clave cifrada y omitida de respuestas/prompts. Cambiar configuración o eliminar la clave invalida solicitudes y propuestas pendientes; una respuesta tardía no guarda cambios.
+- Lectores acotados de catálogo, pedidos, envíos, caja, informes, recomendaciones, negocio, alertas, importaciones, publicidad, acceso y ayuda de esta aplicación. Reutilizan reglas nativas y conservan fuente, corte, cobertura, moneda y ausencia de datos. No se inventan totales de páginas parciales ni tendencias sin evidencia.
+- Puente de formularios con identidad, versión y generación: apertura desde URL, diff, prellenado y guardado humano del payload completo. Conserva campos hermanos, IDs de filas, borradores, foco y controles de aceptación; la invalidez de un importe no bloquea su corrección.
+- Ejecutor transaccional con confirmación e idempotencia. Autonomía limitada a texto literal expresamente solicitado sobre un único borrador existente; precios, inventario, estados públicos y operaciones económicas no se autorizan por una interpretación del modelo. Una edición manual concurrente obliga a revisar de nuevo.
+- Recibos y auditoría se guardan con la mutación. Repetir una confirmación idéntica recupera el resultado persistido; una decisión distinta o una versión comercial cambiada produce conflicto, sin repetir el efecto.
+- Importaciones, publicación social, credenciales y accesos conservan sus flujos humanos. Las recomendaciones no publican, pagan, envían WhatsApp ni consultan noticias externas. Los refrescos sociales no sustituyen borradores con versiones ya reconocidas.
+- La migración v11 mantiene configuración, conversaciones, turnos y propuestas fuera del respaldo comercial. Aceptación local completa en SQLite/PostgreSQL y escritorio/móvil; evidencia y límites en [VERIFICACION.md](VERIFICACION.md). No acredita un proveedor externo ni un despliegue.
+- El fixture del motor de Ali separa custodia y control en directorios hermanos; mantiene la prohibición de rutas iguales o anidadas y vuelve a ejercitar los trece escenarios del contrato con SQLite y PostgreSQL sin heredar rutas de custodia.
+- El contrato de recuperación social usa el vencimiento persistido en vez de un salto fijo. Los E2E esperan las respuestas reales de logout y detalle del pedido antes de comprobar la navegación; conservan los escenarios, la identidad del registro, las guardas y los timeouts internos.
+
 ## Integraciones en ejecución y consulta Heka
 
 - Migración v10 separa configuración social, emparejamientos, dispositivos y capturas de los hechos comerciales. Invalida OAuth pendiente anterior; no modifica pedidos, recaudos, gastos ni caja.
