@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { openStore } from '../lib/db/index.mjs';
 import { saveResource, getBusinessSettings, saveBusinessSettings } from '../lib/business/settings.mjs';
 import { saveAccount, recordAdvance, accountBalance } from '../lib/business/cash.mjs';
@@ -9,7 +10,7 @@ import { recordExpense, expenseBalanceTx } from '../lib/business/expenses.mjs';
 import { saveSettlement, confirmSettlement } from '../lib/business/settlements.mjs';
 import { createShipment, recordShipmentEvent } from '../lib/business/shipments.mjs';
 import { loadOrderData, persistOrderData } from '../lib/business/orders.mjs';
-import { entity, insertRow, newId, runCommand, stamp } from '../lib/business/commands.mjs';
+import { entity, hash, insertRow, newId, runCommand, stamp } from '../lib/business/commands.mjs';
 import { addDays, bogotaDate } from '../lib/business/dates.mjs';
 import { preparePayroll, confirmPayroll, payPayroll, getPayroll, materializePayrollAccrualsTx, reconcileCommissionsTx, reversePayrollPaymentTx, reverseAdvanceTx } from '../lib/business/payroll.mjs';
 
@@ -34,6 +35,19 @@ async function order(store, sellerId, { price = 5500000, quantity = 2, shippingC
 }
 const reconcile = (store, orderId, extra = {}) => command(store, 'test-commission', tx => reconcileCommissionsTx(tx, orderId, { actorId: actor, ...extra }));
 const undoPayroll = (store, paymentId, effectiveOn = '2026-10-15') => command(store, 'test-reverse-payroll', tx => reversePayrollPaymentTx(tx, paymentId, { effectiveOn, reason: 'Rectificación sintética', actorId: actor }));
+const financialFields = ['bonusMinor', 'discountMinor', 'reason', 'earnedMinor', 'paidMinor', 'offsetMinor', 'outstandingMinor', 'creditMinor', 'availableCreditMinor', 'advanceAvailableMinor', 'advanceAppliedMinor', 'netMinor', 'amountToPayMinor'];
+function assertPreparedAmounts(prepared, confirmed) {
+  for (const field of financialFields) assert.equal(prepared[field], confirmed[field], field);
+  assert.equal(prepared.advanceToApplyMinor, confirmed.advanceAppliedMinor);
+}
+async function fingerprint(store) {
+  const tables = store.provider === 'supabase'
+    ? await store.db.all("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='allnutrition' AND table_type='BASE TABLE' ORDER BY table_name")
+    : await store.db.all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+  const snapshot = {};
+  for (const { name } of tables) snapshot[name] = (await store.db.all(`SELECT * FROM ${store.t(name)} ORDER BY 1`)).map(row => ({ ...row }));
+  return hash(snapshot);
+}
 
 export const businessPayrollContracts = [
   ['daily salary uses calendar residue, inclusive agreements and idempotent completed-day jobs', async store => {
@@ -69,10 +83,18 @@ export const businessPayrollContracts = [
     await assert.rejects(confirmPayroll(store, { personId: p.id, startOn: '2026-09-01', endOnExclusive: '2026-10-01', discountMinor: 1000001, reason: 'Descuento excesivo', requestId: request() }, actor), { status: 400 });
     assert.equal((await select(store, 'expenses')).length, 0);
     const payload = { personId: p.id, startOn: '2026-09-01', endOnExclusive: '2026-10-01', bonusMinor: 10000, discountMinor: 25000, reason: 'Bonificación y descuento interno', requestId: request() };
+    const beforeAdjustedPreview = await fingerprint(store);
+    const adjustedPreview = await preparePayroll(store, payload, actor);
+    assert.equal(await fingerprint(store), beforeAdjustedPreview);
     const confirmed = await confirmPayroll(store, payload, actor);
     assert.equal(confirmed.earnedMinor, 985000);
     assert.equal(confirmed.outstandingMinor, 985000);
     assert.equal(confirmed.offsetMinor, 25000);
+    assertPreparedAmounts(adjustedPreview, confirmed);
+    const beforeExistingPreview = await fingerprint(store);
+    const storedPreview = await preparePayroll(store, { ...payload, bonusMinor: 900000, discountMinor: 800000, reason: 'No reaplicar' }, actor);
+    assert.deepEqual(storedPreview, confirmed);
+    assert.equal(await fingerprint(store), beforeExistingPreview);
     assert.deepEqual(await confirmPayroll(store, payload, actor), confirmed);
     const changed = await saveResource(store, 'people', { ...p, requestId: request(), salaryAgreements: [salary('amended', 'monthly', 2000000, '2026-09-01', '2026-09-30')] }, actor, p.id);
     await command(store, 'test-accrual', tx => materializePayrollAccrualsTx(tx, { throughOn: '2026-09-30', personId: changed.id, actorId: actor }));
@@ -80,6 +102,90 @@ export const businessPayrollContracts = [
     const future = addDays(bogotaDate(), 2);
     await assert.rejects(confirmPayroll(store, { personId: p.id, startOn: future, endOnExclusive: addDays(future, 1), requestId: request() }, actor), { status: 400 });
     await assert.rejects(command(store, 'test-accrual', tx => materializePayrollAccrualsTx(tx, { throughOn: future, actorId: actor })), { status: 400 });
+  }],
+  ['preview and confirmation share current-day accruals, known zero and adjustment validation', async store => {
+    const today = bogotaDate(), endOnExclusive = addDays(today, 1);
+    const p = await person(store, [salary('today', 'weekly', 700, today, today)]);
+    const input = { personId: p.id, startOn: today, endOnExclusive, bonusMinor: null, discountMinor: 0, reason: '' };
+    const before = await fingerprint(store);
+    const preview = await preparePayroll(store, input, actor);
+    assert.equal(preview.missingDayCount, 1);
+    assert.equal(preview.missingAccruals[0].incurredOn, today);
+    assert.equal(preview.earnedMinor, 100);
+    assert.equal(preview.bonusMinor, 0);
+    assert.equal(preview.discountMinor, 0);
+    for (const adjustment of [{ bonusMinor: 1 }, { discountMinor: 1 }]) {
+      await assert.rejects(() => preparePayroll(store, { ...input, ...adjustment }, actor), { status: 400 });
+      await assert.rejects(() => confirmPayroll(store, { ...input, ...adjustment, requestId: request() }, actor), { status: 400 });
+    }
+    await assert.rejects(() => preparePayroll(store, { ...input, discountMinor: 101, reason: 'Excesivo' }, actor), { status: 400 });
+    assert.equal(await fingerprint(store), before);
+    const confirmed = await confirmPayroll(store, { ...input, requestId: request() }, actor);
+    assertPreparedAmounts(preview, confirmed);
+    assert.equal((await select(store, 'expenses', 'WHERE person_id=?', [p.id])).length, 1);
+    assert.deepEqual(await preparePayroll(store, input, actor), confirmed);
+    const zero = await person(store, [salary('zero', 'weekly', 0, today, today)]);
+    const zeroInput = { ...input, personId: zero.id, bonusMinor: 0, discountMinor: null };
+    const beforeZero = await fingerprint(store), zeroPreview = await preparePayroll(store, zeroInput, actor);
+    assert.equal(zeroPreview.missingDayCount, 1);
+    assert.equal(zeroPreview.missingAccruals[0].amountMinor, 0);
+    assert.equal(zeroPreview.earnedMinor, 0);
+    assert.equal(await fingerprint(store), beforeZero);
+    const zeroConfirmed = await confirmPayroll(store, { ...zeroInput, requestId: request() }, actor);
+    assertPreparedAmounts(zeroPreview, zeroConfirmed);
+    assert.equal((await select(store, 'expenses', 'WHERE person_id=?', [zero.id]))[0].amountMinor, 0);
+    assert.equal((await select(store, 'payroll_allocations', 'WHERE payroll_id=?', [zeroConfirmed.id])).length, 0);
+  }],
+  ['preview discounts use only eligible unassigned remuneration and never consume another payroll', async store => {
+    const p = await person(store, [salary('sept', 'monthly', 1000000, '2026-09-01', '2026-09-30')]);
+    const previous = await confirmPayroll(store, { requestId: request(), personId: p.id, startOn: '2026-09-01', endOnExclusive: '2026-10-01' }, actor);
+    const input = { personId: p.id, startOn: '2026-10-01', endOnExclusive: '2026-10-16', bonusMinor: 100, discountMinor: 101, reason: 'Solo remuneración nueva' };
+    const before = await fingerprint(store);
+    await assert.rejects(() => preparePayroll(store, input, actor), { status: 400 });
+    await assert.rejects(() => confirmPayroll(store, { ...input, requestId: request() }, actor), { status: 400 });
+    assert.equal(await fingerprint(store), before);
+    const valid = { ...input, discountMinor: 100 };
+    const preview = await preparePayroll(store, valid, actor);
+    assert.equal(preview.earnedMinor, 0);
+    const confirmed = await confirmPayroll(store, { ...valid, requestId: request() }, actor);
+    assertPreparedAmounts(preview, confirmed);
+    assert.equal((await getPayroll(store, previous.id)).outstandingMinor, 1000000);
+    assert.deepEqual(confirmed.obligations.map(e => e.amountMinor).sort((a, b) => a - b), [-100, 100]);
+  }],
+  ['preview applies carried credits and adjustments before advances with no duplicate allocation or expense', async store => {
+    await configure(store, { enabled: true, mode: 'percent', rateBps: 500, earnWhen: 'customer_paid' });
+    const p = await person(store), bank = await account(store, p.id), sale = await order(store, p.id);
+    await recordCollection(store, { requestId: request(), version: (await store.order(sale.id)).version, orderId: sale.id, holder: 'business', accountId: bank.id, amountMinor: 12200000, occurredOn: '2026-09-03', method: 'Transferencia', reference: 'preview-credit' }, actor);
+    const september = await confirmPayroll(store, { requestId: request(), personId: p.id, startOn: '2026-09-01', endOnExclusive: '2026-10-01' }, actor);
+    await payPayroll(store, { requestId: request(), payrollId: september.id, version: september.version, amountMinor: 550000, accountId: bank.id, effectiveOn: '2026-09-30' }, actor);
+    const current = await store.order(sale.id);
+    await registerReturn(store, { requestId: request(), orderId: sale.id, version: current.version, occurredOn: '2026-10-02', reason: 'Crédito documentado', lines: [{ lineId: sale.items[0].lineId, quantity: 1, condition: 'recoverable' }] }, actor);
+    const creditInput = { personId: p.id, startOn: '2026-10-01', endOnExclusive: '2026-10-03' };
+    const creditPreview = await preparePayroll(store, creditInput, actor);
+    const creditPeriod = await confirmPayroll(store, { ...creditInput, requestId: request() }, actor);
+    assertPreparedAmounts(creditPreview, creditPeriod);
+    assert.equal(creditPreview.netMinor, -275000);
+    const creditExpense = creditPeriod.obligations.find(e => e.amountMinor < 0);
+    await recordAdvance(store, { requestId: request(), personId: p.id, accountId: bank.id, effectiveOn: '2026-10-03', amountMinor: 800000, concept: 'Anticipo previo a revisión' }, actor);
+    const input = { personId: p.id, startOn: '2026-10-03', endOnExclusive: '2026-10-16', bonusMinor: 1000000, discountMinor: 100000, reason: 'Ajustes documentados' };
+    const before = await fingerprint(store), preview = await preparePayroll(store, input, actor);
+    assert.equal(await fingerprint(store), before);
+    assert.equal(preview.earnedMinor, 900000);
+    assert.equal(preview.offsetMinor, 375000);
+    assert.equal(preview.advanceAppliedMinor, 625000);
+    assert.equal(preview.advanceAvailableMinor, 175000);
+    assert.equal(preview.amountToPayMinor, 0);
+    const payload = { ...input, requestId: request() }, confirmed = await confirmPayroll(store, payload, actor);
+    assertPreparedAmounts(preview, confirmed);
+    assert.equal(confirmed.obligations.some(e => e.id === creditExpense.id), false);
+    assert.equal((await getPayroll(store, creditPeriod.id)).creditMinor, 0);
+    const after = await fingerprint(store);
+    assert.deepEqual(await confirmPayroll(store, payload, actor), confirmed);
+    assert.deepEqual(await preparePayroll(store, { ...input, bonusMinor: 0, discountMinor: 0 }, actor), confirmed);
+    assert.equal(await fingerprint(store), after);
+    assert.equal((await select(store, 'expenses', 'WHERE source_key=?', [`payroll:${confirmed.id}:bonus`])).length, 1);
+    assert.equal((await select(store, 'expenses', 'WHERE source_key=?', [`payroll:${confirmed.id}:discount`])).length, 1);
+    assert.equal((await select(store, 'payroll_allocations', "WHERE source_type='expense' AND source_id=?", [creditExpense.id])).length, 1);
   }],
   ['business receipt supplies the commission date when the original Excel collection date is unknown', async store => {
     await configure(store);
@@ -279,4 +385,4 @@ export async function runBusinessPayrollContracts(t, factory) {
     try { await run(store); } finally { await store.close(); }
   });
 }
-test('Business payroll contracts on real SQLite', async t => runBusinessPayrollContracts(t, () => openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' })));
+if(process.argv[1]===fileURLToPath(import.meta.url))test('Business payroll contracts on real SQLite', async t => runBusinessPayrollContracts(t, () => openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' })));
