@@ -1,5 +1,12 @@
 # Verificación v3 — administración de negocio
 
+## Ali · custodia aislada y plazo agregado de contratos · 11 de noviembre de 2026
+
+- La aceptación nativa `9a588cb561113316` se rechazó por el plazo agregado de tres horas. El registro parcial contiene **1048 líneas aprobadas** y un fallo del motor SQLite; no tiene resumen completo ni acredita los contratos restantes, auditoría o E2E. Los últimos casos PostgreSQL seguían terminando, con duraciones de decenas de segundos por caso.
+- El fixture del motor heredaba las rutas de custodia del runtime, que no pertenecen a su almacén descartable. Ahora cada ejecución usa sus propios directorios temporales hermanos y repone las variables anteriores al terminar; no relaja permisos ni la prohibición de rutas anidadas.
+- `INTEGRATION_SECRETS_DIR=/app/data/integration-secrets SOCIAL_BROWSER_CONTROL_DIR=/app/data/social-browser-control node --test tests/assistant-engine.test.mjs`: **14 aprobadas**, cero fallos, cancelaciones u omisiones, incluidos los trece escenarios del motor con rutas heredadas ajenas.
+- El verificador concede seis horas únicamente al comando agregado de contratos. Conserva PostgreSQL real, todos los casos, los límites internos SQL y la durabilidad; un resultado parcial sigue rechazado. Producción permanece en la imagen anterior.
+
 ## Docker · adaptador Heka en contratos nativos · 11 de noviembre de 2026
 
 - La aceptación Linux/amd64 `524e2541e50eb080` rechazó el candidato anterior antes de los contratos: `checks` no encontraba `../desktop/providers/heka.mjs`, excluido por `.dockerignore`. No se omitió la prueba ni se relajó el verificador; producción permaneció en su imagen anterior.

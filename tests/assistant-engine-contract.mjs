@@ -76,9 +76,9 @@ export async function runAssistantEngineContracts(t, store) {
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'ali-engine-contract-'));
   const oldSecrets = process.env.INTEGRATION_SECRETS_DIR;
   const oldControl = process.env.SOCIAL_BROWSER_CONTROL_DIR;
-  // Honor an existing isolated keyring supplied by the PostgreSQL harness.
-  process.env.INTEGRATION_SECRETS_DIR = oldSecrets || join(directory, 'secrets');
-  process.env.SOCIAL_BROWSER_CONTROL_DIR = oldControl || join(directory, 'control');
+  // Each contract owns its custody; inherited runtime paths may be shared or unwritable.
+  process.env.INTEGRATION_SECRETS_DIR = join(directory, 'secrets');
+  process.env.SOCIAL_BROWSER_CONTROL_DIR = join(directory, 'control');
   const keyring = createIntegrationKeyring({ directory: process.env.INTEGRATION_SECRETS_DIR, controlDirectory: process.env.SOCIAL_BROWSER_CONTROL_DIR });
   try {
     const owner = await actor(store), other = await actor(store);
