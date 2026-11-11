@@ -57,6 +57,14 @@ test('COP aggregate display preserves safe-integer cents beyond the document lim
   invalid(()=>formatMoneyMinor(Number.MAX_SAFE_INTEGER+1));
 });
 
+test('currency formatting preserves exact cents, sign and unverified magnitudes without conversion',()=>{
+  const usd=new Intl.NumberFormat('es-CO',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:2});
+  assert.equal(formatMoneyMinor(12345,{currency:'USD'}),usd.format(123.45));
+  assert.equal(formatMoneyMinor(-1,{currency:'USD'}),usd.format(-0.01));
+  assert.equal(formatMoneyMinor(12345,{currency:null}),'123,45');
+  invalid(()=>formatMoneyMinor(12345,{currency:'unknown'}));
+});
+
 test('ratio rounding is half away from zero, including BigInt products', () => {
   for (const [n, d, expected] of [[1, 2, 1], [-1, 2, -1], [4, 3, 1], [-4, 3, -1], [5, 2, 3], [-5, 2, -3], [0, 3, 0]]) {
     assert.equal(roundRatio(n, d), expected);
