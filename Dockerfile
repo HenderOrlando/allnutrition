@@ -19,6 +19,7 @@ RUN ./node_modules/.bin/playwright install --with-deps chromium && chmod -R a+rX
 
 FROM checks-deps AS checks
 COPY . .
+COPY --from=heka_contract /heka.mjs ./desktop/providers/heka.mjs
 COPY --from=build /app/.next /app/.next
 ENV NEXT_TELEMETRY_DISABLED=1
 

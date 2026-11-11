@@ -235,6 +235,8 @@ services:
     build:
       context: .
       target: checks
+      additional_contexts:
+        heka_contract: ./desktop/providers
     user: "${LOCAL_UID:?}:${LOCAL_GID:?}"
     init: true
     cap_drop: [ALL]
