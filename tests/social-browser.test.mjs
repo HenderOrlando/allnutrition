@@ -8,7 +8,8 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
-import { createBrowserRuntime, isPublicBrowserAddress } from '../lib/social/browser-runtime.mjs';
+import { isPublicAddress } from '../lib/integrations/network.mjs';
+import { createBrowserRuntime } from '../lib/social/browser-runtime.mjs';
 import { createBrowserClient, browserSignature } from '../lib/social/browser-client.mjs';
 import { hash } from '../lib/business/commands.mjs';
 import { createMetaBrowserConnector } from '../lib/social/meta-browser.mjs';
@@ -17,10 +18,15 @@ import { createIntegrationKeyring } from '../lib/integrations/keyring.mjs';
 
 const identities = Object.freeze({ userId: '101', businessId: '202', pageId: '303', instagramId: '404', adAccountId: '505' });
 const hasCode = expected => error => error.errorCode === expected;
-function session(connectionId = 'connection-1', epoch = 0) {
-  return { connectionId, sessionEpoch: epoch, lease: { key: `social:browser-lock:${connectionId}`, token: randomBytes(24).toString('base64url'), leaseUntil: new Date(Date.now() + 120000).toISOString() } };
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+function session(connectionId = 'connection-1', epoch = 0, now = Date.now()) {
+  return { connectionId, sessionEpoch: epoch, lease: { key: `social:browser-lock:${connectionId}`, token: randomBytes(24).toString('base64url'), leaseUntil: new Date(now + 120000).toISOString() } };
 }
-async function environment(t, { maxContexts = 2, now = Date.now, publishingEnabled = true, browserEnabled = true } = {}) {
+async function environment(t, { maxContexts = 2, now = null, publishingEnabled = true, browserEnabled = true } = {}) {
+  // UI work has no timer owner in this raw runner fixture. Isolate its clock
+  // from Chromium/host load; lease tests advance it explicitly at barriers.
+  const startedAt = Date.now();
+  now ||= () => startedAt;
   const root = await mkdtemp(join(tmpdir(), 'social-browser-')), provider = await createSocialBrowserProvider(), controlKey = randomBytes(32);
   const bytes = await sharp({ create: { width: 640, height: 640, channels: 3, background: '#c44122' } }).jpeg().toBuffer();
   const assetId = randomUUID();
@@ -29,7 +35,7 @@ async function environment(t, { maxContexts = 2, now = Date.now, publishingEnabl
   const media = { assetId, key: `${assetId}/derivative.jpg`, sha256: createHash('sha256').update(bytes).digest('hex') };
   let runtime, server, url;
   let configuration = { configurationVersion: 1, publishingEnabled, browserEnabled };
-  const makeClient = () => createBrowserClient({ baseUrl: url, controlKey, runtime: configuration });
+  const makeClient = () => createBrowserClient({ baseUrl: url, controlKey, runtime: configuration, now });
   async function start() {
     runtime = await createBrowserRuntime({ chromium, keyring: { read: async name => name === 'control' ? controlKey : assert.fail('Runner requested a non-control key') }, mediaRoot: root, allowedOrigins: [provider.origin], maxContexts, now });
     server = createServer((req, res) => { void runtime.handle(req, res); });
@@ -40,7 +46,7 @@ async function environment(t, { maxContexts = 2, now = Date.now, publishingEnabl
   async function stop() { await runtime?.close(); if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } }
   t.after(async () => { await stop(); await provider.close(); await rm(root, { recursive: true, force: true }); });
   const client = await start();
-  return { provider, client, media, root, controlKey, get configuration() { return configuration; }, get url() { return url; }, configure(changes) { configuration = { ...configuration, ...changes, configurationVersion: configuration.configurationVersion + 1 }; return makeClient(); }, async restart() { await stop(); return start(); } };
+  return { provider, client, media, root, controlKey, now, get configuration() { return configuration; }, get url() { return url; }, configure(changes) { configuration = { ...configuration, ...changes, configurationVersion: configuration.configurationVersion + 1 }; return makeClient(); }, async restart() { await stop(); return start(); } };
 }
 async function login(client, boundSession, { challenge = false } = {}) {
   const bound = client.forSession(boundSession);
@@ -111,19 +117,19 @@ test('login asistido, desafío, sesión reutilizable y expiración real de cooki
 test('HMAC inválido, nonce repetido, desfase y límites no ejecutan comandos', async t => {
   const env = await environment(t), control = session();
   const body = JSON.stringify({ command: 'open', ...env.configuration, ...control, payload: { purpose: 'login' } });
-  const time = String(Date.now()), nonce = randomBytes(32).toString('base64url');
+  const time = String(env.now()), nonce = randomBytes(32).toString('base64url');
   const headers = { 'content-type': 'application/json', 'x-social-time': time, 'x-social-nonce': nonce, 'x-social-signature': browserSignature(env.controlKey, 'POST', '/control', time, nonce, body) };
   const send = headers => fetch(`${env.url}/control`, { method: 'POST', headers, body });
   assert.equal((await send({ ...headers, 'x-social-signature': '0'.repeat(64) })).status, 401);
   assert.equal((await send(headers)).status, 200);
   assert.equal((await send(headers)).status, 401);
-  assert.equal((await send({ ...headers, 'x-social-time': String(Date.now() - 31000), 'x-social-nonce': randomBytes(32).toString('base64url') })).status, 401);
+  assert.equal((await send({ ...headers, 'x-social-time': String(env.now() - 31000), 'x-social-nonce': randomBytes(32).toString('base64url') })).status, 401);
   assert.equal((await fetch(`${env.url}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{broken-json' })).status, 401);
   assert.deepEqual(await (await fetch(`${env.url}/health`)).json(), { alive: true, available: true });
   assert.equal((await fetch(`${env.url}/evaluate`, { method: 'POST', body: 'alert(1)' })).status, 404);
   await assert.rejects(env.client.forSession(control).input({ payload: { sequence: 1, input: { kind: 'key', key: 'Control+L' } } }), hasCode('AUTH_FAILED'));
   await assert.rejects(env.client.forSession(control).input({ payload: { sequence: 1, input: { kind: 'click', x: 1280, y: 0 } } }), hasCode('AUTH_FAILED'));
-  const large = JSON.stringify({ command: 'input', ...control, payload: { sequence: 1, input: { kind: 'type', text: 'x'.repeat(4096) } } }), largeNonce = randomBytes(32).toString('base64url'), largeTime = String(Date.now());
+  const large = JSON.stringify({ command: 'input', ...control, payload: { sequence: 1, input: { kind: 'type', text: 'x'.repeat(4096) } } }), largeNonce = randomBytes(32).toString('base64url'), largeTime = String(env.now());
   const limited = await fetch(`${env.url}/control`, { method: 'POST', body: large, headers: { 'content-type': 'application/json', 'x-social-time': largeTime, 'x-social-nonce': largeNonce, 'x-social-signature': browserSignature(env.controlKey, 'POST', '/control', largeTime, largeNonce, large) } });
   assert.equal(limited.status, 401);
 });
@@ -212,9 +218,54 @@ test('lease y epoch cercan contextos, entrada se deduplica y nunca desaloja due�
   const newer = { ...first, sessionEpoch: 1, lease: { ...first.lease, token: randomBytes(24).toString('base64url') } };
   await env.client.forSession(newer).open({ payload: { purpose: 'login' } });
   await assert.rejects(bound.frame(), hasCode('LEASE_LOST'));
-  await assert.rejects(env.client.forSession({ ...newer, lease: { ...newer.lease, leaseUntil: new Date(Date.now() - 1).toISOString() } }).renew(), hasCode('LEASE_LOST'));
+  await assert.rejects(env.client.forSession({ ...newer, lease: { ...newer.lease, leaseUntil: new Date(env.now() - 1).toISOString() } }).renew(), hasCode('LEASE_LOST'));
   await env.client.forSession(newer).close();
   await env.client.forSession(session('other')).open({ payload: { purpose: 'login' } });
+});
+
+test('comandos firmados retrasados no acortan una renovación ni desalojan al dueño', async t => {
+  let now = Date.now();
+  const env = await environment(t, { now: () => now }), control = session('connection-1', 0, now), { bound } = await login(env.client, control);
+  for (const command of ['inspect', 'renew']) {
+    const entered = deferred(), release = deferred(), oldDeadline = Date.parse(control.lease.leaseUntil);
+    const delayed = createBrowserClient({ baseUrl: env.url, controlKey: env.controlKey, runtime: env.configuration, now: env.now, fetchImpl: async (url, options) => {
+      entered.resolve(); await release.promise; return fetch(url, options);
+    } }).forSession(control);
+    const request = delayed[command]({ payload: command === 'inspect' ? { kind: 'connection', expectedIdentities: identities } : {} });
+    try {
+      await entered.promise;
+      now += 10000; control.lease.leaseUntil = new Date(now + 120000).toISOString();
+      await bound.renew();
+    } finally { release.resolve(); }
+    assert.ok(['ok', 'confirmed'].includes((await request).status));
+    now = oldDeadline + 1;
+    await assert.rejects(env.client.forSession(session(control.connectionId, 0, now)).open({ payload: { purpose: 'login' } }), hasCode('BROWSER_BUSY'));
+    control.lease.leaseUntil = new Date(now + 120000).toISOString();
+    assert.equal((await bound.renew()).data.renewed, true);
+  }
+});
+
+test('renovar durante un acuse remoto lento conserva exclusión y la caducidad sigue cercando', async t => {
+  let now = Date.now();
+  const env = await environment(t, { now: () => now }), control = session('connection-1', 0, now), { bound } = await login(env.client, control), spec = paidSpec(env.media);
+  const entered = deferred(), release = deferred(), oldDeadline = Date.parse(control.lease.leaseUntil);
+  env.provider.state.beforeCreate = async () => { entered.resolve(); await release.promise; };
+  const request = bound.preflight({ payload: { operation: operation('prepare', spec, { acceptPrivateDraft: true }), spec, expectedIdentities: identities } });
+  try {
+    await entered.promise;
+    now += 90000; control.lease.leaseUntil = new Date(now + 120000).toISOString();
+    assert.equal((await bound.renew()).data.renewed, true);
+    await assert.rejects(env.client.forSession(session(control.connectionId, 0, now)).open({ payload: { purpose: 'login' } }), hasCode('BROWSER_BUSY'));
+    now = oldDeadline + 1;
+  } finally { release.resolve(); }
+  const result = await request;
+  assert.equal(result.status, 'confirmed'); assert.ok(result.data.remoteDraftRef);
+  assert.equal(env.provider.objects.size, 1); assert.equal(env.provider.state.activationCount, 0);
+  now = Date.parse(control.lease.leaseUntil);
+  await assert.rejects(bound.renew(), hasCode('LEASE_LOST'));
+  const successor = env.client.forSession(session(control.connectionId, 0, now));
+  await successor.open({ payload: { purpose: 'login' } });
+  await assert.rejects(bound.inspect({ payload: { kind: 'connection' } }), hasCode('LEASE_LOST'));
 });
 
 test('identidad ajena, idioma no admitido y redirects privados bloquean sin fallback', async t => {
@@ -232,8 +283,8 @@ test('identidad ajena, idioma no admitido y redirects privados bloquean sin fall
   await bound.close(); env.provider.state.locale = 'en'; env.provider.state.privateRedirect = `http://127.0.0.1:${privateTarget.address().port}/metadata`;
   await assert.rejects(bound.open({ payload: { purpose: 'worker', storageState: saved } }), hasCode('AUTH_FAILED'));
   assert.equal(privateVisits, 0);
-  for (const address of ['127.0.0.1', '10.1.2.3', '169.254.169.254', '100.100.100.200', '::1', 'fc00::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '2001:db8::1']) assert.equal(isPublicBrowserAddress(address), false, address);
-  assert.equal(isPublicBrowserAddress('1.1.1.1'), true);
+  for (const address of ['127.0.0.1', '10.1.2.3', '169.254.169.254', '100.100.100.200', '::1', 'fc00::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '2001:db8::1']) assert.equal(isPublicAddress(address), false, address);
+  assert.equal(isPublicAddress('1.1.1.1'), true);
 });
 
 test('draft independiente, cambios remotos bloqueados, activación, pausa y reanudación confirmadas', async t => {
@@ -563,8 +614,8 @@ test('controles rechazan mejoras, recorte, IA y estructura externas sin activar;
 });
 
 test('pérdida del lease tras publicar conserva efecto incierto y pausa encuentra UUID sin remoteId', async t => {
-  let clockOffset = 0;
-  const env = await environment(t, { now: () => Date.now() + clockOffset }), control = session(), { bound } = await login(env.client, control), spec = paidSpec(env.media);
+  const startedAt = Date.now(); let clockOffset = 0;
+  const env = await environment(t, { now: () => startedAt + clockOffset }), control = session('connection-1', 0, env.now()), { bound } = await login(env.client, control), spec = paidSpec(env.media);
   const prepared = await prepare(bound, spec, env.media), saved = (await bound.exportState()).data.storageState;
   const activate = operation('activate:lease-lost', spec, { ...prepared, remoteDraftRef: prepared.ref, investmentAccepted: true, budgetConfirmation: budgetConfirmation(spec) });
   env.provider.state.afterPublish = () => { clockOffset = 180000; };

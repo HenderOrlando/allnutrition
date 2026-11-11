@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import sharp from 'sharp';
 import { entity, hash, insertRow } from '../lib/business/commands.mjs';
-import { queueJobTx } from '../lib/business/job-leases.mjs';
+import { jobClock, queueJobTx } from '../lib/business/job-leases.mjs';
 import { aggregateSocialCampaignState, prepareSocialBrowserJobs, processSocialBrowserTurn, queueSocialBrowserJobTx } from '../lib/business/social-jobs.mjs';
 import { socialAccountNotBefore } from '../lib/business/social-schedule.mjs';
 import { withBrowserSession } from '../lib/business/social-browser.mjs';
@@ -136,7 +136,12 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
   if (withDelivery) await insertRow(store, 'social_revisions', { campaign_id: campaignId, revision: 1, spec_hash: hash(spec), approved_at: base, actor_id: approverId, data: JSON.stringify(revision()) });
   const f = { store, env, root, base, at, actorId, approverId, connection, assetId, assetHash, spec, campaignId, remote, transport: { browserClient: remote.client } };
   f.now = () => new Date(clock.now).toISOString();
-  f.turn = (options = {}) => { clock.now = options.now ? Date.parse(options.now) : clock.now + 1000; return processSocialBrowserTurn(store, { env, transport: f.transport, ...options, now: f.now() }); };
+  f.turn = async (options = {}) => {
+    clock.now = options.now ? Date.parse(options.now) : clock.now + 1000;
+    const now = f.now(), turnClock = jobClock(now);
+    try { return await processSocialBrowserTurn(store, { env, transport: f.transport, ...options, now }); }
+    finally { clock.now = Math.max(clock.now, Date.parse(turnClock())); }
+  };
   f.patch = (table, id, fields) => patch(store, table, id, fields);
   f.refreshSpec = async () => { await patch(store, 'social_campaigns', campaignId, spec); await store.db.run(`UPDATE ${store.t('social_revisions')} SET spec_hash=?,data=? WHERE campaign_id=?`, [hash(spec), JSON.stringify(revision()), campaignId]); };
   f.delivery = async ({ state = 'queued', remoteId = null, data = {}, channel = mode === 'paid' ? 'meta_ads' : platforms[0] } = {}) => {
@@ -161,7 +166,11 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
     await patch(store, 'social_deliveries', f.firstDelivery.id, { budgetSnapshot: { budgetMinor: object.budgetMinor, remainingMinor: object.remainingMinor, currency: object.currency, startAt: object.startAt, endAt: object.endAt, checkedAt: f.now() } });
     return object;
   };
-  f.sync = async (now = f.now()) => { await store.db.run(`UPDATE ${store.t('social_deliveries')} SET next_sync_at=? WHERE id=?`, [now, f.firstDelivery.id]); return f.turn({ now }); };
+  f.sync = async (now = f.now()) => {
+    await f.patch('social_deliveries', f.firstDelivery.id, { stateReadRequestedAt: now });
+    await store.db.run(`UPDATE ${store.t('social_deliveries')} SET next_sync_at=? WHERE id=?`, [now, f.firstDelivery.id]);
+    return f.turn({ now });
+  };
   if (withDelivery) f.firstDelivery = await f.delivery();
   return f;
 }
@@ -385,8 +394,9 @@ const cases = [
   }],
   ['autosave con respuesta perdida se inspecciona standalone y no crea otro draft', async (store, t) => {
     const f = await setup(store, t, { mode: 'paid', withDelivery: false }), operation = await f.operation(null, 'prepare'); f.remote.loseResponse = true;
-    assert.equal((await f.turn()).errorCode, 'OPERATION_UNCERTAIN'); assert.equal((await get(store, 'social_operations', operation.id)).state, 'uncertain');
-    assert.equal((await f.turn({ now: f.at(61000) })).errorCode, null); assert.equal((await get(store, 'social_operations', operation.id)).state, 'confirmed');
+    assert.equal((await f.turn()).errorCode, 'OPERATION_UNCERTAIN');
+    const uncertain = await get(store, 'social_operations', operation.id); assert.equal(uncertain.state, 'uncertain');
+    assert.equal((await f.turn({ now: uncertain.nextAttemptAt })).errorCode, null); assert.equal((await get(store, 'social_operations', operation.id)).state, 'confirmed');
     assert.equal((await get(store, 'social_campaigns', f.campaignId)).preflight.remoteDraftRef, '701'); assert.equal(f.remote.drafts, 1); assert.equal(f.remote.reads, 1);
   }],
   ['edición durante autosave preserva draft/consent pero nunca adopta validación vieja', async (store, t) => {
@@ -455,8 +465,11 @@ const cases = [
   }],
   ['pending y sync sólo leen estado confirmado, sin métricas inventadas ni fin por reloj', async (store, t) => {
     const f = await setup(store, t), operation = await f.operation(f.firstDelivery); f.remote.pending = true;
-    assert.equal((await f.turn()).hasMore, false); assert.equal((await get(store, 'social_operations', operation.id)).state, 'sent'); f.remote.pending = false;
-    assert.equal((await f.turn({ now: f.at(301000) })).errorCode, null); assert.equal(f.remote.writes, 1);
+    assert.equal((await f.turn()).hasMore, false);
+    const pending = await get(store, 'social_operations', operation.id);
+    assert.equal(pending.state, 'sent'); assert.ok(pending.nextAttemptAt); f.remote.pending = false;
+    assert.equal((await f.turn({ now: pending.nextAttemptAt })).errorCode, null); assert.equal(f.remote.writes, 1);
+    assert.equal((await get(store, 'social_operations', operation.id)).state, 'confirmed');
     await store.db.run(`UPDATE ${store.t('social_deliveries')} SET next_sync_at=NULL WHERE id=?`, [f.firstDelivery.id]);
     const paid = await setup(store, t, { mode: 'paid' }), object = await paid.seedPaid('active');
     assert.equal((await paid.sync(paid.at(8 * 86400000))).errorCode, null); assert.equal(object.state, 'active'); assert.equal((await get(store, 'social_deliveries', paid.firstDelivery.id)).state, 'active');

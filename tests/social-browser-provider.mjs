@@ -17,7 +17,9 @@ export async function createSocialBrowserProvider() {
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const defaults = () => ({ caption: '', headline: '', destinationUrl: '', whatsappNumber: '', whatsappGreeting: '', objective: 'traffic', cta: 'learn', crop: 'original', contentFormat: 'feed', publishingSchedule: 'now', shareToFeed: false, automaticMusic: false, geoExpansion: false, countries: '', regions: [], cities: [], ageMin: '18', ageMax: '65', genders: '', interests: [], budgetType: 'lifetime', budget: '0.00', startAt: '', endAt: '', expansion: false, automaticPlacements: false, enhancements: false, aiDisclosure: false, placements: [], platforms: [], media: null });
   function chrome(body) {
-    return `<!doctype html><html lang="${esc(state.locale)}"><head><meta charset="utf-8"><title>Business tools</title><style>body{font:16px sans-serif}label{display:block;margin:8px}input,textarea,select{padding:5px}img{width:80px;height:80px}button{padding:8px;margin:5px}</style></head><body><main>${body}</main></body></html>`;
+    // Native autofocus may run after DOMContentLoaded. Establish the fixture's
+    // initial keyboard position before the runner acknowledges the document.
+    return `<!doctype html><html lang="${esc(state.locale)}"><head><meta charset="utf-8"><title>Business tools</title><style>body{font:16px sans-serif}label{display:block;margin:8px}input,textarea,select{padding:5px}img{width:80px;height:80px}button{padding:8px;margin:5px}</style></head><body><main>${body}</main><script>document.querySelector('input[autofocus]')?.focus();</script></body></html>`;
   }
   function accounts(objectId = '9000') {
     return `<section><h1>Business tools</h1><p>User ID: ${esc(state.userId)}</p><p>Business ID: ${esc(state.businessId)}</p>${state.pageId ? `<p>Page ID: ${esc(state.pageId)}</p>` : ''}${state.instagramId ? `<p>Instagram account ID: ${esc(state.instagramId)}</p>` : ''}<p>Ad account ID: ${esc(state.adAccountId)}</p><p>Currency: ${esc(state.metricCurrency || 'COP')}</p><p>Time zone: ${esc(state.metricTimeZone || 'America/Bogota')}</p><p>Number format: ${esc(state.numberFormat === undefined ? '1,234.56' : state.numberFormat)}</p><p>Linked WhatsApp number: +573001112233</p>
@@ -147,6 +149,7 @@ export async function createSocialBrowserProvider() {
       if (state.privateRedirect) { redirect(typeof state.privateRedirect === 'string' ? state.privateRedirect : 'http://169.254.169.254/latest/meta-data'); return; }
       if (path === '/latest/home') return send(200, chrome(accounts() + listing()));
       if (path === '/create' && req.method === 'POST') {
+        if (typeof state.beforeCreate === 'function') await state.beforeCreate();
         const id = String(++next), kind = data.get('kind');
         const object = { id, kind: kind === 'paid' ? 'paid' : 'organic', channel: kind === 'paid' ? null : kind, state: 'Draft', everActivated: false, adSetId: String(++next), adId: String(++next), creativeId: String(++next), config: defaults(), name: '' };
         if (kind !== 'paid') object.config.platforms = [kind];

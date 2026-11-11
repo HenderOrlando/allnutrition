@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import sharp from 'sharp';
 import { entity, insertRow } from '../lib/business/commands.mjs';
-import { queueJobTx } from '../lib/business/job-leases.mjs';
+import { jobClock, queueJobTx } from '../lib/business/job-leases.mjs';
 import { normalizeSocialCampaignInput, buildSocialSpec } from '../lib/business/social-spec.mjs';
 import { getSocialCampaign, socialCampaignAction } from '../lib/business/social.mjs';
 import { processSocialApiTurn, prepareSocialApiJobs, queueSocialApiJobTx } from '../lib/business/social-api-jobs.mjs';
@@ -101,10 +101,16 @@ async function setup(store, t, { mode = 'organic', platforms = ['facebook'], kin
   };
   for (const channel of mode === 'paid' ? ['meta_ads'] : platforms) await f.delivery(channel);
   f.now = () => new Date(logicalNow).toISOString();
-  f.turn = (options = {}) => {
+  f.turn = async (options = {}) => {
     logicalNow = options.now ? Date.parse(options.now) : logicalNow + 1000;
+    const now = f.now(), clock = jobClock(now);
     providerClock.now = logicalNow;
-    return processSocialApiTurn(store, { maxOperations: 1, env, transport: f.transport, ...options, now: f.now() });
+    try { return await processSocialApiTurn(store, { maxOperations: 1, env, transport: f.transport, ...options, now }); }
+    finally {
+      // Checkpoints use the consumer's completion time, not its starting time.
+      // Keep later fixture turns in that same domain even when HTTP/DB is slow.
+      logicalNow = Math.max(logicalNow, Date.parse(clock()));
+    }
   };
   f.until = async (predicate, options = {}) => { for (let count = 0; count < 25; count++) { if (await predicate()) return; await f.turn(options); } assert.fail('El proveedor no alcanzó el estado esperado dentro de las etapas acotadas.'); };
   f.ready = async () => { await f.until(async () => (await get(store, 'social_deliveries', f.deliveries[0])).state === 'ready'); return get(store, 'social_deliveries', f.deliveries[0]); };
@@ -118,7 +124,12 @@ async function setup(store, t, { mode = 'organic', platforms = ['facebook'], kin
     });
     return { id, requestId };
   };
-  f.sync = async (now = NOW) => { await store.db.run(`UPDATE ${store.t('social_deliveries')} SET next_sync_at=? WHERE id=?`, [now, f.deliveries[0]]); await store.transaction(tx => queueSocialApiJobTx(tx, { kind: 'sync', id: f.deliveries[0] }, { now })); return f.turn({ now }); };
+  f.sync = async (now = f.now()) => {
+    await patch(store, 'social_deliveries', f.deliveries[0], { stateReadRequestedAt: now });
+    await store.db.run(`UPDATE ${store.t('social_deliveries')} SET next_sync_at=? WHERE id=?`, [now, f.deliveries[0]]);
+    await store.transaction(tx => queueSocialApiJobTx(tx, { kind: 'sync', id: f.deliveries[0] }, { now }));
+    return f.turn({ now });
+  };
   return f;
 }
 const pathOf = input => new URL(input).pathname.replace(/^\//, '').replace(/^v26\.0\//, '');
@@ -241,6 +252,31 @@ const cases = [
     const final = await get(store, 'social_deliveries', delivery.id); assert.equal(final.state, 'active'); assert.equal(final.everActivated, true);
     const controls = f.remote.requests.filter(request => writing(request) && [delivery.preparedRefs.adId, delivery.preparedRefs.adSetId, delivery.preparedRefs.campaignId].includes(request.path));
     assert.deepEqual(controls.map(request => request.path), [delivery.preparedRefs.adId, delivery.preparedRefs.adSetId, delivery.preparedRefs.campaignId]);
+  }],
+  ['un recibo pagado lento conserva el lease y la siguiente etapa usa el reloj de finalización', async (store, t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse(NOW) });
+    const f = await setup(store, t, { mode: 'paid' }), delivery = await f.ready(), activation = await f.control('activate');
+    let entered, release;
+    const sent = new Promise(resolve => { entered = resolve; }), response = new Promise(resolve => { release = resolve; });
+    const nativeFetch = f.transport.fetchImpl;
+    f.transport.fetchImpl = async (input, init) => {
+      const result = await nativeFetch(input, init);
+      if (init.method === 'POST' && pathOf(input) === delivery.preparedRefs.adId) { entered(); await response; }
+      return result;
+    };
+    const running = f.turn();
+    try {
+      await sent;
+      t.mock.timers.tick(5000);
+      assert.equal((await f.turn()).processed, 0);
+      assert.equal((await get(store, 'social_operations', activation.id)).state, 'sent');
+    } finally { release(); await running; }
+    const checkpoint = await get(store, 'social_operations', activation.id);
+    assert.equal(checkpoint.progress.controlStage, 'adset'); assert.equal(checkpoint.receipts.length, 1);
+    assert.ok(f.now() >= checkpoint.nextAttemptAt);
+    assert.equal((await f.turn()).processed, 1);
+    assert.equal((await get(store, 'social_operations', activation.id)).progress.controlStage, 'campaign');
+    assert.equal(f.remote.requests.filter(request => writing(request) && request.path === delivery.preparedRefs.adId).length, 1);
   }],
   ['dos ciclos de pausa y reanudación conservan presupuesto/fin y la pausa funciona sin pieza, flag ni aprobador', async (store, t) => {
     const f = await setup(store, t, { mode: 'paid' }); await f.ready();
@@ -444,7 +480,9 @@ const cases = [
     const checkpoint = await get(store, 'social_operations', initial.id);
     assert.equal(checkpoint.state, 'prepared'); assert.equal(checkpoint.progress.offset, 1024);
     assert.equal(checkpoint.receipts[0].operationComplete, false);
-    await processSocialApiTurn(store, { now: later(1000, f.now()), maxOperations: 1, env: f.env, transport: f.transport });
+    const resumedTurn = await processSocialApiTurn(store, { now: later(1000, f.now()), maxOperations: 1, env: f.env, transport: f.transport });
+    assert.equal(resumedTurn.processed, 1);
+    assert.equal(resumedTurn.errorCode, null);
     const resumed = await get(store, 'social_operations', initial.id);
     assert.equal(resumed.progress.offset, 2048);
     assert.equal((await get(store, 'social_deliveries', f.deliveries[0])).remoteRefs.uploadSessionId, before.remoteRefs.uploadSessionId);
