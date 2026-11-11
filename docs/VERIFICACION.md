@@ -1,5 +1,11 @@
 # Verificación v3 — administración de negocio
 
+## Docker · adaptador Heka en contratos nativos · 11 de noviembre de 2026
+
+- La aceptación Linux/amd64 `524e2541e50eb080` rechazó el candidato anterior antes de los contratos: `checks` no encontraba `../desktop/providers/heka.mjs`, excluido por `.dockerignore`. No se omitió la prueba ni se relajó el verificador; producción permaneció en su imagen anterior.
+- Compose aporta `desktop/providers` como contexto de build `heka_contract` únicamente a `checks`. Docker copia allí el adaptador sin introducir el árbol Electron, sus dependencias o sus instaladores en web.
+- Sobre el candidato corregido `fd61cb8496138c2ae8d7deec27ede9207cde4173`, la compuerta real `npm run check` de la imagen nativa informó **366 archivos y cero errores**. Esta compuerta no sustituye los contratos, E2E, recuperación ni promoción.
+
 ## Ali · correcciones previas a la promoción · 11 de noviembre de 2026
 
 - La revisión estática rechazó el primer candidato preparado, antes de ejecutar su aceptación nativa o modificar producción: una cantidad transitoriamente inválida podía desmontar el pedido y faltaba el montaje de los valores comunes por hoja.

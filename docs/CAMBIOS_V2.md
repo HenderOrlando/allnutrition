@@ -14,6 +14,7 @@
 - El contrato de recuperación social usa el vencimiento persistido en vez de un salto fijo. Los E2E esperan las respuestas reales de logout y detalle del pedido antes de comprobar la navegación; conservan los escenarios, la identidad del registro, las guardas y los timeouts internos.
 - La captura del borrador se separa de la validación de contexto y guardado: vaciar una cantidad no desmonta el pedido ni pierde sus campos hermanos; las cantidades inválidas siguen rechazadas por los límites de Ali.
 - Se restituyen los valores comunes por hoja, incluida la cantidad explícita de obsequios sin columna propia y el destino de navegación desde su bloqueo de revisión.
+- La imagen Docker de contratos recibe el adaptador Heka mediante un contexto de build dedicado; el runtime web conserva la exclusión del árbol Electron. Se corrige el rechazo nativo por import ausente sin omitir contratos.
 
 ## Integraciones en ejecución y consulta Heka
 
