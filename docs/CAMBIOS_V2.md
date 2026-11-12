@@ -16,6 +16,7 @@
 - Se restituyen los valores comunes por hoja, incluida la cantidad explícita de obsequios sin columna propia y el destino de navegación desde su bloqueo de revisión.
 - La imagen Docker de contratos recibe el adaptador Heka mediante un contexto de build dedicado; el runtime web conserva la exclusión del árbol Electron. Se corrige el rechazo nativo por import ausente sin omitir contratos.
 - El fixture conversacional aísla siempre su custodia temporal de las rutas runtime heredadas y las repone al terminar. La aceptación nativa amplía sólo el plazo agregado de contratos a seis horas, sin recortar casos, alterar límites SQL ni desactivar durabilidad.
+- El contrato PostgreSQL de revocación prepara su fixture antes del watchdog concurrente de 30 segundos y libera/drena sus barreras si falla. Mantiene las mismas guardas de autorización, límites SQL y durabilidad; humo nativo focalizado de tres pruebas aprobado, sin acreditar todavía promoción.
 
 ## Integraciones en ejecución y consulta Heka
 

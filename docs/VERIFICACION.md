@@ -1,5 +1,13 @@
 # Verificación v3 — administración de negocio
 
+## Ali · watchdog de revocación PostgreSQL · 12 de noviembre de 2026
+
+- La aceptación nativa `cd52b85564a5eddd` quedó rechazada al agotar los 30 segundos del caso de revocación concurrente. Se conservó su salida y se detuvo solo su contenedor de contratos; el verificador terminó con código 1 y retiró todos sus contenedores, redes y volúmenes. No se ejecutaron las compuertas posteriores ni se promovió su imagen `sha256:7df106dd474998ed31c3fc4858e45d6973e79fec694a1ff8d58697241023d6c0`.
+- El watchdog incluía la preparación del fixture, cuyo `TRUNCATE` tiene un límite SQL independiente de 120 segundos. La preparación queda fuera del subcaso concurrente, que conserva **30 segundos**, las guardas reales de propietario y sesión, y los rechazos posteriores de lectura/escritura. Las barreras se liberan y las operaciones se drenan también al fallar.
+- Humo focalizado Linux/amd64 con PostgreSQL 16 TLS real y contrato corregido: **3 aprobadas**, cero fallos, cancelaciones u omisiones. Preparación: **19.094 ms**; concurrencia: **234,75 ms**. `fsync`, `synchronous_commit` y `full_page_writes` permanecieron `on`; no se cambió código productivo ni se omitió una aserción.
+- El comando de prueba salió con código 0. Su controlador temporal esperaba resumen TAP y rechazó el formato `ℹ` del reporter spec; se validó la salida ya conservada, sin repetir la prueba ni sobrescribir aquel rechazo. El test y su evidencia tienen huellas verificadas; cero recursos descartables propios restantes.
+- Clon de recuperación del candidato rechazado retirado por identidad/labels; respaldos intactos y producción sin cambios. Esta comprobación focalizada no sustituye una nueva aceptación completa ni autoriza la promoción.
+
 ## Ali · diagnóstico de la espera nativa · 12 de noviembre de 2026
 
 - La ejecución `cd52b85564a5eddd`, fuente `de32729a8fec139b59777e151156399d7fde4ee1`, sigue pendiente: no hay aceptación humana ni autorización externa por resolver. `verify:docker` conserva la salida de cada subcomando hasta que termina; un log superior sin cambios no demuestra bloqueo.

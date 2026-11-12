@@ -225,42 +225,51 @@ export async function runAssistantPersistenceContracts(t, factory, { openPeer = 
     assert.equal(await store.db.get(`SELECT id FROM ${store.t('assistant_threads')} WHERE id=?`, [id]), null);
     await conversations.listAssistantThreads(store, auth.session);
   });
-  if (openPeer) await t.test('PostgreSQL revocation waits for the current owner guard and rejects every later write', { timeout: 30000 }, async t => {
+  if (openPeer) await t.test('PostgreSQL revocation waits for the current owner guard and rejects every later write', async t => {
+    // TRUNCATE has its own 120s SQL limit; the 30s watchdog covers concurrency, not fixture I/O.
     const auth = await fixture(t, factory), { store, userId } = auth;
     const peer = await openPeer();
     t.after(() => peer.close());
-    const held = Promise.withResolvers(), release = Promise.withResolvers(), revoking = Promise.withResolvers();
-    const id = randomUUID();
-    let revoked = false;
-    const writing = store.transaction(async tx => {
-      await assertAssistantSession(tx, auth.session, { lock: true });
-      held.resolve();
-      await release.promise;
-      await createAssistantThread(tx, { userId, id });
-      await assertAssistantSession(tx, auth.session);
+    await t.test('owner-held write precedes logout; revoked sessions reject later reads and writes', { timeout: 30000 }, async context => {
+      const held = Promise.withResolvers(), release = Promise.withResolvers(), revoking = Promise.withResolvers();
+      context.signal.addEventListener('abort', () => release.resolve(), { once: true });
+      const id = randomUUID();
+      let revoked = false;
+      const writing = store.transaction(async tx => {
+        await assertAssistantSession(tx, auth.session, { lock: true });
+        held.resolve();
+        await release.promise;
+        await createAssistantThread(tx, { userId, id });
+        await assertAssistantSession(tx, auth.session);
+      });
+      let revocation;
+      try {
+        await Promise.race([held.promise, writing]);
+        const revocationStore = { transaction: fn => peer.transaction(tx => {
+          const db = tx.db;
+          tx.db = { ...db, get: async (sql, params) => {
+            if (sql.includes(tx.t('users'))) {
+              revoking.resolve();
+              assert.match(sql, /FOR UPDATE/);
+            }
+            return db.get(sql, params);
+          } };
+          return fn(tx);
+        }) };
+        revocation = logout(revocationStore, auth.token).then(() => { revoked = true; });
+        await Promise.race([revoking.promise, revocation]);
+        assert.equal(revoked, false);
+        release.resolve();
+        await writing;
+        await revocation;
+        assert.ok(await store.db.get(`SELECT id FROM ${store.t('assistant_threads')} WHERE id=?`, [id]));
+        await assert.rejects(() => conversations.listAssistantThreads(store, auth.session), error => error.status === 401);
+        await assert.rejects(() => reserve(store, auth), error => error.status === 401);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([writing, revocation]);
+      }
     });
-    await held.promise;
-    const revocationStore = { transaction: fn => peer.transaction(tx => {
-      const db = tx.db;
-      tx.db = { ...db, get: async (sql, params) => {
-        if (sql.includes(tx.t('users'))) {
-          revoking.resolve();
-          assert.match(sql, /FOR UPDATE/);
-        }
-        return db.get(sql, params);
-      } };
-      return fn(tx);
-    }) };
-    const revocation = logout(revocationStore, auth.token).then(() => { revoked = true; });
-    try {
-      await revoking.promise;
-      assert.equal(revoked, false);
-    } finally { release.resolve(); }
-    await writing;
-    await revocation;
-    assert.ok(await store.db.get(`SELECT id FROM ${store.t('assistant_threads')} WHERE id=?`, [id]));
-    await assert.rejects(() => conversations.listAssistantThreads(store, auth.session), error => error.status === 401);
-    await assert.rejects(() => reserve(store, auth), error => error.status === 401);
   });
 }
 
