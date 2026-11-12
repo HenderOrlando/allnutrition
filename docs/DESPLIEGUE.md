@@ -136,6 +136,8 @@ Los contratos SQLite/PostgreSQL tienen un plazo agregado de seis horas: la ejecu
 
 Mantener PostgreSQL real: no omitir casos, desactivar `fsync` ni sustituir la suite por subconjuntos.
 
+`verify:docker` acumula la salida de cada subcomando hasta que finaliza. Si parece detenido, distinguir proceso activo, prueba terminada y espera PostgreSQL antes de ampliar plazos: inspeccionar una vez el proyecto descartable exacto y sus `pg_stat_activity`/`pg_blocking_pids`, y suscribirse a eventos para recibir avance o primer fallo. No volcar entornos, cadenas de conexión ni logs privados sin sanear. `DataFileImmediateSync` sin bloqueadores indica espera de almacenamiento, no una aprobación manual ni un deadlock; el 12 de noviembre se observó ese cuello de botella sobre discos mecánicos del constructor. Mantener la ejecución productiva aislada y comunicar las compuertas realmente pendientes, sin prometer promoción por resultados parciales.
+
 La limpieza verifica el ID y el label `com.docker.compose.project` de cada contenedor generado, incluidos los `run --rm` que pueden seguir activos al agotarse un comando. Retira sólo ese proyecto, ejecuta `down --volumes` y exige cero contenedores, volúmenes y redes propios en `cleanup.json`. Los fallos de captura/limpieza se registran por separado sin ocultar el fallo original; nunca usar un prune global.
 
 Para el corte comercial v3 ejecutar `npm run verify:docker -- --interactive`. Mantiene la aceptación automatizada y añade el recorrido de importación, caja, sueldo, devolución, snapshot sin paneles, alerta y reinicio de lote. La pausa imprime las rutas/órdenes exactas de su proyecto descartable; no reemplazarlas por configuración de staging o producción. EOF/SIGINT cancela.

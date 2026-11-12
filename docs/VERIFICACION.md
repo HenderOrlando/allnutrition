@@ -1,5 +1,13 @@
 # Verificación v3 — administración de negocio
 
+## Ali · diagnóstico de la espera nativa · 12 de noviembre de 2026
+
+- La ejecución `cd52b85564a5eddd`, fuente `de32729a8fec139b59777e151156399d7fde4ee1`, sigue pendiente: no hay aceptación humana ni autorización externa por resolver. `verify:docker` conserva la salida de cada subcomando hasta que termina; un log superior sin cambios no demuestra bloqueo.
+- A las **00:28 UTC**, PostgreSQL descartable estaba en `TRUNCATE`, esperando `IO/DataFileImmediateSync` durante 43 segundos, con `pg_blocking_pids = []` y cero deadlocks acumulados. El constructor usa discos mecánicos en RAID1; la muestra de `vmstat` registró 39 % de espera de I/O. No se observó falta de espacio o memoria.
+- La instantánea de salida contenía **927 líneas de pruebas aprobadas y ninguna fallida**, incluido el motor SQLite de Ali. Una suscripción a eventos observó después otras cinco aprobaciones; confirmó avance sin reiniciar la suite ni consultar repetidamente su estado.
+- En la revisión solicitada a las **02:46 UTC**, el mismo comando seguía activo: **1112 líneas aprobadas y ninguna fallida**, con otra espera `DataFileImmediateSync` de 33 segundos y sin bloqueadores. Son resultados parciales, no un resumen completo ni acreditación de auditoría, E2E, runner o promoción.
+- Producción conserva la imagen anterior. Evidencia privada en `.test-data/ali-production-20261111T174020Z-e50a3a-r4/`; no contiene una aceptación global. No ampliar otro plazo, omitir casos o desactivar durabilidad para convertir esta ejecución parcial en una aprobación.
+
 ## Ali · custodia aislada y plazo agregado de contratos · 11 de noviembre de 2026
 
 - La aceptación nativa `9a588cb561113316` se rechazó por el plazo agregado de tres horas. El registro parcial contiene **1048 líneas aprobadas** y un fallo del motor SQLite; no tiene resumen completo ni acredita los contratos restantes, auditoría o E2E. Los últimos casos PostgreSQL seguían terminando, con duraciones de decenas de segundos por caso.
