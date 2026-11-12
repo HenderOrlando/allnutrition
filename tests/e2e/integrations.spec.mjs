@@ -287,7 +287,9 @@ test('Heka: emparejar, confirmar, leer y preparar revisión inmutable sin efecto
       return claimed.job;
     };
     const emptyJob = await requestAnother();
+    const emptyQueryFinished = page.waitForResponse(async response => new URL(response.url()).pathname === `/api/admin/shipping/queries/${emptyJob.queryId}` && response.request().method() === 'GET' && response.ok() && (await response.json()).state === 'succeeded');
     await devicePost(`jobs/${emptyJob.queryId}/complete`, { lease: emptyJob.lease, snapshot: hekaSnapshot({ account: raw.account, query: emptyJob.query, capturedAt: new Date().toISOString(), guides: [], packages: [], pending: { cutoff: '2026-11-09T00:00:00.000Z', lines: [] } }) });
+    await emptyQueryFinished;
     await expect(results).toContainText('Lectura completa sin resultados', { timeout: 30000 });
     await expect(card.getByRole('button', { name: 'Preparar importación completa', exact: true })).toBeDisabled();
     const failedJob = await requestAnother();

@@ -1,5 +1,14 @@
 # Verificación v3 — administración de negocio
 
+## Ali · aceptación compuesta autorizada · 12 de noviembre de 2026
+
+- La ejecución nativa `3adbc75f0ff71474` aprobó **1745 contratos SQLite/PostgreSQL**, cero fallos, cancelaciones u omisiones; auditoría, HTTPS y scheduler también aprobaron. Su E2E terminó **69/70**: únicamente falló la segunda consulta Heka móvil. El rechazo original permanece intacto; no se lo presenta como una ejecución global aprobada.
+- La traza conservada muestra progreso `running` a las **09:36:07,732 UTC** y `succeeded` a las **09:36:13,072 UTC**. El test esperaba un botón habilitado durante cinco segundos mientras el polling real ocurría cada cinco segundos después de responder. Ahora espera el GET terminal de esa misma consulta antes de repetir; mantiene las aserciones y todos los límites.
+- El usuario autorizó expresamente **conservar los 1745 contratos ya aprobados sobre la misma imagen**, ejecutar de nuevo los **70 E2E** y completar todas las guardas restantes, runner y ensayo de recuperación/migración. No se autorizó omitir casos pendientes, cambiar código productivo o desactivar durabilidad.
+- Continuación nativa `224803632bc768af`: **70/70 E2E nuevos aprobados** y las **17 compuertas completas**, con el contrato previo identificado como reutilización autorizada. Incluye auditoría nueva, scheduler sin duplicados, migración idempotente, rol sin DDL, rechazo de CA/TCP inseguro, caída con POST 503 sin venta adicional, reinicio, sesiones, medios y pg_dump/restore. Terminó con código 0 a las **12:24:47 UTC** y cero recursos propios restantes.
+- Imagen inmutable sin rebuild: `allnutrition:release-7732df7a8764`, ID `sha256:7732df7a87648f184fb1c15665046ba8ca05a2bcbafdf93295566138fdc2e2fe`, Linux/amd64, Node runtime **24.22.3**, UID 1000. Código de aplicación `60ec380af64935162c95d7050c32c1bc173020ca`; manifiesto de 452 archivos SHA-256 `2e58f832758227bd6ad20e64556b285971c3fa272b7d9725074e89e63c7ef494`.
+- Evidencia separada `acceptance-composed.json`; autorización SHA-256 `a5157913031a0333314080247a4da6636677a6f8131c34ee5a910fbb6179d7f0`, rechazo original `3b1c4ab87fb00e8295e6bfd3f2ab0849d84f5ae4cceaf444d98efc6246ef731b` y único override del arnés E2E `28c2de8b9d5dd57d3a09fc9db81bb771ec47f2252522f3723723fd1f3fdfb5a7`. El candidato sellado y el resultado original no se modificaron. Esta aceptación no acredita por sí sola la promoción productiva.
+
 ## Ali · watchdog de revocación PostgreSQL · 12 de noviembre de 2026
 
 - La aceptación nativa `cd52b85564a5eddd` quedó rechazada al agotar los 30 segundos del caso de revocación concurrente. Se conservó su salida y se detuvo solo su contenedor de contratos; el verificador terminó con código 1 y retiró todos sus contenedores, redes y volúmenes. No se ejecutaron las compuertas posteriores ni se promovió su imagen `sha256:7df106dd474998ed31c3fc4858e45d6973e79fec694a1ff8d58697241023d6c0`.
