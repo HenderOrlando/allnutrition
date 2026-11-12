@@ -1,5 +1,11 @@
 # Cambios — administración v3 y antecedentes
 
+## Ali e integraciones desplegados · 12 de noviembre de 2026
+
+- Producción actualizada a `allnutrition:release-7732df7a8764`, con runner privado `allnutrition-social-browser:release-479fcf96432b`. Esquema 11 y 65 tablas tras migración v9→v10→v11 idempotente, sin reiniciar PostgreSQL ni alterar hechos comerciales o medios.
+- Aceptación compuesta autorizada: 1745 contratos nativos ya aprobados conservados, 70 E2E nuevos y 17 compuertas completas; rechazo anterior preservado y mismas imágenes sin rebuild. Recuperación real, sandbox, sesión anterior al corte, logout y superficie productiva escritorio/móvil verificados.
+- Respaldo final consistente comprobado fuera de la VM antes de migrar; env/TLS y Nginx intactos. Ali y Meta quedan sin configurar y deshabilitados, sin claves reales ni conexiones Heka. Detalle, límites y material de recuperación en [DESPLIEGUE.md](DESPLIEGUE.md) y [VERIFICACION.md](VERIFICACION.md).
+
 ## Ali · memoria, acciones revisadas y seguimiento · comprobación local · 11 de noviembre de 2026
 
 - Conversaciones privadas con objetivo, respuestas confirmadas, referencias y hasta tres próximos pasos persistidos. Navegar, cambiar de tema o recargar no elimina la pregunta pendiente ni las tareas sugeridas; los datos históricos se vuelven a consultar antes de actuar. No añade recordatorios programados.

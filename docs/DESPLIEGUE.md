@@ -4,7 +4,28 @@ La arquitectura usa **un servidor Linux con Docker Compose: Next.js + PostgreSQL
 
 La producción publicada es **https://allnutrition.wintimeapp.co**, en la VM privada `allnutrition-prod` (`amd64`) detrás del Nginx del host, según el apartado 5. Las imágenes `arm64` y resultados locales de septiembre son antecedentes, no candidatos válidos para esa VM. Cada actualización debe obtener su propia aceptación nativa con `verify:docker` y comparar la imagen ejecutada con la evidencia aprobada. Los resultados vigentes y sus límites se registran en [VERIFICACION.md](VERIFICACION.md); no acreditan una ejecución de CI remoto.
 
-**Versión vigente, 8 de noviembre de 2026 (Bogotá):** web y scheduler usan `allnutrition:release-f0474580c564`, ID `sha256:f0474580c56463e900e7db3ba42461012b493dc1b24b24e0a7aab96d48891a49`, Linux/amd64, Next `16.4.3`, Node `24.22.2`, UID 1000. Promoción exacta sin rebuild a las **21:34:42 UTC / 16:34:42 Bogotá**.
+**Versión vigente, 12 de noviembre de 2026 (Bogotá):** web, scheduler y consumidor navegador usan `allnutrition:release-7732df7a8764`, ID `sha256:7732df7a87648f184fb1c15665046ba8ca05a2bcbafdf93295566138fdc2e2fe`, Linux/amd64, Next `16.4.3`, Node runtime `24.22.3`, UID 1000. El runner usa `allnutrition-social-browser:release-479fcf96432b`, ID `sha256:479fcf96432bdad825b19c280e0513029e0f739181ee12f2b994c45daac3f2e9`. Web arrancó a las **13:31:09 UTC / 08:31:09 Bogotá**; aceptación productiva final a las **13:45:09 UTC / 08:45:09 Bogotá**.
+
+Código de aplicación `60ec380af64935162c95d7050c32c1bc173020ca`, **452 archivos sellados**, USTAR SHA-256 `67819cc14556efaea92fc4569f62c30f107b351911dfd93996fa24126a0a5d98`, manifiesto SHA-256 `2e58f832758227bd6ad20e64556b285971c3fa272b7d9725074e89e63c7ef494`. Los commits posteriores de sincronización E2E y documentación no reconstruyen ni cambian la imagen. Ambas imágenes se transfirieron y comprobaron por ID.
+
+Aceptación **compuesta con autorización expresa del usuario**: 1745 contratos nativos previamente aprobados, 70 E2E nuevos y las 17 compuertas completas; el rechazo original permanece separado. No se afirma una segunda ejecución completa de contratos. Runner y VM comprobaron sandbox real; claves privadas, control firmado, aislamiento y continuidad de ambos workers aprobados. Evidencia, excepción y límites en [VERIFICACION.md](VERIFICACION.md).
+
+Producción migró **v9→v10→v11**, con repetición idempotente: marcadores 2–11 y **65 tablas**. Antes se restauró un respaldo real en clon privado y se ensayaron ambas migraciones, exportación completa, permisos limitados, TLS y medios. En el corte se detuvieron los escritores anteriores; el respaldo final consistente y sus nueve artefactos quedaron verificados fuera de la VM antes de migrar. PostgreSQL conserva su contenedor y proceso; no se ejecutaron setup, seed, reset ni reimportación.
+
+Material privado: `/home/allnutrition/ali-production-20261111T174020Z-e50a3a-r5/`. Dumps `0600`, catálogo legible y copias externas comprobadas:
+
+| Copia | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `rehearsal-capture/production.dump` — restaurada y migrada en clon | 12.944.683 | `dc6b1d683f3c8ddabd338149bf34cc9a5db2da98904fc53fa6513f18bfbdc450` |
+| `final-capture/production.dump` — final congelada; no restaurada nuevamente | 13.318.268 | `927d65b2545dc911fcd7d8ec0368c4a9ee30ffc1bdf4a51e584c53493121e6d5` |
+
+En `final-capture/`: `source-backup.tar`, 5.867.520 bytes, SHA-256 `1dc5fd47cd46ead2f20a31566be438932f65823d38c3a2d07d6cba38808460df`; `selector-backup.txt`, 44 bytes, SHA-256 `b605ff7f99d5d50e51b81931a4b570a503d70faf2717a0f6352ec72ab0b637ab`. Cuatro medios en `product-images.tar`, 501.760 bytes, SHA-256 `4ed0f12b2696ccb16d3fa51e4c33c431e90e57606d777acff46ee774ea7d46f1`; `social-media.tar` está vacío. Copias verificadas en `.test-data/ali-production-20261111T174020Z-e50a3a-r5/final-offhost/`, fuera de Git.
+
+Se conservaron todas las filas comerciales, 300 pedidos y guías, medios y exportación completa; hash comercial final `62570f23a1dedd5b2f38ff935f9721b2a37e84e77b951b0ee3512565fd178ca0`. Sesión anterior al corte válida; logout propio y API posterior `401`, sin eliminar otras sesiones. `.env.server.local` y TLS conservaron bytes/permisos; Nginx conserva su SHA-256. Solo el selector cambió a las dos imágenes aprobadas. No se cambiaron DNS ni firewall.
+
+Ali, Meta y Heka quedan **sin configurar ni habilitar**: sin clave Ali guardada, conexiones Heka vacías y custodia sin inicializar. El humo real fue de solo lectura, sin mensajes al proveedor, publicación, pagos ni operaciones Heka. Conservar `allnutrition:release-f0474580c564` como material de recuperación, **no asumir rollback compatible con esquema 11**. No degradar ni restaurar automáticamente; validar primero una combinación aislada que preserve hechos posteriores al respaldo.
+
+**Antecedente — Informes y Publicidad guiados, 8 de noviembre de 2026 (Bogotá):** web y scheduler usaron `allnutrition:release-f0474580c564`, ID `sha256:f0474580c56463e900e7db3ba42461012b493dc1b24b24e0a7aab96d48891a49`, Linux/amd64, Next `16.4.3`, Node `24.22.2`, UID 1000. Promoción exacta sin rebuild a las **21:34:42 UTC / 16:34:42 Bogotá**.
 
 Código de `8d50431ed5e5af60887fa3d5ab9eaba112d6f4d3`, publicado en `origin/trunk`, con **361 archivos sellados**, paquete USTAR SHA-256 `dab440cc5e4f9f295a5793aaa2b6e6cc897231e0876491ff01e15c16783f03ab`. Aceptación nativa nueva `d62da00fae9c1e23`: **1268 contratos sin fallos/omisiones y 64 E2E aprobadas**, más las 17 compuertas oficiales. La imagen se transfirió y comprobó por ID, sin reconstruirla. Las novedades son de interfaz/navegación de Informes y Publicidad; dependencias, build, SQL y migraciones permanecen iguales.
 
@@ -71,7 +92,7 @@ Conservar la imagen anterior como material de recuperación, no asumir compatibi
 
 ## Publicidad: habilitación y custodia
 
-Esta actualización local requiere **v10 después de v9**; todavía no está desplegada en producción. Detener los escritores anteriores y respaldar antes del corte. PostgreSQL rechaza el arranque sin v10; SQLite migra al abrir. La migración invalida OAuth pendiente, sin reescribir hechos comerciales.
+Integraciones requiere **v10 después de v9**, incluida en el corte productivo del 12 de noviembre junto con v11 de Ali. Para instalaciones anteriores, detener los escritores y respaldar antes del corte. PostgreSQL rechaza el arranque sin v10; SQLite migra al abrir. La migración invalida OAuth pendiente, sin reescribir hechos comerciales.
 
 La aplicación Meta, su secreto, origen público, configuración de login y habilitaciones se guardan en **Configuración → Redes sociales** (`business/social`). Graph permanece en `v26.0`. Los procesos ya iniciados leen opciones persistidas por petición/turno; un cambio no necesita reiniciar web, scheduler ni runner. El origen debe estar autorizado por el despliegue y usar HTTPS (HTTP sólo en loopback de desarrollo). La UI muestra callback y eliminación de datos derivados del origen guardado; éste debe ser accesible por Meta para entregar medios firmados.
 
