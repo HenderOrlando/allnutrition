@@ -10,11 +10,15 @@ import {
   validateTurnInput,
 } from '../lib/assistant/contracts.mjs';
 import { serializeAssistantDraft, serializeAssistantForm, validateAssistantFormValues, validateAssistantSubmission } from '../lib/assistant/forms.mjs';
+import { validateAssistantModelFinish } from '../lib/assistant/contracts.mjs';
+import { createAssistantEvidence, deriveAssistantFact } from '../lib/assistant/evidence.mjs';
+import { resolveAssistantModelResult } from '../lib/assistant/presentation.mjs';
 
-test('una configuración solo queda habilitada con proveedor, clave y conexión verificada', () => {
+test('una configuración solo queda habilitada con proveedor, autenticación y conexión verificada', () => {
   const base = {
     version: 1, enabled: false, provider: null, baseUrl: null, model: null,
     allowPrivateNetwork: false, hasApiKey: false, connectionStatus: 'unconfigured', verifiedAt: null,
+    authMethod: 'api-key', hasOAuthConnection: false, projectId: null,
   };
   assert.equal(validateAssistantSettings(base).enabled, false);
   const ready = { ...base, enabled: true, provider: 'openai', model: 'gpt-4.1-mini', hasApiKey: true, connectionStatus: 'ready' };
@@ -276,4 +280,43 @@ test('el esquema distingue horario textual de umbral horario numérico',()=>{
   assert.throws(()=>validateAssistantFormValues('storefront-settings',{hours:24}));
   assert.equal(validateAssistantFormValues('settings:alert-rule',{thresholds:{hours:24}}).thresholds.hours,24);
   assert.throws(()=>validateAssistantFormValues('settings:alert-rule',{thresholds:{hours:'24'}}));
+});
+
+test('analysis requires known sources and inserts values through citation segments', () => {
+  const evidence=createAssistantEvidence({domain:'reports',field:'metric:netProductSales',label:'Ventas netas',value:12000,unit:'minor'});
+  const block={type:'analysis',kind:'interpretation',segments:[{type:'text',text:'Las ventas registradas son '},{type:'evidence',evidenceId:evidence.id,display:'value'}],evidenceIds:[]};
+  const payload={topic:'reports',blocks:[block],question:null,proposalId:null,remainingReads:[]};
+  const resolved=resolveAssistantModelResult(payload,{evidence:[evidence]});
+  assert.deepEqual(resolved.referencedEvidenceIds,[evidence.id]);
+  assert.deepEqual(resolved.blocks[0].evidenceIds,[evidence.id]);
+  assert.throws(()=>resolveAssistantModelResult(payload,{evidence:[]}));
+  for(const prose of ['Ventas: $12','Cambió un 5%','Fecha 2026-11-12','<b>Ventas</b>','https://externo.test','[Abrir](/admin)']) {
+    assert.throws(()=>validateAssistantModelFinish({...payload,blocks:[{...block,segments:[{type:'text',text:prose}]}]}));
+  }
+  assert.throws(()=>validatePublicBlock({...block,segments:[{type:'text',text:'Sin fuente'}]}));
+});
+
+test('scope clarification cannot solicit credentials or execution approval', () => {
+  const finish=question=>validateAssistantModelFinish({topic:'reports',blocks:[],question,proposalId:null});
+  assert.equal(finish({kind:'clarify_scope',subject:'metric',prompt:'¿Quieres revisar ventas o cobros?'}).question.subject,'metric');
+  for(const prompt of ['Escribe tu contraseña','Comparte el token','Confirma guardar esta operación','<a>Periodo</a>']) {
+    assert.throws(()=>finish({kind:'clarify_scope',subject:'goal',prompt}));
+  }
+  assert.throws(()=>finish({kind:'clarify_scope',subject:'permission',prompt:'¿Puedo guardar?'}));
+});
+
+test('derived facts preserve exact signs, null comparison base and incompatible-source rejection', () => {
+  const fact=(value,extra={})=>createAssistantEvidence({domain:'reports',field:'metric:netProductSales',label:'Ventas',value,unit:'minor',...extra});
+  const source={currency:'COP',interval:{startDate:'2026-10-01',endDateExclusive:'2026-11-01',closed:true},semantic:'netProductSales',sourceStamp:'source-version'};
+  const calculate=(operation,left,right,leftSource=source,rightSource=source)=>deriveAssistantFact({operation,left,right,leftSource,rightSource});
+  assert.equal(calculate('difference',fact(12001),fact(12000)).evidence.value,1);
+  assert.equal(calculate('ratio_bps',fact(1),fact(-3)).evidence.value,-3333);
+  const zero=calculate('ratio_bps',fact(12),fact(0));
+  assert.equal(zero.evidence.value,null);
+  assert.ok(zero.evidence.coverage.reasons.includes('no_comparison_base'));
+  assert.equal(zero.metadata.actionAuthority,false);
+  assert.equal(zero.metadata.derivedFrom.length,2);
+  for(const other of [{...source,currency:'USD'},{...source,interval:null},{...source,semantic:'unrelated'},{...source,sourceStamp:null}])assert.throws(()=>calculate('difference',fact(12),fact(3),source,other),{code:'invalid_query'});
+  assert.throws(()=>calculate('ratio_bps',fact(12),fact(3,{unit:'count'})),{code:'invalid_query'});
+  assert.throws(()=>calculate('difference',fact(null),fact(3)),{code:'invalid_query'});
 });

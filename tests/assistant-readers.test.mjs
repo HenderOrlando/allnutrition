@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readAssistantBusiness } from '../lib/assistant/readers.mjs';
+import { readAssistantBusiness, resumeAssistantBusinessRead, validateAssistantReadRequest } from '../lib/assistant/readers.mjs';
 import { createAssistantEvidence, assertKnownAssistantEvidence } from '../lib/assistant/evidence.mjs';
 import { openStore } from '../lib/db/index.mjs';
 import { createAdmin } from '../lib/auth.mjs';
@@ -28,6 +28,7 @@ import { adminHref, readAdminView } from '../lib/admin-view.mjs';
 import { bumpRevision } from '../lib/business/commands.mjs';
 import { listAlertRules, saveAlertRule, evaluateAlerts, pageAlerts, getAlert } from '../lib/business/alerts.mjs';
 import { saveSocialCampaign } from '../lib/business/social.mjs';
+import { validateAssistantSelect } from '../lib/assistant/read-contracts.mjs';
 import { bogotaDate } from '../lib/business/dates.mjs';
 
 const session={user:{id:'admin-1'}};
@@ -95,7 +96,40 @@ async function fingerprint(store) {
   for(const {name} of tables) rows[name]=await store.db.all(`SELECT * FROM "${name}" ORDER BY 1`);
   return JSON.stringify(rows);
 }
-const readDomain=(fixture,domain,query={})=>readAssistantBusiness(fixture.store,fixture.session,{domain,query});
+function mergeFragment(target,piece,locations,path=''){
+  if(Array.isArray(piece)){
+    const offset=locations.find(item=>item.path===path)?.offset||0,result=Array.isArray(target)?target:[];
+    for(let index=0;index<piece.length;index++)result[offset+index]=mergeFragment(result[offset+index],piece[index],locations,`${path}.${offset+index}`);
+    return result;
+  }
+  if(piece&&typeof piece==='object'){
+    const result=target&&typeof target==='object'?target:{};
+    for(const [key,value] of Object.entries(piece))result[key]=mergeFragment(result[key],value,locations,path?`${path}.${key}`:key);
+    return result;
+  }
+  const location=locations.find(item=>item.path===path);
+  if(typeof piece==='string'&&location){const previous=typeof target==='string'?target:'';return previous.slice(0,location.offset)+piece+previous.slice(location.offset+piece.length);}
+  return piece;
+}
+async function readAll(store,session,input){
+  let fragment=await readAssistantBusiness(store,session,input),first=fragment,last=fragment;
+  const records=[],summary={},evidence=new Map();
+  for(let count=0;;count++){
+    assert.ok(count<10000,'continuations must make progress');
+    assert.ok(Buffer.byteLength(JSON.stringify(fragment))<=16*1024);
+    const coordinates=fragment.summary.fragments||[];
+    for(const position of new Set(coordinates.filter(item=>item.recordIndex!==null).map(item=>item.recordPosition))){const parts=coordinates.filter(item=>item.recordPosition===position),recordIndex=parts[0].recordIndex;records[recordIndex]=mergeFragment(records[recordIndex],fragment.records[position],parts.flatMap(item=>item.paths));}
+    const {fragments,...safeSummary}=fragment.summary;
+    mergeFragment(summary,safeSummary,coordinates.filter(item=>item.recordIndex===null).flatMap(item=>item.paths));
+    for(const item of fragment.evidence)evidence.set(item.id,item);
+    last=fragment;
+    if(!fragment._continuation)break;
+    fragment=await resumeAssistantBusinessRead(store,session,fragment._continuation);
+    assert.ok(!fragment.retrieval.reasons.includes('source_changed'));
+  }
+  return {...first,records:records.filter(Boolean),summary,evidence:[...evidence.values()],retrieval:last.retrieval,continuation:last.continuation,_continuation:null};
+}
+const readDomain=(fixture,domain,query={})=>readAll(fixture.store,fixture.session,{domain,query,select:{mode:'records',limit:null}});
 
 test('every domain rejects unknown keys and rejects filters that its chosen reader would ignore',async t=>{
   const f=await businessFixture(t);
@@ -124,16 +158,15 @@ test('catalog pagination, units, nullable cost and bounded stored text remain ex
   const unknown=await f.store.save('products',{...emptyRecord('products'),title:'Costo desconocido',slug:'costo-desconocido',price:12345,unitCostMinor:null,stockQuantity:null,description:'x'.repeat(2500)},null,null,f.actorId);
   for(let index=0;index<21;index++)await f.store.save('faqs',{...emptyRecord('faqs'),title:`Pregunta ${String(index).padStart(2,'0')}`,slug:`pregunta-${index}`,answer:'Respuesta registrada'},null,null,f.actorId);
   const first=await readDomain(f,'catalog',{kind:'faqs'}),second=await readDomain(f,'catalog',{kind:'faqs',page:2});
-  assert.equal(first.records.length,20);assert.equal(second.records.length,1);
-  assert.equal(first.summary.count,21);assert.equal(first.summary.complete,false);assert.equal(first.pagination.hasMore,true);
+  assert.equal(first.records.length,21);assert.equal(second.records.length,1);
+  assert.equal(first.summary.count,21);assert.equal(first.retrieval.complete,true);assert.equal(first.summary.complete,true);
   const detail=await readDomain(f,'catalog',{kind:'products',id:unknown.id});
   assert.equal(detail.records[0].unitCostMinor,null);
   assert.equal(detail.evidence.find(row=>row.field==='unitCostMinor').value,null);
   assert.equal(detail.evidence.find(row=>row.field==='price').formattedValue,'12.345 COP');
-  assert.equal(detail.records[0].description.length,2000);
-  assert.ok(detail.summary.truncatedFields.includes('records.0.description'));
-  assert.equal(detail.evidence.find(row=>row.field==='description').coverage.state,'partial');
-  assert.ok(detail.evidence.find(row=>row.field==='description').coverage.reasons.includes('field_truncated'));
+  assert.equal(detail.records[0].description,'x'.repeat(2500));
+  assert.equal(detail.retrieval.complete,true);
+  assert.ok(detail.evidence.filter(row=>row.field==='description').every(row=>!row.coverage.reasons.includes('field_truncated')));
 });
 
 test('orders use exact identity, source filters and real detail/payment projections without personal data',async t=>{
@@ -155,7 +188,7 @@ test('shipments reuse detail reader events and do not promote ingestion time to 
   assert.deepEqual(detail.records[0].events.map(row=>row.occurredOn),source.events.map(row=>row.occurredOn));
   assert.ok(detail.evidence.some(row=>row.field==='events.0.occurredOn'&&row.value===source.events[0].occurredOn));
   assert.equal(detail.evidence.find(row=>row.field==='status').asOf,source.sourceAsOf||null);
-  assert.equal(new URL(detail.evidence[0].href,'https://example.test').searchParams.get('record'),f.shipmentId);
+  assert.equal(new URL(detail.evidence.find(row=>row.entityId===f.shipmentId&&row.field==='status').href,'https://example.test').searchParams.get('record'),f.shipmentId);
   assert.equal((await readDomain(f,'shipments',{sourceId:randomUUID()})).pagination.total,0);
 });
 
@@ -255,7 +288,8 @@ test('imports expose config, bounded row diagnostics and batch metadata without 
   const before=await fingerprint(f.store),data=await readDomain(f,'imports',{id:batch.id});
   assert.equal(data.summary.batch.version,configured.version);
   assert.equal(data.summary.config.sheets[0].columns[0].destination,'externalOrderId');
-  assert.ok(data.summary.truncatedFields.some(field=>field.endsWith('.columns')));
+  assert.equal(data.summary.config.sheets[0].columns.length,businessWorkbookProfile().columns.length);
+  assert.equal(data.retrieval.complete,true);
   assert.doesNotMatch(JSON.stringify(data),/fileBytesBase64|file_bytes_base64|workbook|bytes|download/);
   assert.equal(await fingerprint(f.store),before);
 });
@@ -293,9 +327,9 @@ test('all curated guides resolve stable local step IDs and canonical destination
     validatePublicBlock({type:'guide',taskId:guide.taskId,title:guide.title,steps:guide.steps,href:guide.href});
   }
   assert.equal(getAssistantGuide('https://outside.test'),null);
-  const data=await readAssistantBusiness({readSnapshot:fn=>fn({})},session,{domain:'application',query:{taskId:'orders'}});
+  const data=await readAll({readSnapshot:fn=>fn({})},session,{domain:'application',query:{taskId:'orders'}});
   assert.equal(data.records[0].steps[0].id,'orders:open');
-  assert.equal(data.evidence[0].entityId,'orders');
+  assert.ok(data.evidence.some(item=>item.entityId==='orders'&&item.field==='title'));
 });
 
 test('evidence identity changes with version/cut, null is unknown, long strings disclose truncation',()=>{
@@ -373,4 +407,78 @@ test('person detail exposes canonical saved commission overrides with their effe
   assert.deepEqual(data.evidence.filter(row=>/^commissionOverrides\.\d+\.effectiveOn$/.test(row.field)).map(row=>row.value),saved.commissionOverrides.map(row=>row.effectiveOn));
   assert.equal(data.evidence.find(row=>row.field==='commissionOverrides.1.fixedMinor').value,777);
   assert.equal(await fingerprint(f.store),before);
+});
+
+
+test('closed select and read contracts reject inapplicable fields and incompatible query branches',()=>{
+  assert.deepEqual(validateAssistantSelect(null),{mode:'auto'});
+  for(const select of [{mode:'sql'},{mode:'records',sortBy:'id'},{mode:'summary',fields:['password']},{mode:'records',fields:['title'],limit:21},{mode:'groups',group:'products',sortBy:'label'}]){
+    assert.throws(()=>validateAssistantReadRequest({domain:'catalog',query:{kind:'products'},select}));
+  }
+  for(const request of [
+    {domain:'reports',query:{startDate:'2026-09-01',endDateExclusive:'2026-10-02',period:'month'}},
+    {domain:'orders',query:{startDate:'2026-09-01'}},
+    {domain:'shipments',query:{eventStatus:'delivered'}},
+    {domain:'imports',query:{id:'batch',rowNumber:1}},
+    {domain:'reports',query:{mode:'list'},select:{mode:'groups',group:'products'}},
+  ])assert.throws(()=>validateAssistantReadRequest(request));
+});
+
+test('summary authority covers sixty-five products; multibyte text and nested tails are losslessly resumed',async()=>{
+  const rows=Array.from({length:65},(_,index)=>({id:`product-${String(index+1).padStart(2,'0')}`,version:1,title:`Producto ${String(index+1).padStart(2,'0')}`,productType:index===0?'gift':'product',status:'published',price:100,stockQuantity:index===2?null:1,description:`${'á漢😀'.repeat(1200)}:${index===64?'DISTINTIVO-ULTIMO':'ordinario'}`,items:Array.from({length:index===64?25:0},(_,part)=>({productId:`component-${part}`,quantity:part+1}))}));
+  const store={readSnapshot:fn=>fn({list:async()=>rows,get:async(kind,id)=>rows.find(row=>row.id===id)})};
+  const summary=await readAssistantBusiness(store,session,{domain:'catalog',query:{kind:'products'},select:{mode:'summary'}});
+  assert.equal(summary.summary.count,65);assert.equal(summary.retrieval.recordsTotal,65);assert.equal(summary.retrieval.complete,true);
+  assert.equal(summary.summary.stock.unknown,1);
+  assert.ok(summary.evidence.some(item=>item.field==='summary:count'&&item.value===65));
+  assert.ok(summary.records.length<=10);
+  const full=await readAll(store,session,{domain:'catalog',query:{kind:'products'},select:{mode:'records',fields:['title','description','items'],limit:null}});
+  assert.equal(full.records.length,65);assert.equal(full.retrieval.complete,true);
+  assert.equal(full.records.at(-1).description,rows.at(-1).description);
+  assert.equal(full.records.at(-1).items.at(-1).productId,'component-24');
+  assert.equal(full.records.at(-1).items.length,25);
+  const gifts=await readAll(store,session,{domain:'catalog',query:{kind:'products',productType:'gift'},select:{mode:'summary'}});
+  assert.equal(gifts.summary.count,1);
+  assert.ok(full.evidence.every(item=>!item.coverage.reasons.includes('field_truncated')));
+  await assert.rejects(()=>readAssistantBusiness(store,session,{domain:'catalog',query:{kind:'products'},select:{mode:'records',cursor:'fabricated'}}),/trabajo autorizado/);
+});
+
+test('a whole-selection stamp detects replacement without count/version maxima and restarts once',async()=>{
+  const rows=Array.from({length:25},(_,index)=>({id:`row-${index}`,version:1,title:`Título ${index}`,status:'draft',description:'A'.repeat(3000)}));
+  const store={readSnapshot:fn=>fn({list:async()=>rows})};
+  const first=await readAssistantBusiness(store,session,{domain:'catalog',query:{kind:'products'},select:{mode:'records',limit:null}});
+  assert.ok(first._continuation);
+  rows[24]={...rows[24],title:'Sustitución sin cambiar máximo ni cantidad'};
+  const changed=await resumeAssistantBusinessRead(store,session,first._continuation);
+  assert.ok(changed.retrieval.reasons.includes('source_changed'));
+  assert.notEqual(changed.retrieval.sourceStamp,first.retrieval.sourceStamp);
+  assert.equal(changed._continuation.state.restarts,1);
+  rows[23]={...rows[23],title:'Segunda modificación'};
+  const changedAgain=await resumeAssistantBusinessRead(store,session,changed._continuation);
+  assert.equal(changedAgain.retrieval.complete,false);
+  assert.ok(changedAgain.retrieval.reasons.includes('source_changed'));
+  assert.equal(changedAgain.continuation,null);
+});
+
+test('order ranges use placedOn and shipment ranges use corrected effective events before pagination',async t=>{
+  const f=await businessFixture(t);
+  const orders=await readDomain(f,'orders',{startDate:'2025-09-01',endDateExclusive:'2025-09-02'});
+  assert.ok(orders.records.some(row=>row.id===f.orderId));
+  assert.equal((await readDomain(f,'orders',{startDate:'2025-09-02',endDateExclusive:'2025-09-04'})).records.length,0);
+  let shipment=await getShipment(f.store,f.shipmentId);
+  const delivered=shipment.events.find(row=>row.status==='delivered');
+  await recordShipmentEvent(f.store,shipment.id,{requestId:randomUUID(),version:shipment.version,status:'delivered',occurredOn:'2025-10-02',correctionOf:delivered.id,reason:'Corrección real de fecha'},f.actorId);
+  const september=await readDomain(f,'shipments',{startDate:'2025-09-03',endDateExclusive:'2025-09-04',eventStatus:'delivered'});
+  assert.ok(!september.records.some(row=>row.id===f.shipmentId));
+  const october=await readDomain(f,'shipments',{startDate:'2025-10-01',endDateExclusive:'2025-10-03',eventStatus:'delivered',status:'delivered'});
+  assert.ok(october.records.some(row=>row.id===f.shipmentId));
+});
+
+test('Unicode evidence never exposes a split surrogate at value or display boundaries',()=>{
+  for(const boundary of [999,1999]){
+    const evidence=createAssistantEvidence({domain:'catalog',field:'description',label:'Descripción',value:`${'a'.repeat(boundary)}🥑${'b'.repeat(1200)}`});
+    assert.equal(evidence.value.isWellFormed(),true);
+    assert.equal(evidence.formattedValue.isWellFormed(),true);
+    assert.equal(evidence.value.includes('\uFFFD'),false);
+  }
 });
