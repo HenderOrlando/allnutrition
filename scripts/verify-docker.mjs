@@ -67,10 +67,16 @@ function cleanupProject() {
   }
   writeFileSync(join(artifacts, 'cleanup.json'), JSON.stringify({ project, remaining }, null, 2) + '\n', { mode: 0o600 });
 }
-async function availablePort() {
+async function availablePort(preferred) {
   const server = createServer();
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(9443, '127.0.0.1', resolve); });
+  try { await new Promise((resolve, reject) => { server.once('error', reject); server.listen(preferred, '127.0.0.1', resolve); }); }
+  catch (error) {
+    if (error.code !== 'EADDRINUSE') throw error;
+    return availablePort(0);
+  }
+  const port = server.address().port;
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  return port;
 }
 function request(path, { method = 'GET', headers = {}, body, timeout = 12000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -237,11 +243,17 @@ try {
   result.reports = { artifacts, playwright: join(artifacts, 'playwright-report'), screenshots: join(artifacts, 'test-results') };
   secrets.push(values.POSTGRES_PASSWORD, values.DB_APP_PASSWORD, values.ADMIN_PASSWORD);
   console.log(`Entorno privado: ${generated.envFile}`);
-  await availablePort();
+  const httpsPort = await availablePort(9443), fixturePort = await availablePort(13339);
+  values.APP_URL = `https://localhost:${httpsPort}`;
+  values.HTTPS_PORT = String(httpsPort);
+  writeFileSync(generated.envFile, readFileSync(generated.envFile, 'utf8').replace(/^APP_URL=.*$/m, `APP_URL=${values.APP_URL}`).replace(/^HTTPS_PORT=.*$/m, `HTTPS_PORT=${httpsPort}`), { mode: 0o600 });
+  const fixtureOverride = join(artifacts, 'assistant-fixture.compose.yaml');
+  writeFileSync(fixtureOverride, `services:\n  web:\n    ports:\n      - "127.0.0.1:${fixturePort}:3339"\n`, { mode: 0o600 });
+  result.assistantFixture = { control: `http://127.0.0.1:${fixturePort}`, baseUrl: 'http://127.0.0.1:3339/v1' };
   dockerEnv = { ...process.env };
   // Compose shell precedence must never borrow credentials/paths from a user's deployment.
   for (const key of Object.keys(values)) delete dockerEnv[key];
-  composeArgs = ['compose', '-p', project, '--env-file', generated.envFile, '-f', 'compose.yaml', '-f', 'compose.staging.yaml'];
+  composeArgs = ['compose', '-p', project, '--env-file', generated.envFile, '-f', 'compose.yaml', '-f', 'compose.staging.yaml', '-f', fixtureOverride];
   compose(['config', '--quiet'], 'Validación privada de Compose');
   // A cold native toolchain exceeded 30 minutes; source edits now preserve its Docker cache.
   compose(['build', 'web', 'checks'], 'Build de runtime y checks Node24', { timeout: 5400000 });
@@ -268,6 +280,7 @@ try {
   stopWorker();
   compose(['run', '--rm', 'checks', 'node', 'tests/e2e/setup.mjs'], 'Fixture PostgreSQL con doble guarda');
   compose(['up', '-d', '--wait', '--wait-timeout', '120', 'web', 'proxy'], 'Arranque del contenedor compilado y HTTPS');
+  compose(['exec', '-d', 'web', 'node', 'tests/assistant-provider-fixture.mjs', '--port', '3339', '--host', '0.0.0.0'], 'Proveedor sintético Ali privado y autenticado');
   const root = JSON.parse(compose(['exec', '-T', 'proxy', 'wget', '-qO-', 'http://127.0.0.1:2019/pki/ca/local'], 'Exportación de CA HTTPS pública', { quiet: true, logOutput: false }).stdout).root_certificate;
   ensure(typeof root === 'string' && root.includes('BEGIN CERTIFICATE'), 'Caddy no devolvió su certificado raíz público.');
   httpsCA = root;
@@ -282,7 +295,7 @@ try {
   // Full serial recovery scenarios wait for the real worker; the verified workbook/dialog subset alone exceeded one hour.
   run('npm', ['run', 'test:e2e'], 'E2E escritorio/móvil y fronteras HTTP', {
     timeout: 10800000,
-    env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright, PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json') },
+    env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', ALI_FIXTURE_CONTROL_URL: result.assistantFixture.control, ALI_FIXTURE_BASE_URL: result.assistantFixture.baseUrl, PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright, PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json') },
   });
   passed('Playwright desktop/mobile: upload local, render público, límites HTTP, autenticación y CSRF');
 
