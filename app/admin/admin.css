@@ -186,7 +186,7 @@
 .admin-theme .editor-error p {color:inherit;margin:0 0 12px}
 .admin-theme .editor-more-options {padding:16px;border:1px solid var(--admin-line);border-radius:12px}
 .admin-theme .form-section {scroll-margin-top:16px;min-width:0}
-.admin-theme .field-description {display:block;font-weight:400;margin-top:8px;line-height:1.5}
+.admin-theme .field-description {display:block;font-weight:400;margin-top:8px;line-height:1.5;overflow-wrap:anywhere}
 .admin-theme .field>input,.admin-theme .field>select,.admin-theme .field>textarea {display:block;width:100%;margin-top:8px}
 .admin-theme [aria-invalid=true] {border-color:var(--admin-accent)!important}
 .admin-theme .upload-progress {height:8px;width:100%;background:var(--admin-apricot);border:1px solid var(--admin-apricot-ink);border-radius:4px}

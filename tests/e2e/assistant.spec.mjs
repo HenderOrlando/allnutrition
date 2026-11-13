@@ -47,6 +47,12 @@ test('Ali: partial → explicit acceptance → durable stop → reload', async (
     expect(bounds.left, `${name} left edge`).toBeGreaterThanOrEqual(bounds.min - 1);
     expect(bounds.right, `${name} right edge`).toBeLessThanOrEqual(bounds.max + 1);
   }
+  const endpoint = page.getByText(/^Endpoint fijo de Gemini:/);
+  await expect(endpoint).toBeVisible();
+  expect(await endpoint.evaluate(element => {
+    const field = element.getBoundingClientRect(), grid = element.closest('.product-form-grid').getBoundingClientRect();
+    return element.scrollWidth <= element.clientWidth + 1 && field.left >= grid.left - 1 && field.right <= Math.min(grid.right, innerWidth) + 1;
+  }), 'Provider endpoint stays readable inside the form').toBe(true);
   await page.locator('select[name=authMethod]').scrollIntoViewIfNeeded();
   await screenshot(page, info, 'assistant-oauth-controls');
   await page.locator('select[name=provider]').selectOption('openai-compatible');
