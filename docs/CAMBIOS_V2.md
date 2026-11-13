@@ -1,5 +1,20 @@
 # Cambios — administración v3 y antecedentes
 
+## Ali · consultas contextuales y análisis recuperable · integración local · 12 de noviembre de 2026
+
+- Alcance fijado al enviar, incluidas métrica guardada, fila/hoja de importación y página de cierres. Intervalos explícitos reutilizan cálculos comerciales; rankings ordenan el grupo completo.
+- Resúmenes compactos, proyecciones autorizadas, fragmentos recuperables y separación entre datos desconocidos y datos aún no revisados. Explicaciones con fuentes, interpretación rotulada y aritmética exacta limitada.
+- Pase rápido y ampliación de solo lectura mediante **Completar análisis**; etapas, conteos, detención durable, recuperación de historial y páginas de registros ya consultados. Los previews no autorizan guardados.
+- Migración privada v13 con workspaces, fragmentos, leases y CAS; fuera del respaldo comercial. Sin despliegue ni uso de credenciales reales. Verificación y límites en [VERIFICACION.md](VERIFICACION.md).
+
+## Ali · Google/Gemini OAuth y APIKey · integración local · 12 de noviembre de 2026
+
+- Autenticación alternativa de Google con código de autorización, PKCE y consentimiento offline; comprobación del modelo con funciones antes de habilitar Ali. APIKey continúa disponible para OpenAI, compatibles y Gemini.
+- Tokens y verificadores cifrados con la custodia de Ali; estado de un solo uso ligado a sesión/configuración, renovación serializada, rechazo notificado y desconexión local aunque Google no confirme revocación. No cambia el login general del panel ni añade consumo automático con otra credencial.
+- Migración privada v12 con estados y credenciales OAuth fuera del respaldo comercial; conserva las claves existentes. Variables opcionales del cliente Google únicamente en el servidor web; detalles en [DESPLIEGUE.md](DESPLIEGUE.md).
+- Por decisión del usuario, OpenAI OAuth no se integra sin autorización para una aplicación web alojada; Anthropic se excluye por su restricción oficial a login de terceros. No se promete acceso API incluido en una suscripción de consumo. Fuentes en [README.md](../README.md#conectar-googlegemini-por-oauth).
+- Sin despliegue ni credenciales reales. Pruebas y límites en [VERIFICACION.md](VERIFICACION.md).
+
 ## Ali e integraciones desplegados · 12 de noviembre de 2026
 
 - Producción actualizada a `allnutrition:release-7732df7a8764`, con runner privado `allnutrition-social-browser:release-479fcf96432b`. Esquema 11 y 65 tablas tras migración v9→v10→v11 idempotente, sin reiniciar PostgreSQL ni alterar hechos comerciales o medios.
