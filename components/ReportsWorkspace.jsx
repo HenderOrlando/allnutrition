@@ -8,6 +8,7 @@ import { orderStates, shipmentStates } from '@/lib/schema.mjs';
 import { addDays, bogotaDate } from '@/lib/business/dates.mjs';
 import { formatMoneyMinor } from '@/lib/business/money.mjs';
 import styles from './FinanceExperience.module.css';
+import { useAssistantSelection } from './AssistantBridge';
 
 const BASE = '/api/admin/reports';
 const TABS = [['overview', 'Resumen'], ['sales', 'Ventas'], ['shipping', 'Envíos'], ['returns', 'Devoluciones'], ['costs', 'Costos'], ['payroll', 'Sueldos'], ['cash', 'Caja']];
@@ -156,6 +157,7 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
   const params = queryParams(view), query = params.toString();
   const snapshotId = view.record && !METRICS.has(view.record) ? view.record : '';
   const metricKey = snapshotId ? savedMetric : METRICS.has(view.record) ? view.record : '';
+  useAssistantSelection({view,selection:{kind:'report',snapshotId:snapshotId || null,metric:metricKey || null,issue:metricKey ? view.issue || null : null}});
   const activeMode = snapshotId ? 'saved' : metricKey ? 'live' : view.mode === 'saved' ? 'saved' : 'live';
   const detailParams=new URLSearchParams({page:String(page),...(metricKey?{metric:metricKey}:{}),...(view.issue&&metricKey?{issue:view.issue}:{})});
   const endpoint = snapshotId ? `${BASE}/${encodeURIComponent(snapshotId)}?${detailParams}` : `${BASE}?${query}&mode=${activeMode}&${detailParams}`;

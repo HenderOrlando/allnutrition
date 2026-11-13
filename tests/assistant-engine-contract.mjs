@@ -7,19 +7,25 @@ import { createAdmin, login, logout } from '../lib/auth.mjs';
 import { emptyRecord } from '../lib/schema.mjs';
 import { createIntegrationKeyring } from '../lib/integrations/keyring.mjs';
 import { getAssistantSettings, saveAssistantSettings } from '../lib/assistant/settings.mjs';
-import { runAssistantTurn } from '../lib/assistant/engine.mjs';
+import { completeAssistantCycle, scriptedAssistantProvider } from './assistant-cycle-helper.mjs';
+import { startAssistantTurn, advanceAssistantTurn, getAssistantTurnStatus, stopAssistantTurn } from '../lib/assistant/engine.mjs';
 import { getAssistantThread, listAssistantThreads, deleteAssistantThread } from '../lib/assistant/conversations.mjs';
 import { readAssistantBusiness } from '../lib/assistant/readers.mjs';
 import { getAssistantGuide } from '../lib/assistant/guide.mjs';
 import { saveResource } from '../lib/business/settings.mjs';
 import { accountBalance, saveAccount } from '../lib/business/cash.mjs';
+import { pageAssistantWorkRead } from '../lib/assistant/repository.mjs';
+import { insertRow } from '../lib/business/commands.mjs';
+import { buildBusinessReport } from '../lib/business/reports.mjs';
+import { bogotaDate, addDays } from '../lib/business/dates.mjs';
 
 const password = 'assistant-engine-contract-only-2026';
 const hash = value => createHash('sha256').update(value).digest('hex');
-const call = (name, args) => ({ finished: false, calls: [{ id: randomUUID(), name, arguments: args }] });
+const calls = (...responses) => ({ finished: false, calls: responses.flatMap(response => response.calls) });
+const call = (name, args) => ({ finished: false, calls: [{ id: randomUUID(), name, arguments: name === 'read_business' ? { select: null, ...args } : args }] });
 const finish = (changes = {}) => call('finish_turn', { payload: JSON.stringify({
   topic: 'application', blocks: [{ type: 'text', templateId: 'acknowledged', slots: {} }],
-  question: null, proposalId: null, ...changes,
+  question: null, proposalId: null, remainingReads: [], ...changes,
 }) });
 const readProduct = product => call('read_business', { domain: 'catalog', query: JSON.stringify({ kind: 'products', id: product.id }) });
 const input = (changes = {}) => ({
@@ -27,14 +33,7 @@ const input = (changes = {}) => ({
   context: { view: { section: 'orders', tab: 'list' }, form: null }, ...changes,
 });
 const continueInput = (result, changes = {}) => input({ threadId: result.threadId, threadVersion: result.threadVersion, ...changes });
-function scripted(...steps) {
-  let index = 0;
-  const factory = runtime => ({ async next(args) {
-    assert.ok(index < steps.length, 'the engine must not make an extra model request');
-    return steps[index++](args, runtime);
-  } });
-  return { factory, calls: () => index };
-}
+const scripted = scriptedAssistantProvider;
 function deferred() {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
@@ -44,7 +43,6 @@ const arrive = (pending, entered) => Promise.race([
   entered.promise,
   pending.then(() => assert.fail('the turn completed before the intended barrier')),
 ]);
-const denied = error => ['ASSISTANT_SCOPE_DENIED', 'ASSISTANT_UNAVAILABLE'].includes(error.code) || error.status === 422;
 const conflicted = error => error.code === 'ASSISTANT_CONFLICT' || error.status === 409;
 const revoked = error => ['ASSISTANT_AUTH_REQUIRED', 'ASSISTANT_CONFLICT'].includes(error.code) || error.status === 401;
 async function actor(store, suffix = randomUUID()) {
@@ -63,11 +61,17 @@ async function storedMemory(store, threadId, session) {
 async function assertNoReceipt(store, requestId, session) {
   const row = await storedTurn(store, requestId, session);
   assert.ok(row, 'the attempted turn is persisted');
-  assert.notEqual(row.state, 'completed');
   const data = JSON.parse(row.data);
   assert.equal(data.publicResult?.receipt ?? null, null);
   assert.equal(data.receipt ?? null, null);
   return row;
+}
+async function assertInvalidAnswer(promise) {
+  const result = await promise;
+  assert.equal(result.analysis.reason, 'invalid_answer');
+  assert.equal(result.proposal, null);
+  assert.equal(result.receipt, null);
+  return result;
 }
 
 // This module deliberately registers no tests on import: PostgreSQL uses the
@@ -114,22 +118,22 @@ export async function runAssistantEngineContracts(t, store) {
           return finish({ topic: 'catalog', blocks: [{ type: 'fact', evidenceIds: [title.id] }] });
         },
       );
-      const result = await runAssistantTurn(store, session, request, { providerFactory: provider.factory });
+      const result = await completeAssistantCycle(store, session, request, { providerFactory: provider.factory });
       const title = result.evidence.find(item => item.field === 'title' && item.entityId === product.id);
       assert.equal(title.recordVersion, product.version);
       assert.deepEqual(result.blocks[0].evidenceIds, [title.id]);
       assert.equal(result.receipt, null);
-      assert.deepEqual(await runAssistantTurn(store, session, request, { providerFactory: provider.factory }), result);
+      assert.deepEqual(await completeAssistantCycle(store, session, request, { providerFactory: provider.factory }), result);
       assert.equal(provider.calls(), 2);
-      await assert.rejects(() => runAssistantTurn(store, session, { ...request, message: 'Otro contenido.' }, { providerFactory: provider.factory }), conflicted);
+      await assert.rejects(() => completeAssistantCycle(store, session, { ...request, message: 'Otro contenido.' }, { providerFactory: provider.factory }), conflicted);
       assert.equal(provider.calls(), 2);
       await assert.rejects(() => getAssistantThread(store, other.session, result.threadId), error => error.status === 404);
       await assert.rejects(() => deleteAssistantThread(store, other.session, result.threadId, result.threadVersion), error => error.status === 404);
-      await assert.rejects(() => runAssistantTurn(store, other.session, continueInput(result), { providerFactory: provider.factory }), error => error.status === 404);
+      await assert.rejects(() => completeAssistantCycle(store, other.session, continueInput(result), { providerFactory: provider.factory }), error => error.status === 404);
       const ownThreads = await listAssistantThreads(store, other.session);
       assert.equal(ownThreads.threads.some(thread => thread.id === result.threadId), false);
       const otherProvider = scripted(() => finish());
-      const independent = await runAssistantTurn(store, other.session, request, { providerFactory: otherProvider.factory });
+      const independent = await completeAssistantCycle(store, other.session, request, { providerFactory: otherProvider.factory });
       assert.notEqual(independent.threadId, result.threadId, 'request IDs are scoped to the authenticated owner');
       assert.equal((await getAssistantThread(store, session, result.threadId)).turns.filter(turn => turn.state === 'completed').length, 1);
     });
@@ -139,17 +143,16 @@ export async function runAssistantEngineContracts(t, store) {
       const guides = tasks.map(task => getAssistantGuide(task));
       assert.ok(guides.every(Boolean));
       const firstProvider = scripted(
-        () => call('read_application', { taskId: tasks[0] }),
-        () => call('read_application', { taskId: tasks[1] }),
+        () => ({ finished: false, calls: tasks.map(taskId => ({ id: randomUUID(), name: 'read_application', arguments: { taskId } })) }),
         () => finish({ question: { kind: 'choose_goal', taskIds: tasks } }),
       );
       const original = input({ message: 'Ayúdame a organizar los productos y los pedidos.' });
-      const first = await runAssistantTurn(store, session, original, { providerFactory: firstProvider.factory });
+      const first = await completeAssistantCycle(store, session, original, { providerFactory: firstProvider.factory });
       assert.ok(first.question.id);
       assert.equal(first.question.options.length, tasks.length);
       const option = first.question.options.find(item => item.label === guides[0].title);
       assert.ok(option, 'question options come from the actual curated tasks');
-      const intermediate = await runAssistantTurn(store, session, continueInput(first, { message: 'Antes de responder, revisa el catálogo.' }), {
+      const intermediate = await completeAssistantCycle(store, session, continueInput(first, { message: 'Antes de responder, revisa el catálogo.' }), {
         providerFactory: scripted(() => readProduct(product), ({ results }) => finish({ topic: 'catalog', blocks: [{ type: 'fact', evidenceIds: [results[0].result.evidence.find(item => item.field === 'title').id] }] })).factory,
       });
       const pending = await getAssistantThread(store, session, first.threadId);
@@ -165,7 +168,7 @@ export async function runAssistantEngineContracts(t, store) {
         },
         ({ results }) => finish({ blocks: [{ type: 'guide', taskId: results[0].result.taskId, stepIds: [] }] }),
       );
-      const answered = await runAssistantTurn(store, session, continueInput(intermediate, {
+      const answered = await completeAssistantCycle(store, session, continueInput(intermediate, {
         message: option.label, answer: { questionId: first.question.id, optionId: option.id, text: null },
       }), { providerFactory: provider.factory });
       assert.equal(answered.blocks[0].href, guides[0].href);
@@ -175,7 +178,7 @@ export async function runAssistantEngineContracts(t, store) {
       assert.equal(thread.data.workMemory.goal, original.message);
       assert.equal(thread.data.workMemory.confirmedInputs.at(-1).value, option.label);
       assert.equal(thread.data.workMemory.confirmedInputs.at(-1).turnId, answered.turnId);
-      await assert.rejects(() => runAssistantTurn(store, session, continueInput(answered, {
+      await assert.rejects(() => completeAssistantCycle(store, session, continueInput(answered, {
         answer: { questionId: first.question.id, optionId: option.id, text: null },
       }), { providerFactory: provider.factory }), conflicted);
       assert.equal(provider.calls(), 2);
@@ -190,7 +193,7 @@ export async function runAssistantEngineContracts(t, store) {
           return finish({ topic: 'catalog', blocks: [{ type: 'fact', evidenceIds: [previousEvidence.id] }] });
         },
       );
-      const prior = await runAssistantTurn(store, session, input(), { providerFactory: provider.factory });
+      const prior = await completeAssistantCycle(store, session, input(), { providerFactory: provider.factory });
       product = await store.save('products', { ...product, title: `Producto actualizado ${unique}` }, product.id, product.version, session.user.id);
       let currentEvidence;
       const fresh = scripted(
@@ -206,13 +209,15 @@ export async function runAssistantEngineContracts(t, store) {
           return finish({ topic: 'catalog', blocks: [{ type: 'fact', evidenceIds: [currentEvidence.id] }] });
         },
       );
-      const result = await runAssistantTurn(store, session, continueInput(prior), { providerFactory: fresh.factory });
+      const result = await completeAssistantCycle(store, session, continueInput(prior), { providerFactory: fresh.factory });
       assert.notEqual(currentEvidence.id, previousEvidence.id);
       const memory = await storedMemory(store, result.threadId, session);
       assert.ok(memory.entityRefs.some(ref => ref.entityId === product.id && ref.recordVersion === product.version));
       assert.equal(result.evidence.some(item => item.id === previousEvidence.id), false);
-      const bad = scripted(() => finish({ blocks: [{ type: 'fact', evidenceIds: [previousEvidence.id] }] }));
-      await assert.rejects(() => runAssistantTurn(store, session, continueInput(result), { providerFactory: bad.factory }), denied);
+      const forged = () => finish({ blocks: [{ type: 'fact', evidenceIds: [previousEvidence.id] }] });
+      const bad = scripted(forged, forged);
+      const rejected = await assertInvalidAnswer(completeAssistantCycle(store, session, continueInput(result), { providerFactory: bad.factory }));
+      assert.equal(rejected.evidence.some(item => item.id === previousEvidence.id), false);
     });
 
     await t.test('unknown costs and stock remain null with unknown coverage, not fabricated zeroes', async () => {
@@ -230,7 +235,7 @@ export async function runAssistantEngineContracts(t, store) {
       const provider = scripted(() => readProduct(product), ({ results }) => finish({
         topic: 'catalog', blocks: [{ type: 'fact', evidenceIds: results[0].result.evidence.filter(item => fields.includes(item.field)).map(item => item.id) }],
       }));
-      const result = await runAssistantTurn(store, session, input(), { providerFactory: provider.factory });
+      const result = await completeAssistantCycle(store, session, input(), { providerFactory: provider.factory });
       for (const field of fields) assert.deepEqual(result.evidence.find(item => item.field === field), expected.evidence.find(item => item.field === field));
       assert.equal(result.receipt, null);
     });
@@ -250,16 +255,16 @@ export async function runAssistantEngineContracts(t, store) {
       const baseline = await store.get('products', product.id);
       for (const attack of attacks) {
         const request = input();
-        const provider = scripted(attack);
-        await assert.rejects(() => runAssistantTurn(store, session, request, { providerFactory: provider.factory }), denied);
-        assert.equal(provider.calls(), 1, 'rejected model output cannot trigger another provider request');
+        const provider = scripted(attack, attack);
+        await assertInvalidAnswer(completeAssistantCycle(store, session, request, { providerFactory: provider.factory }));
+        assert.ok(provider.calls() <= 2, 'invalid output has at most one bounded repair');
         await assertNoReceipt(store, request.requestId, session);
       }
       const maliciousGuide = scripted(
         () => call('read_application', { taskId: 'products' }),
         () => finish({ blocks: [{ type: 'guide', taskId: 'products', stepIds: ['products:invented'], href: 'https://outside.invalid/' }] }),
       );
-      await assert.rejects(() => runAssistantTurn(store, session, input(), { providerFactory: maliciousGuide.factory }), denied);
+      await assertInvalidAnswer(completeAssistantCycle(store, session, input(), { providerFactory: maliciousGuide.factory }));
       assert.deepEqual(await store.get('products', product.id), baseline);
     });
 
@@ -274,26 +279,26 @@ export async function runAssistantEngineContracts(t, store) {
           return call('run_sql', { sql: 'DELETE FROM records', endpoint: 'https://outside.invalid/' });
         },
       );
-      await assert.rejects(() => runAssistantTurn(store, session, request, { providerFactory: provider.factory }), denied);
+      await assertInvalidAnswer(completeAssistantCycle(store, session, request, { providerFactory: provider.factory }));
       assert.equal(provider.calls(), 2);
       assert.deepEqual(await store.get('products', product.id), before);
       await assertNoReceipt(store, request.requestId, session);
     });
 
     await t.test('one running turn excludes a second turn in its thread without blocking a separate thread', async () => {
-      const first = await runAssistantTurn(store, session, input(), { providerFactory: scripted(() => finish()).factory });
+      const first = await completeAssistantCycle(store, session, input(), { providerFactory: scripted(() => finish()).factory });
       const entered = deferred(), release = deferred();
-      const pending = runAssistantTurn(store, session, continueInput(first), { providerFactory: () => ({ async next() {
+      const pending = completeAssistantCycle(store, session, continueInput(first), { providerFactory: () => ({ async next() {
         entered.resolve();
         await release.promise;
         return finish();
       } }) });
       try {
         await arrive(pending, entered);
-        await assert.rejects(() => runAssistantTurn(store, session, continueInput(first), {
+        await assert.rejects(() => completeAssistantCycle(store, session, continueInput(first), {
           providerFactory: () => { assert.fail('a conflicting turn must not call the model'); },
         }), conflicted);
-        const separate = await runAssistantTurn(store, session, input(), { providerFactory: scripted(() => finish()).factory });
+        const separate = await completeAssistantCycle(store, session, input(), { providerFactory: scripted(() => finish()).factory });
         assert.notEqual(separate.threadId, first.threadId);
       } finally {
         release.resolve();
@@ -313,7 +318,7 @@ export async function runAssistantEngineContracts(t, store) {
         assert.equal(context.turnId, turn.id, 'the model receives the actual origin for literal provenance');
         assert.equal(context.sourceMessage, request.message, 'literal spans use the unmodified current user message');
         descriptiveContext=context;
-        return readProduct(product);
+        return calls(readProduct(product), call('describe_form', { target: 'record:products' }));
       }, () => {
         const start=descriptiveContext.sourceMessage.indexOf(description);
         return call('prepare_change', {
@@ -321,7 +326,7 @@ export async function runAssistantEngineContracts(t, store) {
           sourceRefs:[{field:'description',turnId:descriptiveContext.turnId,start,end:start+description.length}],
         });
       }, ({ results }) => finish({ topic:'catalog',proposalId:results[0].result.proposalId }));
-      const prepared = await runAssistantTurn(store, session, request, { providerFactory: provider.factory });
+      const prepared = await completeAssistantCycle(store, session, request, { providerFactory: provider.factory });
       assert.equal(prepared.proposal.execution, 'automatic');
       assert.equal(prepared.proposal.patch.description, description);
       assert.equal(prepared.proposal.state, 'prepared');
@@ -337,7 +342,7 @@ export async function runAssistantEngineContracts(t, store) {
       let financialContext;
       const financial = scripted(({context})=>{
         financialContext=context;
-        return call('read_business',{domain:'cash',query:JSON.stringify({kind:'query',resource:'overview'})});
+        return calls(call('read_business',{domain:'cash',query:JSON.stringify({kind:'query',resource:'overview'})}), call('describe_form', { target: 'business-action:income' }));
       },()=>call('prepare_change', {
         target:'business-action:income',entityId:null,
         patch:JSON.stringify({accountId:account.id,effectiveOn:'2025-01-02',amountMinor:'1.234,56',concept:'Ingreso sintético'}),
@@ -346,7 +351,7 @@ export async function runAssistantEngineContracts(t, store) {
           return {field,turnId:financialContext.turnId,start,end:start+value.length};
         }),intent:'save',
       }),({results})=>finish({topic:'cash',proposalId:results[0].result.proposalId}));
-      const paid = await runAssistantTurn(store,session,input({message:`Registra un ingreso de 1.234,56 COP el 2025-01-02 con concepto Ingreso sintético en la cuenta ${account.id}.`}),{providerFactory:financial.factory});
+      const paid = await completeAssistantCycle(store,session,input({message:`Registra un ingreso de 1.234,56 COP el 2025-01-02 con concepto Ingreso sintético en la cuenta ${account.id}.`}),{providerFactory:financial.factory});
       assert.equal(paid.proposal.execution, 'confirm');
       assert.equal(paid.proposal.patch.amountMinor, 123456);
       assert.equal(paid.receipt, null);
@@ -359,7 +364,7 @@ export async function runAssistantEngineContracts(t, store) {
       const account=await saveAccount(store,{requestId:randomUUID(),name:`Caja continuidad ${unique}`,type:'cash',responsibleId:person.id,openingOn:'2025-01-01',openingBalanceMinor:100000},session.user.id);
       const balance=await accountBalance(store,account.id);
       const firstRequest=input({message:`Prepara un ingreso en la cuenta ${account.id}, de 1.234,56 COP el 2025-01-02; falta el concepto.`});
-      const first=await runAssistantTurn(store,session,firstRequest,{providerFactory:scripted(()=>finish({topic:'cash',question:{kind:'missing_field',target:'business-action:income',field:'concept'}})).factory});
+      const first=await completeAssistantCycle(store,session,firstRequest,{providerFactory:scripted(()=>finish({topic:'cash',question:{kind:'missing_field',target:'business-action:income',field:'concept'}})).factory});
       const sourceRefs=[['amountMinor','1.234,56'],['effectiveOn','2025-01-02']].map(([field,value])=>{
         const start=firstRequest.message.indexOf(value);
         return {field,turnId:first.turnId,start,end:start+value.length};
@@ -368,17 +373,17 @@ export async function runAssistantEngineContracts(t, store) {
       const answering=scripted(({context})=>{
         assert.deepEqual(context.allowedInputTurnIds,[first.turnId]);
         assert.equal(context.turns.find(turn=>turn.turnId===first.turnId)?.message,firstRequest.message);
-        return call('read_business',{domain:'cash',query:JSON.stringify({kind:'query',resource:'overview'})});
+        return calls(call('read_business',{domain:'cash',query:JSON.stringify({kind:'query',resource:'overview'})}), call('describe_form', { target: 'business-action:income' }));
       },prepare,({results})=>finish({topic:'cash',proposalId:results[0].result.proposalId}));
-      const continued=await runAssistantTurn(store,session,continueInput(first,{message:'Aporte de prueba',answer:{questionId:first.question.id,optionId:null,text:'Aporte de prueba'}}),{providerFactory:answering.factory});
+      const continued=await completeAssistantCycle(store,session,continueInput(first,{message:'Aporte de prueba',answer:{questionId:first.question.id,optionId:null,text:'Aporte de prueba'}}),{providerFactory:answering.factory});
       assert.equal(continued.proposal.execution,'confirm');
       assert.equal(continued.proposal.patch.amountMinor,123456);
       assert.equal(continued.proposal.patch.effectiveOn,'2025-01-02');
       assert.equal(continued.proposal.missingFields.length,0);
       assert.equal(continued.receipt,null);
       assert.equal(await accountBalance(store,account.id),balance);
-      const unrelated=scripted(({context})=>{assert.deepEqual(context.allowedInputTurnIds,[]);return prepare();},({results})=>finish({topic:'cash',proposalId:results[0].result.proposalId}));
-      const stale=await runAssistantTurn(store,session,continueInput(continued,{message:'Prepara otro ingreso, sin importe ni fecha.'}),{providerFactory:unrelated.factory});
+      const unrelated=scripted(({context})=>{assert.deepEqual(context.allowedInputTurnIds,[]);return call('describe_form', { target: 'business-action:income' });},prepare);
+      const stale=await completeAssistantCycle(store,session,continueInput(continued,{message:'Prepara otro ingreso, sin importe ni fecha.'}),{providerFactory:unrelated.factory});
       assert.equal(stale.proposal.execution,'prefill');
       assert.ok(stale.proposal.missingFields.includes('amountMinor'));
       assert.ok(stale.proposal.missingFields.includes('effectiveOn'));
@@ -389,14 +394,13 @@ export async function runAssistantEngineContracts(t, store) {
     await t.test('logout and expiration barriers prevent later reads and provider sends', async () => {
       for (const reason of ['logout', 'expiry']) for (const afterRead of [false, true]) {
         const auth = await actor(store), entered = deferred(), release = deferred();
-        let calls = 0, reads = 0;
-        const observed = new Proxy(store, { get(target, key) {
-          if (key === 'readSnapshot') return fn => { reads++; return target.readSnapshot(fn); };
-          const value = Reflect.get(target, key);
-          return typeof value === 'function' ? value.bind(target) : value;
-        } });
+        let calls = 0;
         const request = input();
-        const pending = runAssistantTurn(observed, auth.session, request, { providerFactory: () => ({ async next() {
+        const readCount = async () => Number((await store.db.get(
+          `SELECT COUNT(*) AS count FROM ${store.t('assistant_work_chunks')} WHERE kind='read' AND turn_id=(SELECT id FROM ${store.t('assistant_turns')} WHERE request_id=? AND user_id=?)`,
+          [request.requestId, auth.session.user.id],
+        )).count);
+        const pending = completeAssistantCycle(store, auth.session, request, { providerFactory: () => ({ async next() {
           calls++;
           if (afterRead && calls === 1) return readProduct(product);
           entered.resolve();
@@ -405,70 +409,241 @@ export async function runAssistantEngineContracts(t, store) {
         } }) });
         const rejection = assert.rejects(pending, revoked);
         await arrive(pending, entered);
-        assert.equal(reads, afterRead ? 1 : 0, 'the barrier is at the intended real reader boundary');
+        assert.equal(await readCount(), afterRead ? 1 : 0, 'the barrier follows the intended durable business-read boundary');
         if (reason === 'logout') await logout(store, auth.token);
         else await store.db.run(`UPDATE ${store.t('sessions')} SET expires=? WHERE token_hash=?`, [Date.now() - 1, auth.session.sessionTokenHash]);
-        const before = reads;
+        const before = await readCount();
         release.resolve();
         await rejection;
         assert.equal(calls, afterRead ? 2 : 1, 'no provider send occurs after completed revocation');
-        assert.equal(reads, before, 'the late read request is not dispatched to a business reader');
+        assert.equal(await readCount(), before, 'the late response cannot publish another business-read fragment');
         await assertNoReceipt(store, request.requestId, auth.session);
       }
     });
 
-    await t.test('HTTP cancellation persists cancellation and cannot create a receipt or reread business facts', async () => {
-      const request = input(), entered = deferred(), controller = new AbortController();
-      const before = await store.get('products', product.id);
-      let calls = 0;
-      const pending = runAssistantTurn(store, session, request, { signal: controller.signal, providerFactory: () => ({ async next({ signal }) {
-        calls++;
-        return new Promise((resolve, reject) => {
-          const abort = () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
-          signal.addEventListener('abort', abort, { once: true });
-          entered.resolve();
-          if (signal.aborted) abort();
-        });
-      } }) });
-      const rejection = assert.rejects(pending, error => error.name === 'AbortError' || error.code === 'ASSISTANT_CONFLICT');
-      await arrive(pending, entered);
-      controller.abort();
-      await rejection;
-      assert.equal((await assertNoReceipt(store, request.requestId, session)).state, 'cancelled');
-      assert.equal(calls, 1);
-      assert.deepEqual(await store.get('products', product.id), before);
-      await assert.rejects(() => runAssistantTurn(store, session, request, { providerFactory: () => { assert.fail('a cancelled request must not restart inference'); } }), conflicted);
+    await t.test('source replacement resets reviewed records and never mixes historical pages into current facts', async () => {
+      const marker=`changing-${randomUUID()}`,rows=[];
+      for(let index=0;index<8;index++)rows.push(await store.save('products',{
+        ...emptyRecord('products'),title:`${marker} ${index}`,slug:`${marker}-${index}`,
+        description:'Texto registrado de esta selección. '.repeat(70),status:'draft',price:12000,presentation:'Unidad',
+      },null,null,session.user.id));
+      const query={kind:'products',q:marker},select={mode:'records',fields:['title','description'],limit:null};
+      const summarize=({context})=>{
+        const evidence=[...(context.findings||[]).flatMap(item=>item.result.evidence),...(context.results||[]).flatMap(item=>item.result?.evidence||[])];
+        return finish({topic:'catalog',blocks:[{type:'fact',evidenceIds:[...new Set(evidence.map(item=>item.id))].slice(0,4)}]});
+      };
+      const quick=scripted(()=>call('read_business',{domain:'catalog',query:JSON.stringify(query),select:JSON.stringify(select)}),summarize);
+      const partial=await completeAssistantCycle(store,session,input({message:`Revisa los textos de ${marker}.`}),{providerFactory:quick.factory});
+      let status=await startAssistantTurn(store,session,{requestId:randomUUID(),threadId:partial.threadId,threadVersion:partial.threadVersion,continueFromTurnId:partial.turnId});
+      const advance=()=>advanceAssistantTurn(store,session,status.turnId,{requestId:randomUUID(),version:status.revision},{providerFactory:()=>({next:async args=>summarize(args)})});
+      status=await advance();
+      assert.equal(status.phase,'analyzing');
+      status=await advance();
+      assert.equal(status.state,'running');
+      const changed=await store.save('products',{...rows[0],title:`${rows[0].title} · actualizado`},rows[0].id,rows[0].version,session.user.id);
+      for(let steps=0;status.state==='running';steps++) {
+        assert.ok(steps<32,'changed-source recovery must remain bounded');
+        status=await advance();
+        assert.ok(status.progress.recordsRead<=rows.length,'historical and restarted fragments cannot inflate reviewed records');
+      }
+      assert.equal(status.result.analysis.status,'complete',JSON.stringify(status.result.analysis));
+      assert.equal(status.result.analysis.reason,'source_changed');
+      assert.equal(status.progress.recordsRead,rows.length);
+      assert.equal(new Set(status.result.analysis.scope.datasets.map(item=>item.sourceStamp)).size,1);
+      assert.equal(status.result.evidence.some(item=>item.entityId===changed.id&&item.field==='title'&&item.value===rows[0].title),false);
     });
 
-    await t.test('cancellation after the final result write rolls back the public response before commit',async()=>{
-      const request=input(),controller=new AbortController(),before=await store.get('products',product.id);
-      const transaction=store.transaction;
-      let intercepted=false;
-      store.transaction=function(fn){return transaction.call(this,async tx=>{
-        const run=tx.db.run;
-        tx.db.run=async function(sql,args){
-          const result=await run.call(this,sql,args);
-          if(!intercepted&&sql.startsWith(`UPDATE ${tx.t('assistant_turns')} SET state=?`)&&args?.[0]==='completed'){
-            intercepted=true;controller.abort();
+    await t.test('Unicode catalog exceeds the old context and extended review reaches the final persisted fragment', async () => {
+      const marker = `review-${randomUUID()}`, products = [];
+      for (let index = 1; index <= 65; index++) products.push(await store.save('products', {
+        ...emptyRecord('products'), title: `${marker} ${String(index).padStart(2, '0')}`, slug: `${marker}-${index}`,
+        description: `${index === 65 ? 'DISTINTIVO-ÚLTIMO' : 'Descripción'} café 營養 🥑 `.repeat(90),
+        status: 'draft', price: 12000, presentation: 'Unidad',
+      }, null, null, session.user.id));
+      const query = { kind: 'products', q: marker };
+      const summary = await readAssistantBusiness(store, session, { domain: 'catalog', query, select: { mode: 'summary' } });
+      assert.equal(summary.retrieval.recordsTotal, 65);
+      const review = () => call('read_business', { domain: 'catalog', query: JSON.stringify(query), select: JSON.stringify({ mode: 'records', fields: ['title', 'description', 'presentation', 'productInfo', 'flavor'], limit: null }) });
+      const summarize = ({ context }) => {
+        const evidence = [...new Map([
+          ...(context.findings || []).flatMap(item => item.result?.evidence || []),
+          ...(context.results || []).filter(item => item.name === 'read_business').flatMap(item => item.result?.evidence || []),
+        ].map(item => [item.id, item])).values()];
+        return finish({ topic: 'catalog', blocks: evidence.length ? [{ type: 'fact', evidenceIds: evidence.slice(0, 4).map(item => item.id) }] : [{ type: 'text', templateId: 'missing_data', slots: {} }] });
+      };
+      const quickProvider = scripted(review, summarize);
+      const partial = await completeAssistantCycle(store, session, input({ message: `Revisa todos los textos ${marker}.` }), { providerFactory: quickProvider.factory });
+      assert.equal(partial.analysis.status, 'partial');
+      assert.equal(partial.analysis.canContinue, true);
+      assert.ok(quickProvider.calls() <= 2, 'quick review never silently starts extended work');
+      const extendedProvider = scripted(...Array.from({ length: 24 }, () => args => {
+        const names = args.tools.map(tool => tool.name || tool.function?.name);
+        assert.equal(names.includes('prepare_change'), false);
+        assert.equal(names.includes('describe_form'), false);
+        assert.equal(args.context.mode, 'extended');
+        return summarize(args);
+      }));
+      const complete = await completeAssistantCycle(store, session, {
+        requestId: randomUUID(), threadId: partial.threadId, threadVersion: partial.threadVersion, continueFromTurnId: partial.turnId,
+      }, { providerFactory: extendedProvider.factory });
+      assert.equal(complete.analysis.sourceTurnId, partial.turnId);
+      assert.equal(complete.analysis.status, 'complete', JSON.stringify(complete.analysis));
+      let cursor = null, found = false, pages = 0;
+      do {
+        const page = await store.readSnapshot(tx => pageAssistantWorkRead(tx, { userId: session.user.id, turnId: complete.turnId, readId: 'all', cursor }));
+        assert.ok(page.records.length <= 20);
+        assert.ok(Buffer.byteLength(JSON.stringify(page)) <= 48 * 1024);
+        found ||= JSON.stringify(page.records).includes('DISTINTIVO-ÚLTIMO');
+        cursor = page.pagination.nextCursor;
+        assert.ok(++pages < 256, 'persisted page cursor must advance');
+      } while (cursor);
+      assert.equal(found, true, 'the distinctive final record is not lost at a context boundary');
+      const unchanged = await store.get('products', product.id);
+      const forbidden = () => call('prepare_change', { target: 'record:products', entityId: product.id, patch: JSON.stringify({ description: 'Cambio prohibido' }), intent: 'save', sourceRefs: [] });
+      const malicious = scripted(forbidden, forbidden);
+      await assertInvalidAnswer(completeAssistantCycle(store, session, {
+        requestId: randomUUID(), threadId: complete.threadId, threadVersion: complete.threadVersion, continueFromTurnId: partial.turnId,
+      }, { providerFactory: malicious.factory }));
+      assert.deepEqual(await store.get('products', product.id), unchanged);
+    });
+
+    await t.test('global product ranking uses all report groups, including a winner beyond the first page', async () => {
+      const prefix = `rank-${randomUUID()}`, at = '2026-09-04T12:00:00.000Z';
+      const items = Array.from({ length: 26 }, (_, index) => ({
+        lineId: randomUUID(), kind: 'products', itemId: `${prefix}-${String(index).padStart(2, '0')}`, productType: 'product',
+        title: `${prefix} ${index}`, presentation: 'Unidad', quantity: 1,
+        unitPriceMinor: index === 25 ? 990000 : 10000 + index, discountMinor: 0,
+        unitCostMinor: index === 0 ? null : 3000, components: [],
+      }));
+      const totalMinor = items.reduce((sum, item) => sum + item.unitPriceMinor, 0);
+      const number = Number((await store.db.get(`SELECT COALESCE(MAX(number),0)+1 AS number FROM ${store.t('orders')}`)).number);
+      for (const [offset, month] of ['09', '08'].entries()) await insertRow(store, 'orders', {
+        id: randomUUID(), number: number + offset, created_at: at, updated_at: at,
+        data: JSON.stringify({ placedOn: `2026-${month}-01`, status: 'delivered', items, shippingChargeMinor: 0, subtotalMinor: totalMinor, totalMinor,
+          ruleSnapshot: { id: 'historical-rule', effectiveOn: '2026-01-01', saleRecognition: 'delivered', commission: { enabled: false } },
+          recognition: { on: `2026-${month}-03`, basis: 'delivered', ruleVersionId: 'historical-rule' },
+          deliverySummary: { complete: true, datedDeliveredQuantity: 26 }, giftDispatches: [] }),
+      });
+      const report = await buildBusinessReport(store, { period: 'month', anchorDate: '2026-09-15', asOf: '2026-10-02T12:00:00.000Z' });
+      const expected = [...report.groups.products].sort((left, right) => right.netSalesMinor - left.netSalesMinor).slice(0, 3);
+      const provider = scripted(
+        () => call('read_business', { domain: 'reports', query: JSON.stringify({ period: 'month', anchor: '2026-09-15' }), select: JSON.stringify({ mode: 'groups', group: 'products', sortBy: 'netSalesMinor', direction: 'desc', limit: 3 }) }),
+        ({ results }) => {
+          const read = results.find(item => item.name === 'read_business').result;
+          assert.deepEqual(read.records.map(item => item.id), expected.map(item => item.id));
+          assert.equal(read.records[0].netSalesMinor, 990000);
+          return finish({ topic: 'reports', blocks: [{ type: 'fact', evidenceIds: read.evidence.slice(0, 4).map(item => item.id) }] });
+        },
+      );
+      const result = await completeAssistantCycle(store, session, input({ message: 'Los tres productos con mayores ventas netas de septiembre de 2026.' }), { providerFactory: provider.factory });
+      assert.equal(result.analysis.status, 'complete', JSON.stringify(result.analysis));
+      assert.equal(result.receipt, null);
+    });
+
+    await t.test('open interval comparison explains authoritative values and preserves unknown contribution', async () => {
+      const query = {
+        startDate: '2026-09-01', endDateExclusive: addDays(bogotaDate(), 1),
+        compareTo: { startDate: '2026-08-01', endDateExclusive: '2026-09-01' },
+      };
+      const select = { mode: 'compare', metrics: ['netProductSales', 'contribution'] };
+      const expected = await readAssistantBusiness(store, session, { domain: 'reports', query, select });
+      assert.equal(expected.summary.comparison.equivalent, false);
+      assert.equal(expected.records.find(item => item.id === 'contribution').current.value, null);
+      assert.ok(expected.records.find(item => item.id === 'netProductSales').previous.value > 0);
+      let cited;
+      const provider = scripted(
+        () => call('read_business', { domain: 'reports', query: JSON.stringify(query), select: JSON.stringify(select) }),
+        ({ results }) => {
+          const read = results.find(item => item.name === 'read_business').result;
+          assert.deepEqual(read.records, expected.records);
+          cited = read.evidence.find(item => typeof item.value === 'number');
+          assert.ok(cited);
+          return finish({ topic: 'reports', blocks: [
+            { type: 'analysis', kind: 'explanation', segments: [{ type: 'text', text: 'La comparación usa los intervalos y días completos indicados por el informe.' }, { type: 'evidence', evidenceId: cited.id, display: 'value' }], evidenceIds: [cited.id] },
+            { type: 'analysis', kind: 'interpretation', segments: [{ type: 'text', text: 'La contribución desconocida impide concluir que el resultado sea una rentabilidad completa; esta comparación no demuestra una causa.' }], evidenceIds: [cited.id] },
+          ] });
+        },
+      );
+      const result = await completeAssistantCycle(store, session, input({ message: 'Compara las ventas y la contribución con el intervalo anterior; explica las limitaciones.' }), { providerFactory: provider.factory });
+      assert.equal(result.blocks.filter(block => block.type === 'analysis').length, 2, JSON.stringify(result.analysis));
+      assert.ok(result.evidence.some(item => item.id === cited.id));
+      assert.equal(result.receipt, null);
+      assert.ok(result.analysis.scope.datasets.some(dataset => dataset.startDate === query.startDate && dataset.endDateExclusive === query.endDateExclusive));
+    });
+
+    await t.test('stop before and after a durable read wins against a late provider response', async () => {
+      for (const afterRead of [false, true]) {
+        let status = await startAssistantTurn(store, session, input());
+        const entered = deferred(), release = deferred();
+        const provider = scripted(
+          ...(afterRead ? [() => readProduct(product)] : []),
+          async () => { entered.resolve(); await release.promise; return finish(); },
+        );
+        if (afterRead) {
+          while (!status.progress.readsCompleted) {
+            status = await advanceAssistantTurn(store, session, status.turnId, { requestId: randomUUID(), version: status.revision }, { providerFactory: provider.factory });
+            assert.equal(status.state, 'running');
           }
-          return result;
-        };
-        try{return await fn(tx);}finally{tx.db.run=run;}
-      });};
-      try{
-        await assert.rejects(()=>runAssistantTurn(store,session,request,{signal:controller.signal,providerFactory:scripted(()=>finish()).factory}),conflicted);
-      }finally{store.transaction=transaction;}
-      assert.equal(intercepted,true);
-      const turn=await assertNoReceipt(store,request.requestId,session);
-      assert.equal(turn.state,'cancelled');
-      assert.equal(JSON.parse(turn.data).publicResult,undefined);
-      assert.deepEqual(await store.get('products',product.id),before);
+          assert.ok(status.preview.evidence.length > 0);
+          assert.equal(status.preview.proposal, null);
+        }
+        const pending = advanceAssistantTurn(store, session, status.turnId, { requestId: randomUUID(), version: status.revision }, { providerFactory: provider.factory });
+        await arrive(pending, entered);
+        const stopped = await stopAssistantTurn(store, session, status.turnId, { requestId: randomUUID() });
+        assert.equal(stopped.state, 'completed');
+        assert.equal(stopped.result.analysis.reason, 'user_stopped');
+        assert.equal(stopped.result.receipt, null);
+        assert.equal(stopped.result.proposal, null);
+        assert.equal(stopped.progress.readsCompleted > 0, afterRead);
+        release.resolve();
+        await pending;
+        assert.deepEqual(await getAssistantTurnStatus(store, session, status.turnId), stopped);
+      }
+    });
+
+    await t.test('lost start and advance responses replay checkpoints without duplicate inference', async () => {
+      const request = input(), first = await startAssistantTurn(store, session, request);
+      assert.deepEqual(await startAssistantTurn(store, session, request), first);
+      const provider = scripted(() => readProduct(product));
+      const operation = { requestId: randomUUID(), version: first.revision };
+      const advanced = await advanceAssistantTurn(store, session, first.turnId, operation, { providerFactory: provider.factory });
+      assert.deepEqual(await advanceAssistantTurn(store, session, first.turnId, operation, { providerFactory: provider.factory }), advanced);
+      assert.equal(provider.calls(), 1);
+      await advanceAssistantTurn(store, session, first.turnId, { requestId: randomUUID(), version: first.revision }, { providerFactory: () => assert.fail('stale CAS must not send provider request') });
+      assert.equal(provider.calls(), 1);
+      await stopAssistantTurn(store, session, first.turnId, { requestId: randomUUID() });
+    });
+
+    await t.test('concurrent advances and expired leases cannot publish an old provider response', async () => {
+      let clock = Date.now();
+      const now = () => clock, entered = deferred(), release = deferred();
+      const initial = await startAssistantTurn(store, session, input(), { now });
+      const operation = { requestId: randomUUID(), version: initial.revision };
+      let sends = 0;
+      const pending = advanceAssistantTurn(store, session, initial.turnId, operation, { now, providerFactory: () => ({ async next() {
+        sends++; entered.resolve(); await release.promise; return finish();
+      } }) });
+      await arrive(pending, entered);
+      const competing = await advanceAssistantTurn(store, session, initial.turnId, { requestId: randomUUID(), version: initial.revision }, {
+        now, providerFactory: () => assert.fail('a live lease excludes a second provider send'),
+      });
+      assert.equal(competing.state, 'running');
+      clock += 46000;
+      await advanceAssistantTurn(store, session, initial.turnId, { requestId: randomUUID(), version: competing.revision }, {
+        now, providerFactory: () => ({ async next() { sends++; return finish(); } }),
+      });
+      const stopped = await stopAssistantTurn(store, session, initial.turnId, { requestId: randomUUID() }, { now });
+      release.resolve();
+      await pending;
+      assert.deepEqual(await getAssistantTurnStatus(store, session, initial.turnId, { now }), stopped);
+      assert.equal(stopped.result.receipt, null);
+      assert.ok(sends <= 2);
     });
 
     await t.test('a changed model rejects a late old response and the next turn uses the new revision', async () => {
       const entered = deferred(), release = deferred(), request = input();
       let calls = 0;
-      const pending = runAssistantTurn(store, session, request, { providerFactory: runtime => ({ async next() {
+      const pending = completeAssistantCycle(store, session, request, { providerFactory: runtime => ({ async next() {
         calls++;
         assert.equal(runtime.model, 'fixture-a');
         entered.resolve();
@@ -487,7 +662,7 @@ export async function runAssistantEngineContracts(t, store) {
         assert.equal(runtime.configurationVersion, settings.version);
         return readProduct(product);
       }, ({ results }) => finish({ topic: 'catalog', blocks: [{ type: 'fact', evidenceIds: [results[0].result.evidence.find(item => item.field === 'title').id] }] }));
-      const result = await runAssistantTurn(store, session, input(), { providerFactory: next.factory });
+      const result = await completeAssistantCycle(store, session, input(), { providerFactory: next.factory });
       assert.equal(result.configurationVersion, settings.version);
       assert.equal(result.evidence.find(item => item.field === 'title').value, product.title);
       assert.equal(result.receipt, null);

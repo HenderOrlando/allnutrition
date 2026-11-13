@@ -3,6 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { filterAssistantPatch, serializeAssistantDraft, serializeAssistantHumanAcknowledgements, validateAssistantSubmission, formatAssistantChangeValue } from '../lib/assistant/forms.mjs';
 import { validateAssistantReceipt } from '../lib/assistant/contracts.mjs';
+import { adminHref } from '../lib/admin-view.mjs';
+import { validateAssistantSelection } from '../lib/assistant/context.mjs';
 
 const BridgeContext = createContext(null);
 const cleanIdentity = value => value == null ? null : String(value);
@@ -38,10 +40,21 @@ const NO_PROVIDER = Object.freeze({
   executeBoundProposal:async()=>{throw new Error('No está disponible el guardado asistido.');},
   reviseBoundProposal:async()=>{throw new Error('No hay una propuesta asistida activa.');},
   cancelBoundProposal:async()=>({cancelled:false}),
+  registerSelection:()=>()=>{}, getSelection:()=>null,
 });
 
 export function AssistantBridgeProvider({ children, onOpenAssistant, onProposalOpen, reviseProposal, cancelProposal, executeProposal, onReceipt }) {
   const forms = useRef(new Map());
+  const selections = useRef(new Map());
+  const registerSelection = useCallback((identity, selection) => {
+    const entry = structuredClone(selection);
+    selections.current.set(identity, entry);
+    return () => { if (selections.current.get(identity) === entry) selections.current.delete(identity); };
+  }, []);
+  const getSelection = useCallback(view => {
+    const selection = selections.current.get(adminHref(view));
+    return selection ? structuredClone(selection) : null;
+  }, []);
   const owners = useRef(new Map());
   const activeFormId = useRef(null);
   const proposalHandlers = useRef({});
@@ -196,11 +209,11 @@ export function AssistantBridgeProvider({ children, onOpenAssistant, onProposalO
   const updateForm = useCallback(entry => {
     if (forms.current.get(entry.formId) === entry) publish();
   }, [publish]);
-  const value = useMemo(() => ({ revision, snapshot, registerOwner, requestOpen, handleProposalOpen,
+  const value = useMemo(() => ({ revision, snapshot, registerOwner, requestOpen, handleProposalOpen, registerSelection, getSelection,
     acknowledgeOpen, pendingOpen, getForm, getActiveForm, applyProposalToForm, bindProposalToForm,
     cancelProposalFromForm, invalidateProposal, registerForm, updateForm, reviseBoundProposal, cancelBoundProposal,
     executeBoundProposal, executeUnboundProposal, executeAutomaticProposal, getAutomaticLock, receipts:[...receiptStore.current.values()] }),
-  [revision, snapshot, registerOwner, requestOpen, handleProposalOpen, acknowledgeOpen, pendingOpen,
+  [revision, snapshot, registerOwner, requestOpen, handleProposalOpen, acknowledgeOpen, pendingOpen, registerSelection, getSelection,
     getForm, getActiveForm, applyProposalToForm, bindProposalToForm, cancelProposalFromForm, invalidateProposal,
     registerForm, updateForm, reviseBoundProposal, cancelBoundProposal, executeBoundProposal, executeUnboundProposal, executeAutomaticProposal, getAutomaticLock]);
   return <BridgeContext.Provider value={value}>{children}</BridgeContext.Provider>;
@@ -210,6 +223,16 @@ export function useAssistantBridge() {
   const bridge = useContext(BridgeContext);
   if (!bridge) throw new Error('useAssistantBridge debe usarse dentro de AssistantBridgeProvider.');
   return bridge;
+}
+
+export function useAssistantSelection({view, selection, enabled = true}) {
+  const bridge = useContext(BridgeContext) || NO_PROVIDER;
+  const identity = adminHref(view);
+  const serialized = JSON.stringify(enabled ? validateAssistantSelection(view, selection) : null);
+  useEffect(() => {
+    const value = JSON.parse(serialized);
+    if (value) return bridge.registerSelection(identity,value);
+  }, [bridge.registerSelection,identity,serialized]);
 }
 
 export function useAssistantForm({ target, entityId = null, recordVersion = null, values = {}, dirty = false, busy = false, applyPatch, acceptAutomaticResult, referenceChoices = null, enabled = true, generationKey = null }) {

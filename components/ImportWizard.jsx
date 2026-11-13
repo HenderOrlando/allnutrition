@@ -11,7 +11,7 @@ import ImportHistory from './ImportHistory';
 import ImportDecisionDialog from './ImportDecisionDialog';
 import ImportedData from './ImportedData';
 import ImportReviewEffects, { InventoryOpeningControls, ReviewExpenses } from './ImportReviewEffects';
-import { useAssistantBridge, useAssistantForm } from './AssistantBridge';
+import { useAssistantBridge, useAssistantForm, useAssistantSelection } from './AssistantBridge';
 import { formatMoneyMinor } from '@/lib/business/money.mjs';
 import { readAdminView } from '@/lib/admin-view.mjs';
 import styles from './OrderExperience.module.css';
@@ -109,6 +109,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  function includeSheet(name){const previous=workbookConfig.sheets.find(sheet=>sheet.sheetName===name);chooseSheetConfig({...previous||blankSheetConfig(name),enabled:true});}
  const [ownFiles,setOwnFiles]=useState(false),[fileCutoff,setFileCutoff]=useState(''),[openingDate,setOpeningDate]=useState(''),[selectedGroups,setSelectedGroups]=useState([]),[issueFilter,setIssueFilter]=useState('');
  const [pendingOnly,setPendingOnly]=useState(false),[rowQuery,setRowQuery]=useState(''),[rowLocation,setRowLocation]=useState(null),[sourceRowsOpen,setSourceRowsOpen]=useState(false);
+ useAssistantSelection({view,enabled:Boolean(savedBatchId && batch?.id === savedBatchId),selection:{kind:'import',batchId:savedBatchId,sheet:rowLocation?.sheet || null,rowNumber:rowLocation?.rowNumber ?? null,state:rowState || null,q:rowQuery,page}});
  const [resultLimits,setResultLimits]=useState({orders:20,shipments:20,expenses:20});
  const [productRecords,setProductRecords]=useState([]);
  const savedProductLinks=(batch?.resolutions||[]).filter(item=>item.action==='link_product');

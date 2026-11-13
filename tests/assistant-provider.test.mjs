@@ -421,10 +421,10 @@ test('the fixture emits source-bound literal edits and closed finish selectors',
   assert.equal(output.proposalId, 'synthetic-proposal-id');
 });
 
-test('provider never exceeds six network rounds or repeats a call identifier', async () => {
+test('provider respects its received sequence budget and rejects repeated call identifiers', async () => {
   let requests = 0;
   const runtime = { provider: 'openai-compatible', baseUrl: 'https://provider.example/v1', model: 'synthetic', apiKey: 'key' };
-  const provider = createAssistantProvider(runtime, { transport: async () => ({ choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [{ id: `call-${++requests}`, type: 'function', function: { name: 'read_business', arguments: '{}' } }] } }] }) });
+  const provider = createAssistantProvider(runtime, { limits:{maxRequests:6}, transport: async () => ({ choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [{ id: `call-${++requests}`, type: 'function', function: { name: 'read_business', arguments: '{}' } }] } }] }) });
   let response = await provider.next({ context: { instructions: 'bounded' }, tools: syntheticTools });
   for (let round = 1; round < 6; round++) response = await provider.next({ results: [{ callId: response.calls[0].id, result: {} }], tools: syntheticTools });
   await assert.rejects(provider.next({ results: [{ callId: response.calls[0].id, result: {} }], tools: syntheticTools }), { code: 'ASSISTANT_UNAVAILABLE' });
@@ -442,7 +442,7 @@ test('fixture binds nested money and dates to the raw current source message wit
   const tools = [...syntheticTools, { name: 'prepare_change', parameters: { type: 'object', properties: { target: { type: 'string' }, entityId: { type: ['string','null'] }, patch: { type: 'string' }, sourceRefs: { type: 'array', items: { type: 'object' } }, intent: { type: 'string' } }, required: ['target','entityId','patch','sourceRefs','intent'], additionalProperties: false } }];
   const sourceMessage = 'Completa 🧾 {"target":"order","patch":{"customerName":"Cliente QA","placedOn":"2026-11-10","shippingChargeMinor":"1.234,50","items":[{"unitPriceMinor":"50.000,00","discountMinor":0}],"notes":null}}';
   const provider = createAssistantProvider(runtime, { transport: localTransport });
-  const response = await provider.next({ context: { turnId: 'economic-turn', sourceMessage, userMessage: 'Authenticated wrapper unrelated to raw offsets' }, tools });
+  const response = await provider.next({ context: { turnId: 'economic-turn', sourceMessage, userMessage: 'Authenticated wrapper unrelated to raw offsets', pageContext:{form:{target:'order'}} }, tools });
   const prepared = response.calls[0];
   assert.equal(prepared.name, 'prepare_change');
   const patch = JSON.parse(prepared.arguments.patch);
@@ -456,7 +456,7 @@ test('fixture binds nested money and dates to the raw current source message wit
     assert.equal(sourceMessage.slice(ref.start, ref.end), literal);
   }
   const missing = createAssistantProvider(runtime, { transport: localTransport });
-  const question = await missing.next({ context: { sourceMessage, userMessage: 'Same data but no authenticated turn source' }, tools });
+  const question = await missing.next({ context: { sourceMessage, userMessage: 'Same data but no authenticated turn source', pageContext:{form:{target:'order'}} }, tools });
   assert.equal(question.calls[0].name, 'finish_turn');
   assert.deepEqual(JSON.parse(question.calls[0].arguments.payload).question, { kind: 'missing_field', target: 'order', field: 'placedOn' });
 });
@@ -520,7 +520,7 @@ test('fixture uses shared economic classification for salary agreement validity 
   const tools = [...syntheticTools, { name: 'prepare_change', parameters: { type: 'object', properties: { target: { type: 'string' }, entityId: { type: ['string','null'] }, patch: { type: 'string' }, sourceRefs: { type: 'array', items: { type: 'object' } }, intent: { type: 'string' } }, required: ['target','entityId','patch','sourceRefs','intent'], additionalProperties: false } }];
   const sourceMessage = '{"target":"settings:person","entityId":"person-qa","patch":{"salaryAgreements":[{"id":"existing-salary-row","amountPerPeriodMinor":"1.500.000,00","effectiveFrom":"2026-11-01","effectiveTo":"2026-11-30"}]}}';
   const provider = createAssistantProvider(runtime, { transport: localTransport });
-  const response = await provider.next({ context: { turnId: 'salary-source-turn', sourceMessage, userMessage: sourceMessage }, tools });
+  const response = await provider.next({ context: { turnId: 'salary-source-turn', sourceMessage, userMessage: sourceMessage, pageContext:{form:{target:'settings:person'}} }, tools });
   const call = response.calls[0];
   assert.equal(call.name, 'prepare_change');
   for (const [field, literal] of [['salaryAgreements.0.amountPerPeriodMinor','1.500.000,00'],['salaryAgreements.0.effectiveFrom','2026-11-01'],['salaryAgreements.0.effectiveTo','2026-11-30']]) {
@@ -579,7 +579,7 @@ test('initial wire sizing includes tools and Unicode escaping before oldest full
     assert.deepEqual(context, original, 'the sizing helper must not mutate caller memory');
     const before = server.requests.length;
     const oversized = createAssistantProvider(runtime, { transport: async () => { assert.fail('an oversized initial request must never reach transport'); } });
-    await assert.rejects(oversized.next({ context, tools }), error => error.code === 'ASSISTANT_UNAVAILABLE' && error.contextLimit === true);
+    await assert.rejects(oversized.next({ context:{...context,turns:[],instructions:'🧾'.repeat(30000)}, tools }), error => error.code === 'ASSISTANT_UNAVAILABLE' && error.contextLimit === true);
     assert.equal(server.requests.length, before);
     while (context.turns.length && assistantProviderContextBytes(runtime, context, tools) > 96 * 1024) context.turns.shift();
     assert.ok(context.turns.length > 0 && context.turns.length < original.turns.length);

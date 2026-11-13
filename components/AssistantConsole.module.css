@@ -115,3 +115,13 @@
   .message { max-width: 98%; }
   .diff li { grid-template-columns: minmax(65px, .6fr) minmax(0, 1fr) 12px minmax(0, 1fr); gap: 4px; font-size: 12px; }
 }
+
+.analysisScope,.progress,.readPage { min-width: 0; padding: 10px; border: 1px solid #cbd6cc; border-radius: 9px; margin: 8px 0; overflow-wrap: anywhere; }
+.analysisScope p,.progress p,.readPage p { margin: 5px 0; }
+.analysisScope button,.progress button,.readPage button { margin: 4px; max-width: 100%; border: 1px solid #286b3c; border-radius: 7px; padding: 7px 9px; color: #245a34; background: #fff; cursor: pointer; font: inherit; }
+.progress ol { display: flex; flex-wrap: wrap; gap: 7px 20px; padding-left: 20px; font-size: 12px; }
+.progress [aria-current=step] { font-weight: 750; color: #245a34; }
+.evidenceReference { display: inline; padding: 0 2px; border: 0; background: transparent; color: #216333; text-decoration: underline; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
+.readPage ul { padding-left: 20px; }
+.console,.messages,.result,.block { min-width: 0; }
+.composerActions,.composerActions>div { flex-wrap: wrap; }

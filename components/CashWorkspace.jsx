@@ -9,6 +9,7 @@ import {bogotaDate,periodBounds} from '@/lib/business/dates.mjs';
 import {formatMoneyMinor} from '@/lib/business/money.mjs';
 import {cashStateLabels as stateLabel,expenseCategoryLabels as category,cashMovementLabels} from './finance-labels.mjs';
 import styles from './FinanceExperience.module.css';
+import {useAssistantSelection} from './AssistantBridge';
 const tabs={overview:'Resumen y cuentas',movements:'Movimientos',settlements:'Liquidaciones',expenses:'Gastos y pagos',payroll:'Sueldos y anticipos'};
 const tabItems=Object.entries(tabs).map(([id,label])=>({id,label}));
 const operations=[['expense','Registrar gasto'],['income','Registrar ingreso'],['transfer','Transferir'],['cash-close','Cerrar caja']];
@@ -38,6 +39,7 @@ export default function CashWorkspace({api,view,onViewChange,onOpenOrder,onNavig
   const pendingReturn=useRef(null);
   const assistantOpening=useRef(null),assistantHandled=useRef(null);
   const bounds=periodBounds(period,anchor),record=view.record;
+  useAssistantSelection({view,enabled:tab==='overview' && Boolean(view.account),selection:{kind:'cash-closings',accountId:view.account,page:closingPage,recordId:record && record!==view.account ? record : null}});
   const queryKey=JSON.stringify([tab,record,view.account,view.q,view.page,view.status,view.seller,view.source,view.category,bounds.startDate,bounds.endDateExclusive,revision,retry,closingPage]);
   const isLoading=loading||dataKey!==queryKey,ready=!isLoading&&!error;
   const change=patch=>onViewChange({...patch,page:patch.page??1});
