@@ -288,7 +288,7 @@
 @media(max-width:767px) {
   .admin-theme .admin-heading {align-items:flex-start;flex-direction:column;gap:16px}
   .admin-theme .admin-heading .admin-actions {width:100%}
-  .admin-theme .settings-fields,.admin-theme .form-grid,.admin-theme .product-form-grid {grid-template-columns:1fr}
+  .admin-theme .settings-fields,.admin-theme .form-grid,.admin-theme .product-form-grid {grid-template-columns:minmax(0,1fr)}
   .admin-theme .product-form-field--description,.admin-theme .product-form-field--productInfo,.admin-theme .product-form-field--catalogIds {grid-column:auto}
   .admin-theme .settings-field--logo,.admin-theme .settings-field--whatsappTemplate,.admin-theme .settings-field--paymentInfo {grid-column:auto}
   .admin-theme .settings-save-bar {flex-direction:column;align-items:stretch;gap:8px}

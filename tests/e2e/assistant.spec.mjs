@@ -34,6 +34,21 @@ test('Ali: partial → explicit acceptance → durable stop → reload', async (
     expect(response.ok(), await response.text()).toBe(true);
   }
   await page.goto('/admin?section=business&tab=assistant');
+  await page.locator('select[name=provider]').selectOption('gemini');
+  await page.locator('select[name=authMethod]').selectOption('oauth');
+  // Clipped grids can hide overflow from document.scrollWidth.
+  for (const name of ['provider', 'authMethod', 'model', 'projectId']) {
+    const control = page.locator(`[name=${name}]`);
+    await expect(control).toBeVisible();
+    const bounds = await control.evaluate(element => {
+      const field = element.getBoundingClientRect(), grid = element.closest('.product-form-grid').getBoundingClientRect();
+      return { left: field.left, right: field.right, min: grid.left, max: Math.min(grid.right, innerWidth) };
+    });
+    expect(bounds.left, `${name} left edge`).toBeGreaterThanOrEqual(bounds.min - 1);
+    expect(bounds.right, `${name} right edge`).toBeLessThanOrEqual(bounds.max + 1);
+  }
+  await page.locator('select[name=authMethod]').scrollIntoViewIfNeeded();
+  await screenshot(page, info, 'assistant-oauth-controls');
   await page.locator('select[name=provider]').selectOption('openai-compatible');
   await page.locator('input[name=baseUrl]').fill(baseURL);
   await page.locator('input[name=model]').fill('fixture-a');
