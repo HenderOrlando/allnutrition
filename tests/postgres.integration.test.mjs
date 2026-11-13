@@ -5,8 +5,8 @@ import { openStore } from '../lib/db/index.mjs';
 import { openPostgres } from '../lib/db/postgres.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
 import { runContracts } from './contract.mjs';
-import { testDatabaseEnv, resetPostgresStore } from './postgres-fixture.mjs';
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11 } from '../lib/db/migrations.mjs';
+import { resetPostgresStore, withPostgresTestDatabase } from './postgres-fixture.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
 import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore,runSocialBackupContracts } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
@@ -33,12 +33,21 @@ import { runAssistantActionsContracts } from './assistant-actions-contract.mjs';
 import { runBusinessPayrollContracts } from './business-payroll.test.mjs';
 
 async function dropAssistantSchema(tx) {
- for(const table of [...ASSISTANT_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
- await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=11`);
+ for(const table of [...ASSISTANT_WORK_INTERNAL_TABLES].reverse())if((await tx.db.get('SELECT to_regclass(?) AS relation',[tx.t(table)])).relation)await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+ for(const table of [...ASSISTANT_OAUTH_INTERNAL_TABLES].reverse())if((await tx.db.get('SELECT to_regclass(?) AS relation',[tx.t(table)])).relation)await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+ for(const table of [...ASSISTANT_INTERNAL_TABLES].reverse())if((await tx.db.get('SELECT to_regclass(?) AS relation',[tx.t(table)])).relation)await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+ await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version IN (11,12,13)`);
+}
+
+async function restoreAssistantSchema(store) {
+ await migrateAssistantV11(store);
+ await migrateAssistantOAuthV12(store);
+ await migrateAssistantWorkV13(store);
 }
 
 async function migrationRows(store,{includeInternals=false}={}) {
- const internalTables=includeInternals?[...SOCIAL_TABLES,...SOCIAL_INTERNAL_TABLES,...INTEGRATION_INTERNAL_TABLES,...ASSISTANT_INTERNAL_TABLES]:ASSISTANT_INTERNAL_TABLES;
+ const assistantTables=[...ASSISTANT_INTERNAL_TABLES,...ASSISTANT_OAUTH_INTERNAL_TABLES,...ASSISTANT_WORK_INTERNAL_TABLES];
+ const internalTables=includeInternals?[...SOCIAL_TABLES,...SOCIAL_INTERNAL_TABLES,...INTEGRATION_INTERNAL_TABLES,...assistantTables]:assistantTables;
  const tables=['migrations','records','settings','users','sessions','attempts','orders','order_events','order_audit','counters','idempotency',...BUSINESS_TABLES,...internalTables];
  const result={};
  for(const table of tables) {
@@ -64,8 +73,8 @@ async function insertInsurance(store,fixture) {
 
 const url=process.env.TEST_DATABASE_URL;
 test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},async t=>{
- const env=testDatabaseEnv();
- const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);await migrateSocialV8(first);await migrateStockAlertsV9(first);await migrateRuntimeIntegrationsV10(first);await migrateAssistantV11(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=11`));}finally{await first.close();}
+ await withPostgresTestDatabase(async env=>{
+ const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);await migrateSocialV8(first);await migrateStockAlertsV9(first);await migrateRuntimeIntegrationsV10(first);await restoreAssistantSchema(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=13`));}finally{await first.close();}
  const factory=async()=>{
   const store=await openStore(env);
   try { await resetPostgresStore(store); return store; }
@@ -142,7 +151,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    assert.deepEqual(await migrateSocialV8(store),{migrated:false,version:8});
    assert.deepEqual(await migrationRows(store),migrated);
    assert.deepEqual(await store.db.get(`SELECT * FROM ${store.t('social_connections')} WHERE id='social-connection'`),connection);
-  }finally{try{await migrateSocialV8(store);await migrateRuntimeIntegrationsV10(store);await migrateAssistantV11(store);}finally{await store.close();}}
+  }finally{try{await migrateSocialV8(store);await migrateRuntimeIntegrationsV10(store);await restoreAssistantSchema(store);}finally{await store.close();}}
  });
  await t.test('avisos v9 amplía solo alert_rules_type_check y conserva reglas, episodios, permisos y marcadores',async()=>{
   const store=await factory();
@@ -194,7 +203,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    const migrated=await migrationRows(store);
    assert.deepEqual(await migrateStockAlertsV9(store),{migrated:false,version:9});
    assert.deepEqual(await migrationRows(store),migrated);
-  }finally{try{await migrateStockAlertsV9(store);await migrateAssistantV11(store);}finally{await store.close();}}
+  }finally{try{await migrateStockAlertsV9(store);await restoreAssistantSchema(store);}finally{await store.close();}}
  });
  await t.test('integraciones v10 conserva negocio, invalida OAuth pendiente y revierte DDL con su marcador',async()=>{
   const store=await factory();
@@ -205,8 +214,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    original=await migrationRows(store,{includeInternals:true});
    await store.transaction(async tx=>{
     await tx.lockWrites();
-    for(const table of [...ASSISTANT_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
-    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=11`);
+    await dropAssistantSchema(tx);
     for(const table of [...INTEGRATION_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
     await tx.db.exec(`ALTER TABLE ${tx.t('social_oauth_states')} DROP COLUMN configuration_version`);
     await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=10`);
@@ -254,19 +262,18 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
      await store.transaction(async tx=>{
       await tx.lockWrites();
       await tx.db.run(`DELETE FROM ${tx.t('social_oauth_states')}`);
-      for(const table of [...ASSISTANT_INTERNAL_TABLES].reverse())if((await tx.db.get('SELECT to_regclass(?) AS relation',[tx.t(table)])).relation)await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
-      await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=11`);
+      await dropAssistantSchema(tx);
       for(const table of [...INTEGRATION_INTERNAL_TABLES].reverse())if((await tx.db.get('SELECT to_regclass(?) AS relation',[tx.t(table)])).relation)await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
       await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=10`);
       if(await tx.db.get("SELECT 1 FROM information_schema.columns WHERE table_schema='allnutrition' AND table_name='social_oauth_states' AND column_name='configuration_version'"))await tx.db.exec(`ALTER TABLE ${tx.t('social_oauth_states')} DROP COLUMN configuration_version`);
      });
      await migrateRuntimeIntegrationsV10(store);
-     await migrateAssistantV11(store);
-     for(const marker of original.migrations.filter(row=>row.version===10||row.version===11))await store.db.run(`UPDATE ${store.t('migrations')} SET applied_at=? WHERE version=?`,[marker.applied_at,marker.version]);
+     await restoreAssistantSchema(store);
+     for(const marker of original.migrations.filter(row=>[10,11,12,13].includes(row.version)))await store.db.run(`UPDATE ${store.t('migrations')} SET applied_at=? WHERE version=?`,[marker.applied_at,marker.version]);
      assert.deepEqual(await migrationRows(store,{includeInternals:true}),original);
     }else{
      await migrateRuntimeIntegrationsV10(store);
-     await migrateAssistantV11(store);
+     await restoreAssistantSchema(store);
     }
    }finally{await store.close();}
   }
@@ -317,7 +324,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    assert.deepEqual(await migrateShippingInsuranceV6(store),{migrated:false,version:6});
    assert.deepEqual(await migrationRows(store),migrated);assert.deepEqual(await expenseSchema(store),migratedSchema);
   }finally{
-   try{await migrateShippingInsuranceV6(store);await migrateWorkbookImportV7(store);await migrateAssistantV11(store);}finally{await store.close();}
+   try{await migrateShippingInsuranceV6(store);await migrateWorkbookImportV7(store);await restoreAssistantSchema(store);}finally{await store.close();}
   }
  });
  await runContracts(t,factory);await runBusinessContracts(t,factory);
@@ -382,7 +389,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    const migrated=await migrationRows(store),migratedSchema=await expenseSchema(store);
    assert.deepEqual(await migrateWorkbookImportV7(store),{migrated:false,version:7});
    assert.deepEqual(await migrationRows(store),migrated);assert.deepEqual(await expenseSchema(store),migratedSchema);
-  }finally{try{await migrateWorkbookImportV7(store);await migrateAssistantV11(store);}finally{await store.close();}}
+  }finally{try{await migrateWorkbookImportV7(store);await restoreAssistantSchema(store);}finally{await store.close();}}
  });
  await t.test('restaura negocio SQLite en PostgreSQL y reanuda trabajo con el actor original',async()=>{
   const source=await openStore({DB_DRIVER:'sqlite',SQLITE_PATH:':memory:'});
@@ -404,5 +411,6 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
  await t.test('restauración histórica en PostgreSQL conserva abono de 20000 COP sin inventar caja',async()=>{
   const target=await factory();
   try{await assertLegacyPartialRestore(target);}finally{await target.close();}
+ });
  });
 });

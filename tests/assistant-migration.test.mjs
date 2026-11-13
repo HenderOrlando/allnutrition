@@ -5,15 +5,23 @@ import { openStore } from '../lib/db/index.mjs';
 import { createAdmin } from '../lib/auth.mjs';
 import { insertRow } from '../lib/business/commands.mjs';
 import { importData } from '../lib/import.mjs';
-import { migrateAssistantV11, ASSISTANT_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
+import { migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
 import { emptyRecord } from '../lib/schema.mjs';
 
 async function dropAssistant(store) {
   await store.transaction(async tx => {
     await tx.lockWrites();
+    for (const table of [...ASSISTANT_WORK_INTERNAL_TABLES].reverse()) await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+    for (const table of [...ASSISTANT_OAUTH_INTERNAL_TABLES].reverse()) await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version IN (12,13)`);
     for (const table of [...ASSISTANT_INTERNAL_TABLES].reverse()) await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
     await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=11`);
   });
+}
+async function restoreAssistant(store) {
+  await migrateAssistantV11(store);
+  await migrateAssistantOAuthV12(store);
+  await migrateAssistantWorkV13(store);
 }
 async function relation(store, table) {
   return store.provider === 'sqlite'
@@ -55,7 +63,7 @@ export async function runAssistantMigrationContracts(t, factory, { openRuntime =
       assert.deepEqual(await migrateAssistantV11(store), { migrated: false, version: 11 });
       assert.deepEqual(await schema(store), created);
       if (store.provider === 'sqlite') assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
-    } finally { await migrateAssistantV11(store); await store.close(); }
+    } finally { await restoreAssistant(store); await store.close(); }
   });
   await t.test('marker failure rolls back every v11 table and index and allows a clean retry', async () => {
     const store = await factory();
@@ -77,7 +85,7 @@ export async function runAssistantMigrationContracts(t, factory, { openRuntime =
       assert.equal(await store.db.get(`SELECT version FROM ${store.t('migrations')} WHERE version=11`), null);
       assert.deepEqual(await migrateAssistantV11(store), { migrated: true, version: 11 });
       if (store.provider === 'sqlite') assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
-    } finally { await migrateAssistantV11(store); await store.close(); }
+    } finally { await restoreAssistant(store); await store.close(); }
   });
   await t.test('missing v10 rejects v11 atomically', async () => {
     const store = await factory();
@@ -90,7 +98,7 @@ export async function runAssistantMigrationContracts(t, factory, { openRuntime =
       for (const table of ASSISTANT_INTERNAL_TABLES) assert.equal(await relation(store, table), false);
     } finally {
       if (original) await store.db.run(`INSERT INTO ${store.t('migrations')}(version,applied_at) VALUES(10,?)`, [original.applied_at]);
-      await migrateAssistantV11(store);
+      await restoreAssistant(store);
       await store.close();
     }
   });

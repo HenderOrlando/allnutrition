@@ -2,7 +2,7 @@ import './env.mjs';
 import { readFileSync } from 'node:fs';
 import { openStore } from '../lib/db/index.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
-import { migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11 } from '../lib/db/migrations.mjs';
+import { migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13 } from '../lib/db/migrations.mjs';
 
 async function provisionAppRole(db, password) {
   const role = 'allnutrition_app';
@@ -49,6 +49,8 @@ try {
   await migrateStockAlertsV9(store);
   await migrateRuntimeIntegrationsV10(store);
   await migrateAssistantV11(store);
+  await migrateAssistantOAuthV12(store);
+  await migrateAssistantWorkV13(store);
   const provider = store.provider;
   if (provision) {
     const migrated = await store.db.get('SELECT current_database() AS name');
@@ -59,7 +61,7 @@ try {
     const runtime = await store.db.get('SELECT current_user AS role, current_database() AS name');
     if (runtime.role !== 'allnutrition_app' || runtime.name !== migrated.name) throw new Error('DATABASE_URL debe abrir la base migrada con el rol limitado allnutrition_app.');
   }
-  console.log(`Migración v11 completada en ${provider}${provision ? ' y conexión runtime limitada verificada' : ''}. No se borraron registros comerciales.`);
+  console.log(`Migración v13 completada en ${provider}${provision ? ' y conexión runtime limitada verificada' : ''}. No se borraron registros comerciales.`);
 } catch (error) {
   const message = process.env.DB_APP_PASSWORD ? error.message.replaceAll(process.env.DB_APP_PASSWORD, '[redactado]') : error.message;
   console.error(`No se completó la migración: ${message}`);
