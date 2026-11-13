@@ -1,5 +1,18 @@
 # Cambios — administración v3 y antecedentes
 
+## Ali v13 desplegado · 13 de noviembre de 2026
+
+- Producción en `allnutrition:release-36c097882f8a`, con runner `allnutrition-social-browser:release-7aa58d58f78e`, fuente `ddd03e6e9f4a55c97d88cc6d30a64cb59cb30851`, sin rebuild al promover.
+- Consultas contextuales, análisis recuperable y alternativa Google/Gemini OAuth publicados. APIKey y habilitación existentes preservadas; Google OAuth requiere configurar el cliente del servidor y no se autenticó una cuenta real durante el despliegue.
+- Migración inicial v11→v13 seguida de corrección móvil sin nueva migración: 69 tablas, datos/medios/sesiones preservados y PostgreSQL sin reinicios. Aceptación nativa nueva: 1859 contratos, 72 E2E y 17 compuertas; restauración real, respaldo final externo cifrado y revisión productiva escritorio/móvil aprobados.
+- Meta y Heka mantienen su estado previo, sin operaciones externas. Procedimiento, hashes, límites y material de recuperación en [DESPLIEGUE.md](DESPLIEGUE.md) y [VERIFICACION.md](VERIFICACION.md).
+
+## Ali · presentación móvil de autenticación · 13 de noviembre de 2026
+
+- Las columnas móviles de formularios usan `minmax(0,1fr)`: opciones largas no amplían la rejilla ni recortan proveedor, autenticación, modelo o proyecto.
+- Las descripciones admiten saltos en URLs largas, incluido el endpoint de Gemini. Sin cambios en credenciales, proveedor guardado, autorización o cálculos comerciales.
+- El E2E existente comprueba los límites reales de los cuatro controles y la legibilidad del endpoint en escritorio/móvil, además del ancho del documento. Evidencia del primer corte, revisión visual y aceptación posterior en [VERIFICACION.md](VERIFICACION.md).
+
 ## Ali · consultas contextuales y análisis recuperable · integración local · 12 de noviembre de 2026
 
 - Alcance fijado al enviar, incluidas métrica guardada, fila/hoja de importación y página de cierres. Intervalos explícitos reutilizan cálculos comerciales; rankings ordenan el grupo completo.
