@@ -5,7 +5,7 @@ const config = {
   outputFileTracingIncludes: { '/*': ['./db/*.sql'] },
   outputFileTracingExcludes: { '/*': ['./data/**/*', './.test-data/**/*', './desktop/**/*', './.env*'] },
   logging: {
-    incomingRequests: { ignore: [/\/api\/admin\/social\/oauth\/callback(?:\?|$)/, /\/api\/social\/media\//] },
+    incomingRequests: { ignore: [/\/api\/admin\/(?:social|assistant)\/oauth\/callback(?:\?|$)/, /\/api\/social\/media\//] },
     browserToTerminal: false,
   },
   async headers() {

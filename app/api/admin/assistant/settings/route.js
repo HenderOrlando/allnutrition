@@ -4,7 +4,7 @@ import { fail } from '../../../../../lib/validation-core.mjs';
 
 export const runtime = 'nodejs';
 
-const SETTINGS_INPUT_KEYS = new Set(['version', 'requestId', 'enabled', 'provider', 'baseUrl', 'model', 'allowPrivateNetwork', 'apiKey', 'clearApiKey']);
+const SETTINGS_INPUT_KEYS = new Set(['version', 'requestId', 'enabled', 'provider', 'baseUrl', 'model', 'allowPrivateNetwork', 'apiKey', 'clearApiKey', 'authMethod', 'projectId']);
 function validateSettingsInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('Configuración no válida.');
   for (const key of Object.keys(input)) if (!SETTINGS_INPUT_KEYS.has(key)) fail(`Campo no permitido en configuración: ${key}.`);
