@@ -40,6 +40,9 @@ test('worker CLI rejects unknown or duplicate arguments before creating a databa
 
 test('normal once worker preserves its result and does not report browser health', async t => {
   const env = await environment(t);
+  // Production migrates before starting the worker; schema I/O is not its deadline.
+  const prepared = await openStore(env);
+  await prepared.close();
   const { stdout } = await run(['--once'], env);
   const result = JSON.parse(stdout);
   assert.equal(result.browser, undefined);
