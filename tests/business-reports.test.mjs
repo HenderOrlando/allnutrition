@@ -8,9 +8,12 @@ import { addDays, bogotaDate, periodBounds } from '../lib/business/dates.mjs';
 import { bumpRevision, insertRow } from '../lib/business/commands.mjs';
 import { claimJob, queueJobTx } from '../lib/business/job-leases.mjs';
 import {
-  allocateReportAmount, buildBusinessReport, generateReportSnapshot, getReportSnapshot,
+  allocateReportAmount, buildBusinessReport, buildBusinessRangeReportTx, generateReportSnapshot, getReportSnapshot,
   listReportSnapshots, normalizeReportQuery, processReportTurn, reportDetails, saveReportSnapshot,
 } from '../lib/business/reports.mjs';
+
+import { dashboardComparisonTx, dashboardMetricComparisons } from '../lib/business/dashboard.mjs';
+import { readAssistantBusiness } from '../lib/assistant/readers.mjs';
 
 const actor = 'report-admin';
 const recordedAt = '2026-08-01T12:00:00.000Z';
@@ -543,4 +546,63 @@ test('a daily-cut collection stays unknown-date money today and never proves a b
   const earlier=await buildBusinessReport(store,{period:'day',anchorDate:'2026-09-15',asOf:'2026-09-30T17:00:00.000Z'});
   assert.equal(earlier.metrics.platformPending.value,null);assert.equal(earlier.metrics.platformPending.excludedCount,1);
   assert.equal(earlier.metrics.cashAvailable.value,0);
+});
+
+
+test('explicit cross-month ranges calculate sales, balances and rates once and preserve calendar identities',async t=>{
+  const store=await fixture(t),personId=await person(store),accountId=randomUUID();
+  await insertRow(store,'cash_accounts',{id:accountId,name:'Cuenta del rango',type:'bank',opening_on:'2026-09-01',responsible_id:personId,active:1,version:1,created_at:recordedAt,updated_at:recordedAt,data:'{}'});
+  for(const [effectiveOn,amountMinor,kind] of [['2026-09-01',10000,'opening'],['2026-10-01',500,'owner_funding']]){const id=randomUUID();await insertRow(store,'cash_entries',{id,account_id:accountId,effective_on:effectiveOn,amount_minor:amountMinor,kind,source_type:kind,source_id:id,transfer_id:null,reversal_of:null,recorded_at:recordedAt,data:'{}'});}
+  const september=await putOrder(store,{recognition:{on:'2026-09-29',basis:'delivered',ruleVersionId:'historical-rule'}});
+  const october=await putOrder(store,{recognition:{on:'2026-10-02',basis:'delivered',ruleVersionId:'historical-rule'},items:[line({itemId:'other-product',unitPriceMinor:20000,unitCostMinor:null})]});
+  await putShipment(store,september.id,{estimatedDeliveryOn:'2026-09-30',events:[{status:'collected',occurredOn:'2026-09-28'},{status:'delivered',occurredOn:'2026-09-29'}]});
+  await putShipment(store,october.id,{estimatedDeliveryOn:'2026-10-01',events:[{status:'collected',occurredOn:'2026-09-30'},{status:'delivered',occurredOn:'2026-10-02'}]});
+  const range=await store.readSnapshot(tx=>buildBusinessRangeReportTx(tx,{startDate:'2026-09-28',endDateExclusive:'2026-10-04',asOf}));
+  assert.equal(range.query.period,'range');
+  assert.equal(range.bounds.startAt,'2026-09-28T05:00:00.000Z');assert.equal(range.bounds.endAt,'2026-10-04T05:00:00.000Z');
+  assert.equal(range.metrics.netProductSales.value,30000);
+  assert.equal(range.metrics.cashAvailable.value,10500,'balance is a cutoff, never a sum of daily balances');
+  assert.equal(range.metrics.onTimeDeliveries.value,5000);
+  assert.equal(range.metrics.onTimeDeliveries.denominator,2);
+  assert.equal(range.metrics.costOfGoods.value,null);assert.equal(range.metrics.costOfGoods.knownValue,3000);
+  const calendar=await buildBusinessReport(store,query('2026-09-01'));
+  const sameCalendar=await buildBusinessReport(store,query('2026-09-29'));
+  assert.equal(calendar.queryKey,sameCalendar.queryKey);
+  assert.notEqual(range.queryKey,calendar.queryKey);
+  const otherRange=await store.readSnapshot(tx=>buildBusinessRangeReportTx(tx,{startDate:'2026-09-27',endDateExclusive:'2026-10-04',asOf}));
+  assert.notEqual(range.queryKey,otherRange.queryKey);
+  await assert.rejects(()=>store.readSnapshot(tx=>buildBusinessRangeReportTx(tx,{startDate:'2026-10-04',endDateExclusive:'2026-10-04'})));
+  assert.throws(()=>normalizeReportQuery({period:'range'}),'range is not a schedulable calendar period');
+});
+
+test('range comparisons use completed days, exact differences, missing costs and non-equivalent windows',async t=>{
+  const store=await fixture(t);
+  await putOrder(store,{recognition:{on:'2026-09-30',basis:'delivered',ruleVersionId:'historical-rule'},items:[line({unitPriceMinor:20000,unitCostMinor:null})]});
+  await putOrder(store,{recognition:{on:'2026-09-24',basis:'delivered',ruleVersionId:'historical-rule'}});
+  const open=await store.readSnapshot(tx=>buildBusinessRangeReportTx(tx,{startDate:'2026-09-28',endDateExclusive:'2026-10-04',asOf:'2026-10-01T16:00:00.000Z'}));
+  const comparison=await store.readSnapshot(tx=>dashboardComparisonTx(tx,open));
+  assert.equal(comparison.mode,'elapsed');assert.equal(comparison.equivalent,true);
+  assert.equal(comparison.currentBounds.endDateExclusive,'2026-10-01');
+  assert.equal(comparison.previousBounds.endDateExclusive,'2026-09-25');
+  const values=dashboardMetricComparisons(comparison);
+  assert.equal(values.netProductSales.difference,10000);assert.equal(values.netProductSales.changeBps,10000);
+  assert.equal(values.contribution.currentValue,null);assert.equal(values.contribution.difference,null);
+  const different=await store.readSnapshot(tx=>dashboardComparisonTx(tx,open,{previousRange:{startDate:'2026-09-20',endDateExclusive:'2026-09-22'}}));
+  assert.equal(different.equivalent,false);assert.equal(dashboardMetricComparisons(different).netProductSales.changeBps,null);
+  const empty=await store.readSnapshot(tx=>buildBusinessRangeReportTx(tx,{startDate:'2026-07-01',endDateExclusive:'2026-07-03',asOf}));
+  const zero=dashboardMetricComparisons(await store.readSnapshot(tx=>dashboardComparisonTx(tx,empty)));
+  assert.equal(zero.netProductSales.changeBps,null);assert.equal(zero.netProductSales.reason,'no_comparison_base');
+});
+
+test('Ali ranks the complete product group before selecting a top-three result',async t=>{
+  const store=await fixture(t);
+  for(let index=0;index<25;index++)await putOrder(store,{items:[line({itemId:`rank-${String(index).padStart(2,'0')}`,title:`Ranking ${index}`,unitPriceMinor:index===24?999999:10000+index,unitCostMinor:index===23?null:3000})]});
+  const expected=await buildBusinessReport(store,query());
+  const ranking=await readAssistantBusiness(store,{user:{id:actor}},{domain:'reports',query:{period:'month',anchor:'2026-09-01'},select:{mode:'groups',group:'products',sortBy:'netSalesMinor',direction:'desc',limit:3,fields:['label','netSalesMinor','units']}});
+  const ordered=[...expected.groups.products].sort((a,b)=>b.netSalesMinor-a.netSalesMinor||a.id.localeCompare(b.id)).slice(0,3);
+  assert.deepEqual(ranking.records.map(row=>row.id),ordered.map(row=>row.id));
+  assert.equal(ranking.records[0].id,'rank-24');
+  assert.equal(ranking.retrieval.recordsTotal,25);assert.equal(ranking.retrieval.selection,'sample');
+  assert.ok(Buffer.byteLength(JSON.stringify(ranking))<=16*1024);
+  await assert.rejects(()=>readAssistantBusiness(store,{user:{id:actor}},{domain:'reports',query:{period:'month',anchor:'2026-09-01'},select:{mode:'groups',group:'products',sortBy:'label'}}));
 });
