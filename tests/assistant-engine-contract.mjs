@@ -163,7 +163,6 @@ export async function runAssistantEngineContracts(t, store) {
           assert.equal(context.memory.goal, original.message);
           assert.ok(context.userMessage.includes(option.label));
           assert.ok(context.userMessage.includes(first.question.prompt));
-          assert.equal(context.turns[0].result.evidence, undefined, 'historical citations must not be resent as current facts');
           return call('read_application', { taskId: tasks[0] });
         },
         ({ results }) => finish({ blocks: [{ type: 'guide', taskId: results[0].result.taskId, stepIds: [] }] }),
@@ -199,7 +198,6 @@ export async function runAssistantEngineContracts(t, store) {
       const fresh = scripted(
         ({ context }) => {
           assert.ok(context.memory.entityRefs.some(ref => ref.entityId === product.id && ref.recordVersion === previousEvidence.recordVersion));
-          assert.equal(context.turns.some(turn => JSON.stringify(turn.result).includes(previousEvidence.value)), false);
           return readProduct(product);
         },
         ({ results }) => {
@@ -437,8 +435,6 @@ export async function runAssistantEngineContracts(t, store) {
       let status=await startAssistantTurn(store,session,{requestId:randomUUID(),threadId:partial.threadId,threadVersion:partial.threadVersion,continueFromTurnId:partial.turnId});
       const advance=()=>advanceAssistantTurn(store,session,status.turnId,{requestId:randomUUID(),version:status.revision},{providerFactory:()=>({next:async args=>summarize(args)})});
       status=await advance();
-      assert.equal(status.phase,'analyzing');
-      status=await advance();
       assert.equal(status.state,'running');
       const changed=await store.save('products',{...rows[0],title:`${rows[0].title} · actualizado`},rows[0].id,rows[0].version,session.user.id);
       for(let steps=0;status.state==='running';steps++) {
@@ -451,6 +447,19 @@ export async function runAssistantEngineContracts(t, store) {
       assert.equal(status.progress.recordsRead,rows.length);
       assert.equal(new Set(status.result.analysis.scope.datasets.map(item=>item.sourceStamp)).size,1);
       assert.equal(status.result.evidence.some(item=>item.entityId===changed.id&&item.field==='title'&&item.value===rows[0].title),false);
+      const changedAgain=await store.save('products',{...changed,title:`${changed.title} · última revisión`},changed.id,changed.version,session.user.id);
+      const analyses=[],freshFindings=[];
+      const resumed=await completeAssistantCycle(store,session,{
+        requestId:randomUUID(),threadId:partial.threadId,threadVersion:status.result.threadVersion,continueFromTurnId:partial.turnId,
+      },{providerFactory:()=>({next:async args=>{
+        analyses.push(...args.context.analyses);
+        freshFindings.push(...args.context.findings.flatMap(item=>item.result.evidence));
+        return summarize(args);
+      }})});
+      assert.equal(resumed.analysis.status,'complete',JSON.stringify(resumed.analysis));
+      assert.equal(resumed.analysis.reason,'source_changed');
+      assert.ok(freshFindings.some(item=>item.entityId===changedAgain.id&&item.field==='title'&&item.value===changedAgain.title));
+      assert.equal(analyses.flatMap(item=>item.evidence).some(item=>item.entityId===changedAgain.id&&item.field==='title'&&[rows[0].title,changed.title].includes(item.value)),false,'changed sources cannot restore an obsolete synthesis');
     });
 
     await t.test('Unicode catalog exceeds the old context and extended review reaches the final persisted fragment', async () => {
@@ -466,28 +475,51 @@ export async function runAssistantEngineContracts(t, store) {
       const review = () => call('read_business', { domain: 'catalog', query: JSON.stringify(query), select: JSON.stringify({ mode: 'records', fields: ['title', 'description', 'presentation', 'productInfo', 'flavor'], limit: null }) });
       const summarize = ({ context }) => {
         const evidence = [...new Map([
+          ...(context.analyses || []).flatMap(item => item.evidence || []),
           ...(context.findings || []).flatMap(item => item.result?.evidence || []),
           ...(context.results || []).filter(item => item.name === 'read_business').flatMap(item => item.result?.evidence || []),
-        ].map(item => [item.id, item])).values()];
-        return finish({ topic: 'catalog', blocks: evidence.length ? [{ type: 'fact', evidenceIds: evidence.slice(0, 4).map(item => item.id) }] : [{ type: 'text', templateId: 'missing_data', slots: {} }] });
+        ].filter(item => item.field === 'title').map(item => [item.id, item])).values()];
+        const retained = [...new Map([...evidence.slice(0, 2), ...evidence.slice(-2)].map(item => [item.id, item])).values()];
+        return finish({ topic: 'catalog', blocks: retained.length ? [{ type: 'analysis', kind: 'explanation', segments: [{ type: 'text', text: 'La revisión conserva los hallazgos previos y añade los registros siguientes.' }], evidenceIds: retained.map(item => item.id) }] : [{ type: 'text', templateId: 'missing_data', slots: {} }] });
       };
       const quickProvider = scripted(review, summarize);
       const partial = await completeAssistantCycle(store, session, input({ message: `Revisa todos los textos ${marker}.` }), { providerFactory: quickProvider.factory });
       assert.equal(partial.analysis.status, 'partial');
       assert.equal(partial.analysis.canContinue, true);
       assert.ok(quickProvider.calls() <= 2, 'quick review never silently starts extended work');
-      const extendedProvider = scripted(...Array.from({ length: 24 }, () => args => {
-        const names = args.tools.map(tool => tool.name || tool.function?.name);
-        assert.equal(names.includes('prepare_change'), false);
-        assert.equal(names.includes('describe_form'), false);
-        assert.equal(args.context.mode, 'extended');
-        return summarize(args);
-      }));
-      const complete = await completeAssistantCycle(store, session, {
-        requestId: randomUUID(), threadId: partial.threadId, threadVersion: partial.threadVersion, continueFromTurnId: partial.turnId,
-      }, { providerFactory: extendedProvider.factory });
-      assert.equal(complete.analysis.sourceTurnId, partial.turnId);
-      assert.equal(complete.analysis.status, 'complete', JSON.stringify(complete.analysis));
+      let clock=Date.now(),previous=partial,complete;
+      const findings=[],contexts=[],budgets=[];
+      for(let acceptance=0;acceptance<8;acceptance++) {
+        const extendedProvider=scripted(...Array.from({length:24},()=>args=>{
+          const names=args.tools.map(tool=>tool.name||tool.function?.name);
+          assert.equal(names.includes('prepare_change'),false);
+          assert.equal(names.includes('describe_form'),false);
+          contexts.push(args.context);
+          findings.push(...args.context.findings.map(item=>item.chunkId));
+          // A slow provider consumes active work, but never outlives its lease.
+          clock+=31_000;
+          return summarize(args);
+        }));
+        complete=await completeAssistantCycle(store,session,{
+          requestId:randomUUID(),threadId:previous.threadId,threadVersion:previous.threadVersion,continueFromTurnId:previous.turnId,
+        },{providerFactory:extendedProvider.factory,now:()=>clock});
+        assert.equal(complete.analysis.sourceTurnId,previous.turnId);
+        assert.equal(complete.evidence.some(item=>item.entityId===products[0].id&&item.field==='title'),true,'the first finding survives every accepted expansion');
+        if(complete.analysis.status==='complete')break;
+        assert.equal(complete.analysis.reason,'work_budget',JSON.stringify(complete.analysis));
+        assert.equal(complete.analysis.canContinue,true);
+        assert.equal(complete.blocks.some(block=>block.type==='analysis'),true,'a budget boundary preserves the synthesis, not only raw facts');
+        budgets.push(complete);
+        previous=complete;
+      }
+      assert.ok(budgets.length>0,'the review spans more than one accepted budget');
+      assert.equal(complete.analysis.status,'complete',JSON.stringify(complete.analysis));
+      assert.equal(complete.evidence.some(item=>item.entityId===products.at(-1).id&&item.field==='title'),true,'final synthesis includes the last record as well as the first');
+      assert.equal(new Set(findings).size,findings.length,'analyzed fragments are not replayed across expansions');
+      assert.ok(contexts.every(context=>context.mode==='extended'&&context.analyses.length>0),'every phase receives its previous grounded synthesis');
+      assert.deepEqual(complete.analysis.scope.view,partial.analysis.scope.view);
+      assert.deepEqual(complete.analysis.scope.selection,partial.analysis.scope.selection);
+      assert.ok(contexts.every(context=>context.sourceMessage===`Revisa todos los textos ${marker}.`),'accepted expansions retain the original goal');
       let cursor = null, found = false, pages = 0;
       do {
         const page = await store.readSnapshot(tx => pageAssistantWorkRead(tx, { userId: session.user.id, turnId: complete.turnId, readId: 'all', cursor }));
@@ -505,6 +537,34 @@ export async function runAssistantEngineContracts(t, store) {
         requestId: randomUUID(), threadId: complete.threadId, threadVersion: complete.threadVersion, continueFromTurnId: partial.turnId,
       }, { providerFactory: malicious.factory }));
       assert.deepEqual(await store.get('products', product.id), unchanged);
+    });
+
+    await t.test('a written request to continue receives prior conclusions without granting historical evidence authority',async()=>{
+      const request=input({message:'Explica el producto y después continúa la revisión.'});
+      let priorEvidence;
+      const first=await completeAssistantCycle(store,session,request,{providerFactory:scripted(
+        ()=>readProduct(product),
+        ({results})=>{
+          priorEvidence=results[0].result.evidence.find(item=>item.field==='title');
+          return finish({topic:'catalog',blocks:[{type:'analysis',kind:'interpretation',segments:[{type:'text',text:'Este hallazgo debe conservarse al continuar la revisión.'}],evidenceIds:[priorEvidence.id]}]});
+        },
+      ).factory});
+      let history;
+      const next=await completeAssistantCycle(store,session,continueInput(first,{message:'Continúa con el análisis de la información.'}),{providerFactory:scripted(
+        ({context})=>{
+          history=context.turns.find(turn=>turn.turnId===first.turnId)?.result;
+          return readProduct(product);
+        },
+        ({results})=>finish({topic:'catalog',blocks:[{type:'fact',evidenceIds:[results[0].result.evidence.find(item=>item.field==='title').id]}]}),
+      ).factory});
+      assert.deepEqual(history.blocks,first.blocks);
+      assert.deepEqual(history.analysis,first.analysis);
+      assert.ok(history.evidence.some(item=>item.id===priorEvidence.id));
+      const current=next.evidence.find(item=>item.entityId===product.id&&item.field==='title');
+      assert.equal(current?.value,product.title);
+      assert.ok(next.blocks.some(block=>block.type==='fact'&&block.evidenceIds.includes(current.id)));
+      const forged=()=>finish({topic:'catalog',blocks:[{type:'fact',evidenceIds:[priorEvidence.id]}]});
+      await assertInvalidAnswer(completeAssistantCycle(store,session,continueInput(next,{message:'Continúa sin volver a comprobar la fuente.'}),{providerFactory:scripted(forged,forged).factory}));
     });
 
     await t.test('global product ranking uses all report groups, including a winner beyond the first page', async () => {
