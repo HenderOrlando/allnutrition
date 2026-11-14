@@ -1,7 +1,7 @@
 name: Verificar All Nutrition
 on:
   push:
-    branches: [main]
+    branches: [main, trunk]
   pull_request:
 permissions:
   contents: read
