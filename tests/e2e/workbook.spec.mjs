@@ -1075,7 +1075,8 @@ test('los problemas abren su fila exacta entre hojas y conservan filtros y búsq
 });
 
 test('la cantidad común de obsequios resuelve el bloqueo y se conserva al retomar la hoja',async({page},info)=>{
-  test.setTimeout(240000);
+  // The inspection and both preview jobs may each wait through the worker's 60s idle interval.
+  test.setTimeout(360000);
   const panelRequest=page.waitForRequest(request=>new URL(request.url()).pathname.startsWith('/api/admin/')&&Boolean(request.headers()['x-csrf-token']));
   await login(page);
   const marker=`Obsequios-${info.project.name}-${randomUUID().slice(0,8)}`;
