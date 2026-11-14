@@ -1,5 +1,13 @@
 # Verificación v3 — administración de negocio
 
+## Ali · continuidad entre fases · comprobación local · 14 de noviembre de 2026 UTC
+
+- Node **24.14.1**, SQLite en memoria y proveedor sintético. Reejecución final de `node --test tests/assistant-engine.test.mjs tests/assistant-work.test.mjs`: **31/31 aprobadas**, cero fallos, cancelaciones u omisiones.
+- La primera ejecución detectó aserciones obsoletas sobre contexto histórico y el presupuesto rápido; se ajustaron para exigir síntesis previa como contexto, relectura actual antes de citar y parcialidad cuando quedan páginas. La ejecución final cubrió esos contratos, invalidación al cambiar la fuente y el recorrido de 65 productos Unicode en varias ampliaciones.
+- PostgreSQL, build, E2E y aceptación nativa `amd64` no se ejecutaron para esta corrección. Docker local es `linux/aarch64`, distinto de producción; la verificación de este cambio es local y no está desplegado. El proveedor sintético valida protocolo/recuperación, no calidad de redacción de un proveedor real.
+- El recorrido de **65 productos Unicode** atravesó más de un presupuesto aceptado y terminó conservando el objetivo, el alcance y los hallazgos del primer y último registro, sin reenviar fragmentos ya analizados. Cada fase recibió su síntesis fundamentada previa; el cierre por presupuesto conservó esa síntesis.
+- Sustitución de fuente durante la lectura y antes de aceptar otra ampliación: resultados actuales sin mezcla de versiones, progreso sin doble conteo y síntesis antigua no reutilizada. Los nueve contratos de persistencia también aprobaron, incluidos leases, aislamiento por propietario, detención y revocación.
+
 ## Ali v13 · producción aceptada y revisión visual final · 13 de noviembre de 2026
 
 - **https://allnutrition.wintimeapp.co** aceptada a las **10:12:33 UTC / 05:12:33 Bogotá**. Web, scheduler y consumidor navegador ejecutan `allnutrition:release-36c097882f8a`; runner `allnutrition-social-browser:release-7aa58d58f78e`, mismos IDs Linux/amd64 aprobados, sin rebuild. Fuente `ddd03e6e9f4a55c97d88cc6d30a64cb59cb30851`; el commit documental posterior no modifica el runtime.

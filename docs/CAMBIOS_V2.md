@@ -1,5 +1,12 @@
 # Cambios — administración v3 y antecedentes
 
+## Ali · continuidad entre fases · corrección local · 14 de noviembre de 2026 UTC
+
+- Las ampliaciones recuperan el objetivo, la síntesis y los pendientes anteriores; revalidan la fuente y retoman los fragmentos no analizados sin reproducir los ya cubiertos.
+- Una fuente modificada invalida las síntesis y los cálculos dependientes. Detener o agotar el presupuesto conserva la última síntesis válida, no solo una muestra factual.
+- Las peticiones escritas de continuar reciben las conclusiones y fuentes históricas completas; citarlas como datos actuales sigue requiriendo una consulta vigente.
+- Regresión con 65 productos Unicode, varios presupuestos aceptados, hallazgos iniciales y finales, sustitución de fuente y citas históricas rechazadas. Sin migración ni ampliación de presupuestos. Verificación local y límites en [VERIFICACION.md](VERIFICACION.md); esta corrección no se ha desplegado.
+
 ## Ali v13 desplegado · 13 de noviembre de 2026
 
 - Producción en `allnutrition:release-36c097882f8a`, con runner `allnutrition-social-browser:release-7aa58d58f78e`, fuente `ddd03e6e9f4a55c97d88cc6d30a64cb59cb30851`, sin rebuild al promover.
