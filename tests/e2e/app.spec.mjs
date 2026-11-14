@@ -604,9 +604,16 @@ test('importación conserva archivo y resolver: Cancelar y Esc confirman el mism
  await openDisclosure(page,/^Cómo leer fechas y números/);
  await page.getByLabel('Fecha de corte del reporte, si no existe columna').fill('2026-01-01');
  const samples=page.getByRole('button',{name:'Leer muestras de esta hoja y encabezado',exact:true});
- if(await samples.isEnabled()){
-  await samples.click();await expect(samples).toBeDisabled();
- }
+ const batchId=new URL(page.url()).searchParams.get('batch');
+ expect(batchId,'La importación debe conservar su borrador en la URL.').toBeTruthy();
+ if(await samples.isEnabled())await samples.click();
+ await expect.poll(async()=>{
+  const response=await page.request.get(`/api/admin/imports/${encodeURIComponent(batchId)}`);
+  if(!response.ok())return false;
+  const current=await response.json();
+  return current.workbook?.inspections?.some(item=>item.sheetName==='Seguimiento'&&Number(item.headerRow)===1)===true;
+ },{timeout:75000}).toBe(true);
+ await expect(samples).toBeDisabled();
  for(const [index,label] of ['ID externo del envío','Guía','Transportadora','Estado de la entrega / seguimiento'].entries()){
   const column=page.getByRole('button',{name:`Destino de columna ${index+1}`,exact:true});
   await column.click();
