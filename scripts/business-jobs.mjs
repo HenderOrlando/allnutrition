@@ -35,8 +35,8 @@ if (args.some(arg => !['--once', '--social-browser'].includes(arg)) || new Set(a
             console.log(JSON.stringify({ browser: { processed: result.processed, errorCode: result.errorCode }, hasMore: result.hasMore }));
             if (result.errorCode && result.errorCode !== 'LEASE_LOST') process.exitCode = 1;
           } else {
-            console.log(JSON.stringify({ imports: result.imports.processed, payroll: result.payroll.created, commissions: result.payroll.commissions, alerts: result.alerts, reports: result.reports.processed, expiredFiles: result.retention.expired, social: result.social, socialAnalysis: result.socialAnalysis, hasMore: result.hasMore }));
-            if ([result.payroll, result.alerts, result.scheduling, result.retention, result.social].some(stage => stage.errorCode && stage.errorCode !== 'LEASE_LOST')) process.exitCode = 1;
+            console.log(JSON.stringify({ imports: result.imports.processed, payroll: result.payroll.created, commissions: result.payroll.commissions, alerts: result.alerts, reports: result.reports.processed, expiredFiles: result.retention.expired, social: result.social, socialAnalysis: result.socialAnalysis, socialGeneration: result.socialGeneration, socialAccountAnalysis: result.socialAccountAnalysis, hasMore: result.hasMore }));
+            if ([result.payroll, result.alerts, result.scheduling, result.retention, result.social, result.socialGeneration, result.socialAccountAnalysis].some(stage => stage.errorCode && stage.errorCode !== 'LEASE_LOST')) process.exitCode = 1;
           }
         }
       } catch (error) {

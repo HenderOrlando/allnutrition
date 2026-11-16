@@ -7,6 +7,9 @@ import AdvertisingCampaignEditor from './AdvertisingCampaignEditor';
 import { useAssistantBridge, useAssistantForm } from './AssistantBridge.jsx';
 import AdvertisingResults from './AdvertisingResults';
 import AdvertisingGuide from './AdvertisingGuide';
+import AdvertisingGeneration from './AdvertisingGeneration';
+import MetaAccountAnalysis from './MetaAccountAnalysis';
+import AdvertisingMeasurement from './AdvertisingMeasurement';
 import { readAdminView } from '@/lib/admin-view.mjs';
 import styles from './AdvertisingWorkspace.module.css';
 
@@ -105,6 +108,9 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
   }, []);
   const editorReport = useCallback(state => report('editor', state), [report]);
   const resultsReport = useCallback(state => report('results', state), [report]);
+  const generationReport = useCallback(state => report('generation', state), [report]);
+  const accountAnalysisReport = useCallback(state => report('account-analysis', state), [report]);
+  const measurementReport = useCallback(state => report('measurement', state), [report]);
   useEffect(() => {
     mounted.current = true;
     const beforeUnload = event => { if ([...interaction.current.values()].some(item => item.dirty || item.busy)) { event.preventDefault(); event.returnValue = ''; } };
@@ -166,7 +172,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
     <header className="workspace-heading"><div><p className={styles.eyebrow}>Facebook e Instagram</p><h1 ref={heading} tabIndex={-1} data-admin-section-heading>Publicidad</h1><p>Prepara publicaciones, organiza tus imágenes y videos y revisa sus resultados. Tú decides qué se publica y cuándo autorizas inversión.</p></div>{tab === 'campaigns' && !view.record && <button type="button" className="button primary" onClick={() => change({ record: 'new' })}>Crear publicación</button>}</header>
     <AdvertisingGuide key={tab} tab={tab}/>
     <WorkspaceTabs label="Vistas de publicidad" items={tabs} value={tab} onChange={value => change({ tab: value, record: null, status: null, q: null })}/>
-    <p className={styles.taskIntro}>{{ campaigns: 'Guarda ideas como borradores y retómalas después. Guardar no publica ni autoriza gasto.', assets: 'Sube archivos propios, espera a que estén listos y revisa su vista previa antes de usarlos.', results: 'Revisa qué informó cada red y qué datos faltan. Los resultados de Meta y los registros de tu negocio son distintos.' }[tab]}</p>
+    <p className={styles.taskIntro}>{{ campaigns: 'Guarda ideas como borradores y retómalas después. Guardar no publica ni autoriza gasto.', assets: 'Sube archivos propios o solicita imágenes y GIF con OpenAI tras aceptar su costo. Revisa el resultado antes de usarlo.', results: 'Elige el objetivo y la medición; revisa el análisis anual de Meta, su cobertura y las propuestas sustentadas. Resultados reportados y hechos de tu negocio son distintos.' }[tab]}</p>
     {notice && <p className={styles.notice} role="status">{notice}</p>}
     {tab === 'campaigns' && view.record ? <>
       <ReadStatus state={connectionRead} label="cuentas conectadas" onRetry={() => setRefresh(value => value + 1)}/><ReadStatus state={inventory} label="imágenes y videos privados" onRetry={() => setRefresh(value => value + 1)}/>
@@ -194,7 +200,15 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
         </div>}
         <Pagination page={campaignRead.data.page} pages={campaignRead.data.pages} total={campaignRead.data.total} disabled={campaignRead.loading || !currentCampaignQuery} onPage={page => change({ page })}/>
       </div>}
-    </> : tab === 'assets' ? <AssetsPanel api={api} view={view} inventory={inventory} change={change} report={report} onMutation={invalidate} onRetry={() => setRefresh(value => value + 1)}/> : <AdvertisingResults api={api} campaignId={view.record && view.record !== 'new' ? view.record : null} view={view} onViewChange={onViewChange} onNavigate={navigate} onInteractionStateChange={resultsReport} onMutation={invalidate} revision={revision}/>}
+    </> : tab === 'assets' ? <>
+      <AdvertisingGeneration api={api} onInteractionStateChange={generationReport} onMutation={invalidate} sourceRevision={`${refreshKey}:${inventory.fetchedAt || ''}`}/>
+      <AssetsPanel api={api} view={view} inventory={inventory} change={change} report={report} onMutation={invalidate} onRetry={() => setRefresh(value => value + 1)}/>
+    </> : <>
+      <ReadStatus state={connectionRead} label="cuentas para análisis y medición" onRetry={() => setRefresh(value => value + 1)}/>
+      <AdvertisingMeasurement api={api} connections={connections} onInteractionStateChange={measurementReport} onMutation={invalidate}/>
+      <MetaAccountAnalysis api={api} connections={connections} onInteractionStateChange={accountAnalysisReport} onMutation={invalidate}/>
+      <AdvertisingResults api={api} campaignId={view.record && view.record !== 'new' ? view.record : null} view={view} onViewChange={onViewChange} onNavigate={navigate} onInteractionStateChange={resultsReport} onMutation={invalidate} revision={revision}/>
+    </>}
   </section>;
 }
 
@@ -284,17 +298,19 @@ function AssetsPanel({ api, view, inventory, change, report, onMutation, onRetry
   function renderAsset(asset, detail = false) {
     return <article className={styles.card} key={asset.id}><header className={styles.toolbar}><div><h2>{asset.name}</h2><p>{asset.kind === 'video' ? 'Video' : 'Imagen'} · {ASSET_STATES[asset.state] || asset.state}</p></div>{!detail && <button type="button" className="button subtle" disabled={busy} onClick={() => change({ record: asset.id, page })}>Ver archivo</button>}</header>
       <p>Registrada: {date(asset.createdAt)}</p>
+      {asset.aiDisclosure && <p className={styles.warning}>Generada con IA · Revisión humana requerida de producto, etiquetas, texto y afirmaciones. Su uso exige divulgación verificable; no se publica automáticamente.</p>}
       {asset.diagnostic && <p className={styles.warning}>{asset.diagnostic.message || asset.diagnostic.code}</p>}
       {asset.state === 'uploading' && <p role="status">Reserva de carga hasta {date(asset.uploadExpiresAt)}. Si la carga quedó incompleta, espera su diagnóstico o registra un nuevo archivo; la reserva no acredita que el archivo exista.</p>}
       {asset.state === 'processing' && <p role="status">El procesamiento en segundo plano está preparando y verificando el archivo. Todavía no está listo para usar.</p>}
       {asset.state === 'missing_file' && <p className={styles.warning}>Falta el archivo del volumen privado. Restaura el volumen y solicita comprobación de SHA-256 al administrador del despliegue; reconectar Meta no restaura archivos. La historia se conserva y no puede republicarse.</p>}
       {detail && ['ready', 'archived'].includes(asset.state) && asset.derivativeSha256 && <div className={styles.assetPreview}>{asset.kind === 'video' ? <video className={styles.previewVideo} controls preload="metadata" playsInline src={`${ROOT}/assets/${asset.id}/content?variant=derivative`} aria-label={`Vista previa privada de ${asset.name}`} onError={() => setError('No se pudo leer el derivado privado. Comprueba sesión y restauración/verificación del volumen; no se considera publicable un archivo ausente.')}/> : <img className={styles.previewImage} src={`${ROOT}/assets/${asset.id}/content?variant=derivative`} alt={`Derivado normalizado de ${asset.name}`} onError={() => setError('No se pudo leer la vista previa privada. Comprueba sesión y restauración/verificación del volumen.')}/>}</div>}
       {detail && <dl className="summary-values"><div><dt>Archivo preparado</dt><dd>{asset.derivativeContentType || 'Todavía no disponible'} · {asset.width && asset.height ? `${asset.width} × ${asset.height}` : 'Dimensiones no informadas'}{asset.durationSeconds != null ? ` · ${asset.durationSeconds} s` : ''}</dd></div></dl>}
+      {detail && asset.contentType === 'image/gif' && asset.originalSha256 && <p><a href={`${ROOT}/assets/${asset.id}/content?variant=original`} target="_blank" rel="noreferrer">Ver o guardar GIF animado original</a> · La publicación utiliza el MP4 preparado, que debes revisar.</p>}
       <details className={styles.technicalDetails}><summary>Detalles del archivo</summary><dl className="summary-values"><div><dt>Original</dt><dd>{bytes(asset.originalBytes ?? asset.expectedBytes)} · {asset.originalName || 'Nombre no informado'}</dd></div><div><dt>Archivo preparado (derivado)</dt><dd>{bytes(asset.derivativeBytes)}</dd></div><div><dt>SHA-256 del original</dt><dd>{asset.originalSha256 || 'Todavía no verificado'}</dd></div><div><dt>SHA-256 del derivado</dt><dd>{asset.derivativeSha256 || 'Todavía no verificado'}</dd></div></dl></details>
       <div className={styles.actions}>{asset.state === 'failed' && asset.originalSha256 && asset.originalBytes > 0 && <button type="button" className="button primary" disabled={busy || assistant.assistantBusy} onClick={() => action(asset, 'retry-processing')}>Reintentar procesamiento</button>}{['ready', 'failed'].includes(asset.state) && <button type="button" className="button subtle" disabled={busy || assistant.assistantBusy} onClick={() => action(asset, 'archive')}>Archivar con confirmación</button>}</div>
     </article>;
   }
-  return <><section className={styles.panel} inert={assistant.assistantBusy}><h2>Subir imágenes y videos</h2><p>Archivos propios en almacenamiento privado, independiente del catálogo. No se generan, recortan ni editan. El original recibido no equivale a un archivo listo para usar; revisa la vista previa del archivo preparado para publicar (derivado).</p>
+  return <><section className={styles.panel} inert={assistant.assistantBusy}><h2>Subir imágenes y videos</h2><p>Archivos propios en almacenamiento privado, independiente del catálogo. La generación con OpenAI se solicita por separado arriba y requiere consentimiento de costo. El original recibido no equivale a un archivo listo para usar; revisa la vista previa del archivo preparado para publicar.</p>
     <ul><li>Imágenes JPEG/PNG/WebP hasta 10 MiB, no animadas, proporción 4:5–1,91:1 y ancho mínimo 320 px.</li><li>Videos MP4/MOV hasta 250 MiB, verticales 9:16, mínimo 540 × 960 y 3–90 segundos.</li></ul>
     <details className={styles.technicalDetails}><summary>Detalles de formatos y preparación</summary><p>Imágenes: un fotograma, hasta 40 megapíxeles; conversión a JPEG sRGB, sin ampliar y hasta 1440 px. Videos: archivo preparado H.264/AAC a 30 fps, hasta 1080 × 1920; no se inventa audio ni se recorta.</p>{quota && <p>Reservado para cargas: {bytes(quota.reservedBytes)} · Cuota total: {bytes(quota.limitBytes)}</p>}</details>
     {quota && <p>Espacio disponible: <strong>{bytes(quota.availableBytes)}</strong> · Ocupado: <strong>{bytes(quota.usedBytes)}</strong></p>}
