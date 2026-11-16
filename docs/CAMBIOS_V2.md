@@ -1,5 +1,24 @@
 # Cambios — administración v3 y antecedentes
 
+## Publicidad · generación OpenAI y análisis Meta anual · integración local · 16 de noviembre de 2026
+
+- PNG/GIF nativo mediante API Key OpenAI existente, consentimiento de costo variable y envío de referencias, fuentes de biblioteca/Productos/vitrina y salida privada revisable. Original GIF descargable y derivado MP4; procedencia y declaración IA obligatoria. Sin reintento automático de una generación posiblemente enviada.
+- OAuth y token manual encolan lectura anual de Ads y contenido actual accesible de Facebook/Instagram, con progreso durable, cursores, permisos, cobertura parcial y respeto de esperas. El token continúa siendo exclusivamente de lectura.
+- Objetivo y medición por conexión: alcance, interacción, tráfico, WhatsApp o ventas; píxel/dataset/eventos o referencia externa. La comprobación no instala rastreadores, envía eventos ni acredita compras o causalidad.
+- Propuestas recorren todos los resultados guardados por páginas, citan métricas, configuraciones actuales y reglas; histórico no verificable explícito. Se muestran hasta tres pruebas revisables, no promesas de incremento ni aplicación automática.
+- Esquema privado v14 en SQLite/PostgreSQL; respaldos comerciales no incluyen prompts, trabajos ni inventario de análisis. Cambios de acceso, configuración o fuentes cercan escrituras tardías. Modelos puros de medición separados del grafo de almacenamiento para evitar ciclos al cargar rutas.
+- `npm test`: **1442 aprobadas, 0 fallos, 2 omitidas** por falta de PostgreSQL descartable. Comprobación posterior de medición/análisis: **23/23**. Recorridos de navegador aislados con proveedores sintéticos: carga y ambas fuentes, PNG/GIF, descarga GIF HTTP 200 y reproducción MP4 576×1024/3 s, análisis OAuth/token, objetivo y comprobación de píxel/dataset; escritorio y móvil sin desbordamiento de documento.
+- Sin credenciales reales, consumo real, publicación, instalación de seguimiento, despliegue ni cambios en producción. Límites y evidencia en [VERIFICACION.md](VERIFICACION.md).
+
+## Meta · token manual y evaluación de acceso · integración local · 16 de noviembre de 2026
+
+- Conexión alternativa mediante token de acceso manual, cifrado en la custodia API existente y omitido de respuestas, auditoría e idempotencia. Sin migración ni modificación de credenciales reales.
+- OAuth y token muestran permisos, vencimiento, recursos, uso reportado y restricciones. La lectura exige tareas y scopes granulares de la cuenta; `ads_management` también puede acreditar lectura. Cero explícito de vencimiento se distingue de una fecha desconocida.
+- El método manual es exclusivamente de consulta: bloquea preparación, publicación, activación, pausa y revocación remota incluso con permisos de escritura. No se convierte a OAuth. El flujo OAuth y su publicación conservan sus controles anteriores.
+- Consulta explícita por cuenta/período de campañas existentes, con moneda original, alcance no sumado y faltantes distintos de cero. Las respuestas tardías no atraviesan cambios de cuenta, credenciales o configuración. Sin consulta automática a Meta ni fallback entre vías.
+- Verificación: `node --test tests/social-token.test.mjs tests/social-meta-access.test.mjs tests/social-meta.test.mjs tests/social-oauth.test.mjs tests/social-meta-publishing.test.mjs tests/social-meta-metrics.test.mjs tests/social-spec.test.mjs tests/social-settings.test.mjs`: **124 pruebas aprobadas**, cero fallos/omisiones. Navegador local con SQLite y proveedor sintético aislados: creación de token, selección/revalidación, evaluación y consulta por token y conexión OAuth; token del formulario borrado. Pantallas escritorio/móvil inspeccionadas; documento móvil de 390 px sin desbordamiento horizontal.
+- Límite de evidencia: no se usaron credenciales reales ni se validó consentimiento, cuota o acceso real de una cuenta Meta. Sin publicación, gasto, despliegue ni cambios de producción.
+
 ## Ali · continuidad entre fases · corrección local · 14 de noviembre de 2026 UTC
 
 - Las ampliaciones recuperan el objetivo, la síntesis y los pendientes anteriores; revalidan la fuente y retoman los fragmentos no analizados sin reproducir los ya cubiertos.
