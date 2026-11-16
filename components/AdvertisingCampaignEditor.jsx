@@ -152,6 +152,9 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   });
   current.current = { formDirty, campaign, form, busy };
   const connection = connections.find(item => item.id === form.connectionId) || (campaign?.connection?.id === form.connectionId ? campaign.connection : null);
+  const readOnlyConnection = connection?.readOnly || connection?.authenticationMethod === 'token';
+  const canWriteConnection = connection?.state === 'connected' && !readOnlyConnection && (form.mode === 'paid' ? connection?.capabilities?.adsPublish : form.platforms?.every(platform => connection?.capabilities?.[platform === 'instagram' ? 'instagramPublish' : 'facebookPublish']));
+  const needsWriteAccess = name => ['prepare-paid', 'approve-organic', 'activate-paid', 'resume', 'resume-restored'].includes(name);
   const asset = assets.find(item => item.id === form.assetId) || (campaign?.asset?.id === form.assetId ? campaign.asset : null);
   const approved = campaign?.revisions?.at(-1), forecast = frozen ? approved?.forecast : forecastChoice || campaign?.forecasts?.find(item => item.id === campaign.forecastId);
   const validation = campaign?.validation, warningList = validation?.warnings || [];
@@ -237,7 +240,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   }
   function changeAsset(value) {
     const selected = assets.find(item => item.id === value);
-    setForm(previous => ({ ...previous, assetId: value || null, placements: previous.placements.filter(key => selected?.kind === 'image' ? key.endsWith('_feed') : previous.mode === 'organic' ? key.endsWith('_reels') : true) })); setForecastChoice(null); resetAcceptance();
+    setForm(previous => ({ ...previous, assetId: value || null, ...(selected?.aiDisclosure === true ? { aiDisclosure: true } : {}), placements: previous.placements.filter(key => selected?.kind === 'image' ? key.endsWith('_feed') : previous.mode === 'organic' ? key.endsWith('_reels') : true) })); setForecastChoice(null); resetAcceptance();
   }
   async function task(fn) {
     if (locked.current) return;
@@ -345,6 +348,8 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
   }
   async function campaignAction(name, fields = {}) {
     await task(async () => {
+      if (needsWriteAccess(name) && !canWriteConnection) throw new Error('La conexión activa no acredita permisos de escritura. Un token manual es de solo lectura.');
+      if (name === 'pause' && (readOnlyConnection || connection?.state !== 'connected')) throw new Error('La conexión de solo lectura o inactiva no puede pausar anuncios. Detén el gasto directamente en Meta.');
       if (!campaign?.id) throw new Error('Guarda primero el borrador.');
       if (formDirty) throw new Error('Guarda los cambios antes de operar sobre la configuración del servidor.');
       const payload = { action: name, version: campaign.version, ...fields };
@@ -361,6 +366,8 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
     void campaignAction(form.mode === 'paid' ? 'prepare-paid' : 'approve-organic', { rightsAccepted: true, acceptedWarnings: warningList.map(item => item.key), specHash: forecast.specHash, forecastId: forecast.id, ...(form.mode === 'paid' ? { investmentAccepted: true } : {}), ...(instruction?.needsConfirmation ? { recommendationAccepted: true } : {}) });
   }
   function openAction(name, operationValue = null) {
+    if (needsWriteAccess(name) && !canWriteConnection) { setError('Esta acción requiere una conexión activa con permisos de escritura; el token manual solo permite lectura.'); return; }
+    if (name === 'pause' && (readOnlyConnection || connection?.state !== 'connected')) { setError('Esta conexión no puede pausar anuncios; detén el gasto directamente en Meta.'); return; }
     const delivery = campaign?.deliveries?.find(item => item.channel === 'meta_ads'), budget = delivery?.budgetSnapshot;
     setInvalid(previous => ({ ...previous, controlRemaining: false }));
     setAction({ name, operation: operationValue }); setActionForm({ reason: '', rightsAccepted: false, investmentAccepted: false, acceptDuplicateRisk: false, confirmAbsence: false, acceptContentVerification: false, acceptPrivateDraft: false, acceptedWarnings: [], remainingBudgetMinor: Number.isSafeInteger(budget?.remainingMinor) ? budget.remainingMinor : null, remoteId: '', permalink: '' });
@@ -413,21 +420,22 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
           {form.mode === 'paid' && (form.startAt || form.publishAt) && <p className={styles.help}>Al cambiar modalidad se deben revisar inversión y agenda.</p>}
           <label className="field">Objetivo comercial<select name="objective" aria-describedby={`${id}-objective-help`} value={form.objective} onChange={event => set('objective', event.target.value)}>{Object.entries(OBJECTIVES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><p id={`${id}-objective-help`} className={styles.help}>{OBJECTIVE_HELP[form.objective]} No hay píxel ni seguimiento automático de ventas.</p>
           <fieldset><legend>Redes</legend>{['facebook', 'instagram'].map(network => check(network === 'facebook' ? 'Facebook · página' : 'Instagram · cuenta profesional', form.platforms.includes(network), enabled => changePlatforms(enabled ? [...form.platforms, network] : form.platforms.filter(value => value !== network))))}</fieldset>
-          {connection && <Values rows={[['Cuenta conectada', connection.name || connection.id], ["Método elegido", METHODS[connection.integrationMethod] || connection.integrationMethod], ['Estado de conexión', CONNECTION_STATES[connection.state] || connection.state], ['Moneda de cuenta', connection.currency || 'Sin verificar'], ['Zona de cuenta', connection.timeZone || 'Sin verificar'], ['Capacidades verificadas', Object.entries(connection.capabilities || {}).filter(([, value]) => value === true).map(([key]) => ({ facebookPublish: 'Publicar en Facebook', instagramPublish: 'Publicar en Instagram', adsPublish: 'Preparar y operar anuncios pagados', insights: 'Consultar resultados', whatsappAds: 'Anuncios a WhatsApp vinculado' }[key] || key)).join(' · ') || 'Ninguna acreditada']]}/>}
+          {connection && <Values rows={[['Cuenta conectada', connection.name || connection.id], ["Método elegido", readOnlyConnection ? 'API · Token manual de solo lectura' : METHODS[connection.integrationMethod] || connection.integrationMethod], ['Estado de conexión', CONNECTION_STATES[connection.state] || connection.state], ['Moneda de cuenta', connection.currency || 'Sin verificar'], ['Zona de cuenta', connection.timeZone || 'Sin verificar'], ['Capacidades verificadas', Object.entries(connection.capabilities || {}).filter(([key, value]) => value === true && (!readOnlyConnection || key === 'insights')).map(([key]) => ({ facebookPublish: 'Publicar en Facebook', instagramPublish: 'Publicar en Instagram', adsPublish: 'Preparar y operar anuncios pagados', insights: 'Consultar resultados', whatsappAds: 'Anuncios a WhatsApp vinculado' }[key] || key)).join(' · ') || 'Ninguna acreditada']]}/>}
           {!connections.length && <div className="admin-empty"><h3>Puedes conectar la cuenta después</h3><p>Guarda el nombre del borrador y retómalo cuando tengas una cuenta disponible. Cada método tiene requisitos y autenticación independientes.</p></div>}
           <button type="button" className="button subtle" onClick={() => callbacks.current.onNavigate?.({ section: 'business', tab: 'social', record: null })}>Ir a Redes sociales en Configuración (guarda antes si quieres retomar)</button>
         </div>}
         {step === 1 && <div className={styles.stack}>
           <label className="field">Imagen o video listo para usar<select name="assetId" value={form.assetId || ''} aria-describedby={`${id}-asset-requirements`} onChange={event => changeAsset(event.target.value)}><option value="">Selecciona un archivo preparado para publicar</option>{assets.filter(item => item.state === 'ready').map(item => <option key={item.id} value={item.id}>{item.name || item.originalName || item.id} · {item.kind === 'video' ? 'Video' : 'Imagen'}</option>)}{form.assetId && !assets.some(item => item.id === form.assetId && item.state === 'ready') && <option value={form.assetId}>Imagen o video guardado no disponible · {asset?.state || 'revisar'}</option>}</select></label>
           <AssetPreview key={asset?.id || 'none'} asset={asset}/>
+          {asset?.aiDisclosure && <p className={styles.warning}>Pieza generada con IA: revisa producto, etiquetas, texto y afirmaciones antes de aprobar. Su divulgación no puede ocultarse. Si el método de publicación no permite verificar la etiqueta, el envío queda bloqueado.</p>}
           {field('caption', 'Texto que acompaña la imagen o video', { type: 'textarea', max: 2200 })}{field('headline', 'Título o llamada a la acción', { max: 40, description: 'Ejemplo ficticio: Conoce más' })}
           <p id={`${id}-asset-requirements`} className={styles.help}>Imágenes JPEG/PNG/WebP hasta 10 MiB, sin animación, proporción 4:5 a 1,91:1 y ancho mínimo 320 px. Videos MP4/MOV hasta 250 MiB, verticales 9:16, mínimo 540×960 y duración de 3–90 segundos.</p>
-          <details className={styles.technicalDetails}><summary>Requisitos del archivo</summary><p>Imágenes de hasta 40 megapíxeles: se preparan como JPEG sRGB, sin ampliar y hasta 1440 px. Videos: se preparan como MP4 H.264, audio AAC cuando existe, 30 fotogramas por segundo y hasta 1080×1920 px y 25 Mbps. No se recorta ni genera la imagen o video. Revisa el archivo preparado para publicar (derivado) en la vista previa.</p></details>
+          <details className={styles.technicalDetails}><summary>Requisitos del archivo</summary><p>Imágenes de hasta 40 megapíxeles: se preparan como JPEG sRGB, sin ampliar y hasta 1440 px. Videos: se preparan como MP4 H.264, audio AAC cuando existe, 30 fotogramas por segundo y hasta 1080×1920 px y 25 Mbps. El GIF generado conserva su original y se adapta a MP4 vertical con bandas, sin recortar el producto. La preparación del derivado no genera contenido nuevo. Revisa el archivo preparado para publicar en la vista previa.</p></details>
           {!assets.some(item => item.state === 'ready') && <p className={styles.empty}>No hay imágenes o videos listos. Guarda el borrador y sube un archivo compatible; se prepara mediante procesamiento en segundo plano.</p>}
           <button type="button" className="button subtle" onClick={() => callbacks.current.onNavigate?.({ section: 'advertising', tab: 'assets', record: null })}>Subir o revisar imágenes y videos (guarda antes)</button>
           {form.objective === 'traffic' && field('destinationUrl', 'URL de destino', { type: 'url', max: 2048 })}
           {form.objective === 'whatsapp' && <>{field('whatsappNumber', 'WhatsApp vinculado a la página (formato internacional +)', { max: 16 })}{field('whatsappGreeting', 'Bienvenida explícita de WhatsApp', { type: 'textarea', max: 1024 })}<p className={styles.help}>El número debe coincidir con el recurso verificado en Meta. El teléfono de la vitrina no acredita capacidad de pauta.</p></>}
-          <label className="field">¿La imagen o video contiene contenido generado con IA?<select name="aiDisclosure" value={form.aiDisclosure === null ? '' : String(form.aiDisclosure)} onChange={event => set('aiDisclosure', event.target.value === '' ? null : event.target.value === 'true')}><option value="">Declara explícitamente</option><option value="false">No</option><option value="true">Sí; requiere divulgación verificable en el método elegido</option></select></label>
+          <label className="field">¿La imagen o video contiene contenido generado con IA?<select name="aiDisclosure" value={form.aiDisclosure === null ? '' : String(form.aiDisclosure)} onChange={event => set('aiDisclosure', event.target.value === '' ? null : event.target.value === 'true')}><option value="">Declara explícitamente</option><option value="false" disabled={asset?.aiDisclosure === true}>No</option><option value="true">Sí; requiere divulgación verificable en el método elegido</option></select></label>
           {form.mode === 'organic' && form.platforms.includes('instagram') && ['traffic', 'whatsapp'].includes(form.objective) && <p className={styles.warning}>En Instagram sin inversión, los enlaces del texto no son llamadas a la acción clicables. No se promete medir consultas o tráfico por publicación.</p>}
         </div>}
         {step === 2 && <div className={styles.stack}>
@@ -483,9 +491,10 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
       </form>
       <Forecast forecast={formDirty ? null : forecast}/>
       <section className={styles.panel}><h3>3. Decide si lo apruebas</h3>
+        {!canWriteConnection && <p className={styles.warning}>Aprobación no disponible: selecciona una conexión activa con capacidades de publicación acreditadas. Un token manual es de solo lectura.</p>}
         <p className={styles.notice}>{form.mode === 'paid' ? 'Esta aprobación solo prepara el anuncio. Activar gasto requiere otra confirmación.' : 'Aprobar autoriza publicar en la fecha elegida o cuando se procese la solicitud. Guardar borrador no publica.'}</p>
         {formDirty && <p className={styles.warning}>Hay cambios sin guardar. La estimación anterior no autoriza esta configuración.</p>}
-        <fieldset disabled={busy || formDirty || !forecast?.id || !validation?.valid || hold || preflightPending || uncertain}><legend>Autorización de la revisión</legend>
+        <fieldset disabled={!canWriteConnection || busy || formDirty || !forecast?.id || !validation?.valid || hold || preflightPending || uncertain}><legend>Autorización de la revisión</legend>
           {check('Confirmo derechos sobre la imagen o video y su audio, y que revisé el archivo preparado para publicar (derivado).', rights, setRights)}
           {warningList.map(item => <div key={item.key}>{check(item.message, warningsAccepted.includes(item.key), checked => setWarningsAccepted(previous => checked ? [...previous, item.key] : previous.filter(key => key !== item.key)))}</div>)}
           {instruction?.needsConfirmation && check('Aporté o edité el cambio solicitado, revisé la instrucción de la recomendación y acepto esta prueba sin aumentar el presupuesto.', recommendationAccepted, setRecommendationAccepted)}
@@ -506,10 +515,12 @@ function CampaignEditor({ api, campaignId = null, connections = [], assets = [],
         {campaign.deliveries?.length > 0 || uncertain ? <button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => campaignAction('reconcile')}>Comprobar estado en Meta sin reenviar</button> : null}
         {campaign.deliveries?.length > 0 && <><button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => campaignAction('sync')}>Pedir actualización a Meta (mínimo 15 min)</button><button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => campaignAction('analyze')}>Solicitar ideas de mejora</button><button type="button" className="button subtle" disabled={busy} onClick={() => callbacks.current.onNavigate?.({ section: 'advertising', tab: 'results', record: campaign.id })}>Ver resultados</button></>}
         {!['cancelled', 'completed'].includes(campaign.state) && <button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => openAction('cancel')}>Cancelar trabajo / detener anuncios</button>}
-        {campaign.mode === 'paid' && campaign.deliveries?.some(item => item.remoteId || item.remoteRefs?.campaignId) && <button type="button" className="button subtle" disabled={busy} onClick={() => openAction('pause')}>Pausar para detener gasto</button>}
+        {campaign.mode === 'paid' && campaign.deliveries?.some(item => item.remoteId || item.remoteRefs?.campaignId) && <button type="button" className="button subtle" disabled={busy || readOnlyConnection || connection?.state !== 'connected'} onClick={() => openAction('pause')}>Pausar para detener gasto</button>}
+        <fieldset disabled={!canWriteConnection} className={styles.connectionFieldset}><legend>Acciones con permisos de escritura</legend>
         {campaign.state === 'ready' && campaign.mode === 'paid' && <button type="button" className="button primary" disabled={busy || hold} onClick={() => openAction('activate-paid')}>Revisar y autorizar activación</button>}
         {campaign.state === 'paused' && campaign.mode === 'paid' && <button type="button" className="button primary" disabled={busy || hold} onClick={() => openAction('resume')}>Revisar y autorizar reanudación</button>}
         {hold && <button type="button" className="button subtle" disabled={busy || formDirty || uncertain} onClick={() => openAction('resume-restored')}>Revisar recuperación explícita</button>}
+        </fieldset>
       </div>
       <p className={styles.help}>Sin acceso vigente no se puede afirmar pausa: detén los anuncios directamente en Meta. La pausa segura no depende de una imagen o video disponible ni de habilitar nuevas publicaciones.</p>
     </section>}
