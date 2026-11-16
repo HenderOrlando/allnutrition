@@ -38,7 +38,7 @@ async function fixture(store, { method = 'api', mode = 'paid', objective = 'traf
     else if (path === 'me') data = { id: '100', name: 'Actor sintético' };
     else if (path === 'me/permissions') data = { data: META_PERMISSIONS.map(permission => ({ permission, status: 'granted' })) };
     else if (path === 'me/accounts') data = { data: [{ id: '200', tasks: ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE'], access_token: 'SYNTHETIC-PAGE-TOKEN', business: { id: '500' } }] };
-    else if (path === 'me/adaccounts') data = { data: [{ id: 'act_400', currency: 'COP', timezone_name: 'America/Bogota', account_status: 1, user_tasks: ['ADVERTISE'], business: { id: '500' } }] };
+    else if (path === 'me/adaccounts') data = { data: [{ id: 'act_400', currency: 'COP', timezone_name: 'America/Bogota', account_status: 1, user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: '500' } }] };
     else if (path === 'act_400/reachestimate') { if (remote.beforeEstimate) await remote.beforeEstimate(); data = { data: [remote.audience] }; }
     else assert.fail(`Unexpected synthetic request ${path}`);
     return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });

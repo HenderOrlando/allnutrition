@@ -1,5 +1,5 @@
 import { authorize, db, json, jsonBody, errorResponse } from '@/lib/server.mjs';
-import { getSocialConnections, createBrowserSocialConnection } from '@/lib/business/social-connections.mjs';
+import { getSocialConnections, createBrowserSocialConnection, createTokenSocialConnection } from '@/lib/business/social-connections.mjs';
 export const runtime = 'nodejs';
 export async function GET(request) { try {
   await authorize(request);
@@ -7,5 +7,7 @@ export async function GET(request) { try {
 } catch (error) { return errorResponse(error); } }
 export async function POST(request) { try {
   const session = await authorize(request, { write: true });
-  return json(await createBrowserSocialConnection(await db(), await jsonBody(request, { maxBytes: 4096 }), session.user.id), 201);
+  const input = await jsonBody(request, { maxBytes: 8192 });
+  const create = input?.authenticationMethod === 'token' ? createTokenSocialConnection : createBrowserSocialConnection;
+  return json(await create(await db(), input, session.user.id, { signal: request.signal }), 201);
 } catch (error) { return errorResponse(error); } }

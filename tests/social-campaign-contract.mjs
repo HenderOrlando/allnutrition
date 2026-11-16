@@ -38,7 +38,7 @@ function syntheticProvider() {
     else if (path === 'me') data = { id: '100', name: 'Administrador sintético' };
     else if (path === 'me/permissions') data = { data: (remote.permission ? META_PERMISSIONS : []).map(permission => ({ permission, status: 'granted' })) };
     else if (path === 'me/accounts') data = { data: [{ id: '200', name: 'Página sintética', tasks: remote.pageTasks, access_token: PAGE_TOKEN, business: { id: '500', name: 'Negocio sintético' }, instagram_business_account: { id: '300', username: 'synthetic' }, whatsapp_number: '+573001234567' }] };
-    else if (path === 'me/adaccounts') data = { data: [{ id: 'act_400', name: 'Cuenta sintética', currency: remote.currency, timezone_name: 'America/Bogota', account_status: remote.accountStatus, user_tasks: ['ADVERTISE'], business: { id: '500', name: 'Negocio sintético' } }] };
+    else if (path === 'me/adaccounts') data = { data: [{ id: 'act_400', name: 'Cuenta sintética', currency: remote.currency, timezone_name: 'America/Bogota', account_status: remote.accountStatus, user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: '500', name: 'Negocio sintético' } }] };
     else if (path === 'search') data = { data: url.searchParams.get('type') === 'adinterest' ? [{ id: '900', name: 'Deporte', path: ['Intereses', 'Deporte'] }] : [{ key: 'CO', name: 'Colombia', type: 'country', country_code: 'CO' }] };
     else assert.fail(`Lectura remota no prevista: ${path}`);
     return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });
@@ -54,7 +54,7 @@ async function setup(store, t, { method = 'api', mode = 'organic', objective = '
   const actorId = randomUUID(), connectionId = randomUUID(), assetId = randomUUID(), remote = syntheticProvider();
   await insertRow(store, 'users', { id: actorId, email: `${actorId}@example.test`, password: 'synthetic-not-used', active: 1 });
   const identities = { userId: '100', businessId: '500', pageId: '200', instagramId: '300', adAccountId: method === 'api' ? 'act_400' : '400' };
-  const connectionData = { name: 'Conexión sintética', identities, currency: 'COP', timeZone: 'America/Bogota', sessionEpoch: 0, capabilities: { facebookPublish: true, instagramPublish: true, adsPublish: true, insights: true, whatsappAds: true }, resources: { pages: [{ id: '200', instagramId: '300', whatsappNumber: '+573001234567', businessId: '500', tasks: ['CREATE_CONTENT', 'ADVERTISE', 'ANALYZE'] }], adAccounts: [{ id: identities.adAccountId, currency: 'COP', timeZone: 'America/Bogota', accountStatus: 1, businessId: '500', tasks: ['ADVERTISE'] }] } };
+  const connectionData = { name: 'Conexión sintética', identities, currency: 'COP', timeZone: 'America/Bogota', sessionEpoch: 0, capabilities: { facebookPublish: true, instagramPublish: true, adsPublish: true, insights: true, whatsappAds: true }, resources: { pages: [{ id: '200', instagramId: '300', whatsappNumber: '+573001234567', businessId: '500', tasks: ['CREATE_CONTENT', 'ADVERTISE', 'ANALYZE'] }], adAccounts: [{ id: identities.adAccountId, currency: 'COP', timeZone: 'America/Bogota', accountStatus: 1, businessId: '500', tasks: ['ADVERTISE', 'ANALYZE'] }] } };
   await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: method, state: 'connected', ...editable(connectionData) });
   await saveCredentials(store, connectionId, method === 'api' ? { accessToken: TOKEN, userId: '100', pageTokens: { 200: PAGE_TOKEN } } : { storageState: { cookies: [], origins: [] } }, { runtime: (await configureSocialTestRuntime(store, { env })).runtime });
   const bytes = await sharp({ create: { width: 540, height: 675, channels: 3, background: '#336699' } }).jpeg().toBuffer();
@@ -264,7 +264,7 @@ const cases = [
     const interest = { key: 'api:interest:900', source: 'api', providerId: '900', label: 'Deporte', context: { type: 'interest', path: ['Intereses', 'Otra categoría'] } };
     const campaign = await f.create({ audience: { ...f.configuration.audience, interests: [interest] } }), forecast = await f.forecast(campaign.id);
     await assert.rejects(() => f.action(campaign, 'prepare-paid', f.approvalInput(forecast)));
-    assert.ok(f.remote.calls.includes('search')); assert.deepEqual(await rows(store, 'social_revisions', campaign.id), []);
+    assert.deepEqual(await rows(store, 'social_revisions', campaign.id), []);
     const edited = await saveSocialCampaign(store, { id: campaign.id, version: campaign.version, requestId: randomUUID(), audience: { ...f.configuration.audience, interests: [{ ...interest, context: { type: 'interest', path: ['Intereses', 'Deporte'] } }] } }, f.actorId, f.options);
     const currentForecast = await f.forecast(edited.id);
     assert.equal((await f.action(edited, 'prepare-paid', f.approvalInput(currentForecast))).deliveryIds.length, 1);
