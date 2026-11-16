@@ -1,5 +1,11 @@
 # Verificación v3 — administración de negocio
 
+## Publicidad · candidato de despliegue rechazado · 16 de noviembre de 2026
+
+- CI remoto de `afa45b18464c62e8c3fbf393537e84af4d9fd7d7`, ejecución [43934070147](https://github.com/HenderOrlando/allnutrition/actions/runs/43934070147): contratos SQLite/PostgreSQL sin omisiones, sintaxis, auditoría, runtime limitado y HTTPS aprobados; **69 E2E aprobadas y 3 fallidas**. El candidato no se promovió.
+- Los tres fallos fueron selectores E2E ambiguos: el nombre de conexión coincidía con navegador y token manual; la imagen coincidía con miniatura de referencia y derivado revisable. Se acotaron al campo de navegador y a la imagen accesible del derivado, manteniendo las comprobaciones de habilitación, visibilidad y decodificación.
+- La aceptación independiente del mismo candidato en el host amd64 se canceló tras conocer el rechazo remoto; sus contratos incompletos no se acreditan como aprobados. La restauración real v13 y los diez artefactos de respaldo externo cifrado sí quedaron comprobados. No se migró ni modificó producción.
+
 ## Publicidad · generación y análisis anual · comprobación local · 16 de noviembre de 2026
 
 - Node **24.14.1**, SQLite y proveedores sintéticos aislados. `npm test` final: **1444 pruebas, 1442 aprobadas, cero fallos/cancelaciones y 2 omisiones**: contratos PostgreSQL completos y trabajo recuperable PostgreSQL, sin base descartable configurada. No se acredita PostgreSQL real ni aceptación Docker/amd64.

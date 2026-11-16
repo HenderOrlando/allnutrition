@@ -77,7 +77,7 @@ async function keyboardGuide(page) {
 }
 
 async function expectPreview(page, id) {
-  const image = page.locator(`img[src*="/assets/${id}/content"]`);
+  const image = page.getByRole('img', { name: /^Derivado normalizado de / }).and(page.locator(`img[src*="/assets/${id}/content"]`));
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate(element => element.complete && element.naturalWidth > 0)).toBe(true);
 }

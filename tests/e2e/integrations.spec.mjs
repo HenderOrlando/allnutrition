@@ -95,7 +95,7 @@ test('redes sociales: configuración dinámica, custodia, CAS y navegación sin 
     expect(enabled.publishingEnabled).toBe(false);
     expect(enabled.hasAppSecret).toBe(true);
     expect(enabledResponse.request().postDataJSON()).not.toHaveProperty('appSecret');
-    await expect(page.getByRole('textbox', { name: /^Nombre de la conexión/ })).toBeEnabled();
+    await expect(page.locator('input[name="browserName"]')).toBeEnabled();
     await form.getByRole('checkbox', { name: 'Habilitar acceso asistido por navegador', exact: true }).uncheck();
     const disabled = await (await saveOptions(page)).json();
     expect(disabled.browserEnabled).toBe(false);
