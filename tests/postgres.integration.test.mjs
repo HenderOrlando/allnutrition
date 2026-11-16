@@ -6,7 +6,7 @@ import { openPostgres } from '../lib/db/postgres.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
 import { runContracts } from './contract.mjs';
 import { resetPostgresStore, withPostgresTestDatabase } from './postgres-fixture.mjs';
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13, migrateAdvertisingIntelligenceV14 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
 import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore,runSocialBackupContracts } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
@@ -43,6 +43,7 @@ async function restoreAssistantSchema(store) {
  await migrateAssistantV11(store);
  await migrateAssistantOAuthV12(store);
  await migrateAssistantWorkV13(store);
+ await migrateAdvertisingIntelligenceV14(store);
 }
 
 async function migrationRows(store,{includeInternals=false}={}) {
@@ -107,6 +108,8 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    await createBusinessFixture(store,{year:2025,pay:true});
    await store.transaction(async tx=>{
     await tx.lockWrites();
+    for(const table of [...ADVERTISING_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=14`);
     await dropAssistantSchema(tx);
     for(const table of [...INTEGRATION_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
     await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=10`);
