@@ -283,3 +283,10 @@ test('advertencias orgánicas preservan ausencias y no prometen audiencia ni cos
   invalid(() => build({ ...organic, publishAt: NOW }));
   invalid(() => build({ ...organic, budgetMinor: 100 }));
 });
+
+test('una pieza generada no permite ocultar su divulgación IA aunque se cambie el borrador', () => {
+  const generated = { ...asset, aiDisclosure: true, reviewRequired: true };
+  assert.throws(() => build(config(), connection, generated), /generada con IA/);
+  const organic = config({ mode: 'organic', budgetMinor: 0, targetCostMinor: null, startAt: null, endAt: null, platforms: ['instagram'], placements: ['instagram_feed'], aiDisclosure: true });
+  assert.equal(build(organic, connection, generated).spec.aiDisclosure, true);
+});
