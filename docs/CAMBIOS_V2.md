@@ -1,5 +1,13 @@
 # Cambios — administración v3 y antecedentes
 
+## 17 de noviembre de 2026 — Publicidad desplegada en producción
+
+- Publicadas las integraciones de publicidad, generación de imágenes/GIF con consentimiento de coste y revisión humana, referencias cargadas o de Productos, análisis anual de Meta y configuración de objetivos/píxeles/eventos. Las acciones siguen sujetas a la conexión activa y sus permisos; no hay publicación automática.
+- PostgreSQL migrado de v13 a v14 preservando datos, integraciones, exportación comercial y medios. Trabajos e inventario privados fuera de los respaldos comerciales.
+- Imágenes de Productos disponibles en solo lectura para el planificador, sin exponerlas al trabajador de navegador ni reconstruir la aplicación.
+- Despliegue con aceptación compuesta autorizada, respaldo físico cifrado fuera del servidor y ensayo real de restauración/migración. Disco ampliado en línea a 100 GiB con autorización.
+- No se efectuaron inferencias pagadas, campañas ni envíos de eventos reales. Detalles, límites y hashes: [verificación](VERIFICACION.md) y [despliegue/recuperación](DESPLIEGUE.md).
+
 ## Publicidad · generación OpenAI y análisis Meta anual · integración local · 16 de noviembre de 2026
 
 - PNG/GIF nativo mediante API Key OpenAI existente, consentimiento de costo variable y envío de referencias, fuentes de biblioteca/Productos/vitrina y salida privada revisable. Original GIF descargable y derivado MP4; procedencia y declaración IA obligatoria. Sin reintento automático de una generación posiblemente enviada.

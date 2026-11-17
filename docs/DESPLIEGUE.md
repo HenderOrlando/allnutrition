@@ -2,9 +2,47 @@
 
 La arquitectura usa **un servidor Linux con Docker Compose: Next.js + PostgreSQL 16**. La producción actual reside en una VM privada detrás del Nginx del host; staging y la topología autónoma usan Caddy HTTPS con la misma imagen runtime. SQLite local y Vercel/Supabase siguen siendo alternativas, no la topología del Compose común.
 
-La producción publicada es **https://allnutrition.wintimeapp.co**, en la VM privada `allnutrition-prod` (`amd64`) detrás del Nginx del host, según el apartado 5. Las imágenes `arm64` y resultados locales de septiembre son antecedentes, no candidatos válidos para esa VM. Cada actualización debe obtener su propia aceptación nativa con `verify:docker` y comparar la imagen ejecutada con la evidencia aprobada. Los resultados vigentes y sus límites se registran en [VERIFICACION.md](VERIFICACION.md); no acreditan una ejecución de CI remoto.
+La producción publicada es **https://allnutrition.wintimeapp.co**, en la VM privada `allnutrition-prod` (`amd64`) detrás del Nginx del host, según el apartado 5. Las imágenes `arm64` y resultados locales de septiembre son antecedentes, no candidatos válidos para esa VM. Cada actualización debe obtener aceptación nativa y comparar la imagen ejecutada con la evidencia aprobada; cualquier excepción autorizada al `verify:docker` completo debe quedar explícita. Los resultados vigentes, CI y límites se registran en [VERIFICACION.md](VERIFICACION.md).
 
-**Versión vigente, 13 de noviembre de 2026 (Bogotá):** web, scheduler y consumidor navegador usan `allnutrition:release-36c097882f8a`, ID `sha256:36c097882f8a97dc5f518d2962d5224b506faa5df22bddf74f6aed8519626b6d`, Linux/amd64, Next `16.4.3`, Node runtime `24.22.3`, UID 1000. Runner `allnutrition-social-browser:release-7aa58d58f78e`, ID `sha256:7aa58d58f78ea67cd4fdaaa40fa8e030af4474441c253b751e6135873cdb6b7f`. Web arrancó a las **10:06:24 UTC / 05:06:24 Bogotá**; aceptación productiva final a las **10:12:33 UTC / 05:12:33 Bogotá**. Son los mismos IDs aprobados, sin rebuild al promover.
+## Versión vigente · Publicidad v14 · 17 de noviembre de 2026 (UTC)
+
+Producción: **https://allnutrition.wintimeapp.co**. Aplicación `7af05b7303c38471554e33db2c39d5c5be3043c2`; suplemento de configuración `4992bba17f611096cef281e4bdb8d1103f371e6f`. Web inició `2026-11-17T02:57:47.748005221Z` (16 de noviembre, 21:57 Bogotá). Aceptación completa del suplemento: `2026-11-17T03:31:10.735Z`.
+
+| Artefacto | Identidad verificada |
+| --- | --- |
+| Web, planificador y trabajador de navegador | `allnutrition:release-1edf00d36941` · `sha256:1edf00d36941a065cd51255ea929749da92be45bfa4dc26f78a4af604fd6b05f` |
+| Ejecutor de navegador | `allnutrition-social-browser:release-ac109ca45d99` · `sha256:ac109ca45d9966d4ad7e8f61e4ce2bab8429d2189eea292f145a9f9e62caa8e6` |
+| Fuente sellada, 502 archivos | USTAR SHA-256 `d2f018a847f5affa41985fe6c5b08de5fd0371e2b25220b6651061c5aefadfbe` |
+| Manifiesto de fuente | SHA-256 `ff99ce4e76a74eecb3d1d475d925f802617c4b5f547a68c3a17e23ce4fdffa72` |
+| Archivo de imágenes Docker | 974854557 bytes · SHA-256 `fd7511f90e66388194cd9d13419f7fe6a48fee585ff6062a35d7f617ddc9cacc` |
+| `compose.yaml` con Productos de solo lectura | SHA-256 `6888cf8611728ce573beff4b7277bbfa67de8e026bed0e32b8e053027607957f` |
+
+Linux/amd64, Node 24.22.3, UID 1000, Next 16.4.3. Esquema **14**, **72 tablas**. Migración productiva ejecutada una vez, sin semillas, reinicio de PostgreSQL ni reimportación. El contenedor PostgreSQL conserva identidad `08d1036ebee04d5e885194f348f05c8e686b704515af4d553f167c067fe690e1` e inicio `2026-09-30T04:08:44.306142093Z`.
+
+El suplemento monta `product_images:/app/data/product-images:ro` únicamente en el planificador, además del montaje ya existente de web. Sonda y proceso real comprobaron cuatro archivos idénticos; solo se recreó el planificador. No cambia las imágenes publicadas, el esquema ni el aislamiento del trabajador de navegador.
+
+**Aceptación excepcional autorizada:** CI completa de la aplicación (72/72 E2E), contratos SQLite/PostgreSQL nativos ya aprobados, 17 controles complementarios y tres escenarios focales nativos sobre la fuente sellada original. La ejecución nativa completa original terminó 71/72 por una espera de `load` tras login; no se oculta ese rechazo ni se declara otra ejecución completa aprobada. La corrección experimental del ayudante no se aplicó y se descartó. Detalle y límites en [VERIFICACION.md](VERIFICACION.md).
+
+Interfaz productiva observada en escritorio/móvil, HTTPS 200, cuatro imágenes de Productos decodificadas, cero mutaciones, errores JavaScript e inferencias. Consentimiento de coste sin marcar. Ali preservado; Meta sin configurar. No se comprobaron proveedores reales mediante generación pagada, publicación ni envío de eventos.
+
+### Recuperación de esta versión
+
+Raíz privada del servidor: `/home/allnutrition/ali-recoverable-20261116T200719Z-7af05b7`. Custodia local: `.test-data/advertising-release-20261116T200719Z-7af05b7`. Se conservan manifiestos, pruebas, capturas, fuente, archivo Docker y copias cifradas; la clave `backup-wrap.key` y `unwrap-backup.mjs` permanecen separados de los artefactos cifrados y no deben publicarse. Doce artefactos finales fuera del servidor fueron verificados por hash y descifrado autenticado.
+
+| Copia | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Ensayo v13, restaurado y migrado dos veces en clon | 15309504 | `b31c776af3bb8d54816fb75cc9ecb9d0e0ce96e82e1e4f322c5c0cb4e4b26bd5` |
+| Copia final v13 congelada, catálogo legible | 15309499 | `72994eb38d3b33f73dd7c9ea474b30c8aae741833ca62ce84a54b1a205833236` |
+| Fuente/configuración anterior al corte | 7792640 | `2a2be39b8cc3571972f2b9dc0a7a065041e656d11f6e6a83a511691be5cc19fd` |
+| Cuatro medios de Productos | 501760 | `4ed0f12b2696ccb16d3fa51e4c33c431e90e57606d777acff46ee774ea7d46f1` |
+
+La copia final no se restauró nuevamente: la prueba de restauración corresponde al ensayo identificado arriba. Las imágenes anteriores se conservan, pero no se verificó su compatibilidad con v14. No efectuar un descenso automático ni restaurar v13 sobre hechos posteriores: decidir recuperación preservando datos, medios y custodia generados después del corte. Los trabajos de generación/análisis privados no viajan en el respaldo comercial; usar la copia física y los volúmenes correspondientes.
+
+Se retiraron credenciales/sesiones temporales, medios extraídos de clones y TLS sintético propios; operadores archivados, sin retirar respaldos ni volúmenes productivos. Disco autorizado ampliado en línea de 60 a **100 GiB**, sin reiniciar VM/PostgreSQL. No se modificaron Nginx, DNS ni firewall.
+
+## Antecedente · Ali v13 · 13 de noviembre de 2026
+
+**Versión anterior, 13 de noviembre de 2026 (Bogotá):** web, scheduler y consumidor navegador usan `allnutrition:release-36c097882f8a`, ID `sha256:36c097882f8a97dc5f518d2962d5224b506faa5df22bddf74f6aed8519626b6d`, Linux/amd64, Next `16.4.3`, Node runtime `24.22.3`, UID 1000. Runner `allnutrition-social-browser:release-7aa58d58f78e`, ID `sha256:7aa58d58f78ea67cd4fdaaa40fa8e030af4474441c253b751e6135873cdb6b7f`. Web arrancó a las **10:06:24 UTC / 05:06:24 Bogotá**; aceptación productiva final a las **10:12:33 UTC / 05:12:33 Bogotá**. Son los mismos IDs aprobados, sin rebuild al promover.
 
 Código de aplicación `ddd03e6e9f4a55c97d88cc6d30a64cb59cb30851`, **477 archivos sellados**, USTAR SHA-256 `4dc83d4f5797d0f79eeef6a6ae1295380dda20e1091f87302ea41f49610daf9f`, manifiesto `279711cbba9a4a055eddedac574f8fb3304687a37e33da28fb3ca52ee0e7311b`. Archivo de ambas imágenes transferido y comprobado: SHA-256 `8d8dbaa7c9db85ee3230a0df6d896610e30f9749b828e35033c51a0a6f4c1cac`, 971.826.473 bytes. El commit documental posterior registra el corte y no cambia las imágenes.
 
