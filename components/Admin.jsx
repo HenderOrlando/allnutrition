@@ -31,9 +31,10 @@ const settingsGroups=[
  {key:'identity',title:'Identidad de la marca',action:'Editar identidad',description:'Nombre, eslogan y logo que se muestran en la vitrina.',fields:['brandName','tagline','logo']},
  {key:'contact',title:'Contacto y redes',action:'Editar contacto',description:'Canales públicos para conversar con tus clientes. No compartas contraseñas de tus redes.',fields:['whatsapp','whatsappTemplate','facebook','instagram','email','hours']},
  {key:'payment',title:'Información de pago',action:'Editar pagos',description:'Explica cómo pueden pagar tus clientes. Este texto no conecta pasarelas ni registra cobros.',fields:['paymentInfo']},
- {key:'publication',title:'Publicación de la vitrina',action:'Revisar publicación',description:'Decide si la web muestra los contenidos publicados o la página de preparación. Los cambios se aplican al guardar.',fields:['launchApproved','showNextStage']}
+ {key:'publication',title:'Publicación de la vitrina',action:'Revisar publicación',description:'Decide si la web muestra los contenidos publicados o la página de preparación. Los cambios se aplican al guardar.',fields:['launchApproved','showNextStage']},
+ {key:'verification',title:'Dominio y verificación',action:'Configurar Meta',description:'Configura la verificación del dominio de la vitrina en Meta.',fields:['metaDomainVerification']}
 ];
-const settingsHelp={whatsapp:'Por ejemplo, 573001234567. Incluye el código de país, sin + ni espacios.',whatsappTemplate:'Escribe {producto} donde deba aparecer la referencia que consulta el cliente.',showNextStage:'Esta orientación solo aparece dentro del panel, no en la página pública.'};
+const settingsHelp={whatsapp:'Por ejemplo, 573001234567. Incluye el código de país, sin + ni espacios.',whatsappTemplate:'Escribe {producto} donde deba aparecer la referencia que consulta el cliente.',showNextStage:'Esta orientación solo aparece dentro del panel, no en la página pública.',metaDomainVerification:'Pega solo el valor del atributo content que entrega Meta. Se publica en la cabecera de la página de inicio; no es un token de acceso a la API.'};
 const settingsFieldByName=new Map(settingsFields.map(field=>[field.name,{...field,description:settingsHelp[field.name]}]));
 function StorefrontSettingsForm({settings,all,api,onSettingsChange,onSave,onCommitted,onError,dirty,busy,savedPublication}) {
  const assistant=useAssistantForm({target:'storefront-settings',recordVersion:settings.version,values:settings,dirty,busy,applyPatch:patch=>onSettingsChange(previous=>({...previous,...patch}))});

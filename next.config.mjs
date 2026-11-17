@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const config = {
+  experimental: { agentUpgrade: 'security' },
   poweredByHeader: false,
   serverExternalPackages: ['pg'],
   outputFileTracingIncludes: { '/*': ['./db/*.sql'] },
