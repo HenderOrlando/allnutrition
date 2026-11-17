@@ -1,5 +1,10 @@
 # Cambios — administración v3 y antecedentes
 
+## 17 de noviembre de 2026 — Política de privacidad pública
+
+- Política en español publicada en [allnutrition.wintimeapp.co/privacy](https://allnutrition.wintimeapp.co/privacy), con medios de contacto, finalidades, proveedores, seguridad, derechos de titulares y límites de eliminación de datos de Meta.
+- Desplegada como `allnutrition:privacy-edfd99d` sobre la imagen productiva aprobada. Se recreó únicamente el servicio web: sin migración; PostgreSQL, scheduler y workers conservaron sus identidades. Verificación HTTP/HTTPS en la VM y recorrido visual escritorio/móvil.
+
 ## 17 de noviembre de 2026 — Publicidad desplegada en producción
 
 - Publicadas las integraciones de publicidad, generación de imágenes/GIF con consentimiento de coste y revisión humana, referencias cargadas o de Productos, análisis anual de Meta y configuración de objetivos/píxeles/eventos. Las acciones siguen sujetas a la conexión activa y sus permisos; no hay publicación automática.
