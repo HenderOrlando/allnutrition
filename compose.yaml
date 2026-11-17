@@ -93,6 +93,7 @@ services:
     environment: *runtime-environment
     volumes:
       - *db-ca
+      - product_images:/app/data/product-images:ro
       - social_media:/app/data/social-media
       - integration_secrets:/app/data/integration-secrets
       - social_browser_control:/app/data/social-browser-control
