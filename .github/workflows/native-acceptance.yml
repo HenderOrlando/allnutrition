@@ -162,6 +162,9 @@ jobs:
             sudo apt-get install -y --no-install-recommends ffmpeg
           fi
           sudo chown -hR 1000:1000 -- "$run_root"
+          # Key custody rejects ancestors owned by a different non-root UID.
+          # Keep the runner's writable evidence and accepted output in private/.
+          sudo chown root:root -- "$RELEASE_ROOT"
 
       - name: Preparar credenciales efímeras para BuildKit
         if: ${{ steps.ast.outputs.buildkit == 'true' || steps.probe.outputs.buildkit == 'true' }}
@@ -217,7 +220,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.ref == 'refs/heads/main' && github.repository == 'HenderOrlando/allnutrition' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.token || '' }}
-        run: node "$HARNESS/scripts/release-ci.mjs" seal "$RELEASE_ROOT/private" "$RELEASE_ROOT/accepted"
+        run: node "$HARNESS/scripts/release-ci.mjs" seal "$RELEASE_ROOT/private" "$RELEASE_ROOT/private/accepted"
 
       - name: Publicar solo los archivos permitidos
         id: upload
@@ -226,12 +229,12 @@ jobs:
         with:
           name: ${{ steps.seal.outputs.artifact }}
           path: |
-            ${{ env.RELEASE_ROOT }}/accepted/release.json
-            ${{ env.RELEASE_ROOT }}/accepted/impact.json
-            ${{ env.RELEASE_ROOT }}/accepted/source-manifest.json
-            ${{ env.RELEASE_ROOT }}/accepted/SHA256SUMS
-            ${{ env.RELEASE_ROOT }}/accepted/sealed-source.tar.gz
-            ${{ env.RELEASE_ROOT }}/accepted/accepted-images.tar.gz
+            ${{ env.RELEASE_ROOT }}/private/accepted/release.json
+            ${{ env.RELEASE_ROOT }}/private/accepted/impact.json
+            ${{ env.RELEASE_ROOT }}/private/accepted/source-manifest.json
+            ${{ env.RELEASE_ROOT }}/private/accepted/SHA256SUMS
+            ${{ env.RELEASE_ROOT }}/private/accepted/sealed-source.tar.gz
+            ${{ env.RELEASE_ROOT }}/private/accepted/accepted-images.tar.gz
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
