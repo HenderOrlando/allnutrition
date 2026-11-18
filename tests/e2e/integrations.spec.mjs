@@ -294,8 +294,14 @@ test('Heka: emparejar, confirmar, leer y preparar revisión inmutable sin efecto
     await expect(results).toContainText('Lectura completa sin resultados', { timeout: 30000 });
     await expect(card.getByRole('button', { name: 'Preparar importación completa', exact: true })).toBeDisabled();
     const failedJob = await requestAnother();
+    const loginRequired = page.waitForResponse(async response => {
+      if (new URL(response.url()).pathname !== '/api/admin/shipping/connections' || response.request().method() !== 'GET' || !response.ok()) return false;
+      return (await response.json()).connections.some(row => row.id === connectionId && row.state === 'login_required');
+    });
     await devicePost(`jobs/${failedJob.queryId}/fail`, { lease: failedJob.lease, errorCode: 'login_required' });
+    await loginRequired;
     await expect(card.getByRole('region', { name: 'Progreso de consulta', exact: true })).toContainText('Inicia sesión personalmente en Heka', { timeout: 30000 });
+    await expect(card.getByText(/^Heka · Necesita iniciar sesión en Heka · Versión /)).toBeVisible();
     await expect(card).toContainText('Electron conectado');
     await expect(queryForm.getByRole('button', { name: 'Consultar Heka', exact: true })).toBeDisabled();
     page.once('dialog', dialog => dialog.accept());

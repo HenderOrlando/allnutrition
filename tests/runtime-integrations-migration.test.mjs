@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openStore } from '../lib/db/index.mjs';
-import { migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, INTEGRATION_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
+import { migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, HEKA_API_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
 import { insertRow, hash } from '../lib/business/commands.mjs';
 import { importData } from '../lib/import.mjs';
 
@@ -29,6 +29,28 @@ test('v10 conserva hechos, invalida OAuth anterior y es idempotente', async () =
     assert.deepEqual(await store.db.all('PRAGMA foreign_key_check'), []);
     await assert.rejects(() => insertRow(store, 'social_integration_settings', { ...settingsRow(), id: 2 }));
   } finally { await store.close(); }
+});
+
+test('respaldo exige el marcador y las tres tablas de Heka v15 en el mismo snapshot', async t => {
+  async function check(open, damage) {
+    const store = await open();
+    try {
+      assert.equal((await store.exportData()).hekaEvidence, undefined);
+      await damage(store.db);
+      await assert.rejects(() => store.exportData(), /marcador v15 y las tablas de Heka no coinciden/);
+    } finally { await store.close(); }
+  }
+  const latest = () => openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' });
+  for (const table of HEKA_API_INTERNAL_TABLES) {
+    await t.test(`tabla sin marcador: ${table}`, () => check(v9, db => db.exec(`CREATE TABLE "${table}" (id INTEGER)`)));
+    await t.test(`marcador v15 sin tabla: ${table}`, () => check(latest, db => db.exec(`DROP TABLE "${table}"`)));
+  }
+  await t.test('versión posterior no reemplaza el marcador v15', () => check(latest, async db => {
+    await db.run('DELETE FROM migrations WHERE version=15');
+    await db.run('INSERT INTO migrations(version,applied_at) VALUES(16,?)', [at]);
+  }));
+  await t.test('versión posterior sin relaciones ni marcador v15', () => check(v9, db =>
+    db.run('INSERT INTO migrations(version,applied_at) VALUES(16,?)', [at])));
 });
 
 test('fallo del marcador v10 revierte DDL e invalidación de OAuth', async () => {
