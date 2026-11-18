@@ -18,12 +18,13 @@ jobs:
     timeout-minutes: 360
     env:
       HARNESS: ${{ github.workspace }}/harness
-      CANDIDATE: ${{ github.workspace }}/native-acceptance/candidate
-      NATIVE_ROOT: ${{ github.workspace }}/native-acceptance
-      ACCEPTED_OUTPUT: ${{ github.workspace }}/accepted-output
+      CHECKOUT_CANDIDATE: ${{ github.workspace }}/native-acceptance/source
+      NATIVE_ROOT: /tmp/allnutrition-native-${{ github.run_id }}-${{ github.run_attempt }}
+      CANDIDATE: /tmp/allnutrition-native-${{ github.run_id }}-${{ github.run_attempt }}/candidate
+      ACCEPTED_OUTPUT: /tmp/allnutrition-native-${{ github.run_id }}-${{ github.run_attempt }}/accepted-output
       SOURCE_COMMIT: ${{ inputs.source_commit }}
       WORKFLOW_COMMIT: ${{ github.sha }}
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/playwright-browsers
+      PLAYWRIGHT_BROWSERS_PATH: /tmp/allnutrition-native-${{ github.run_id }}-${{ github.run_attempt }}/playwright-browsers
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - name: Checkout de herramientas de aceptación
@@ -47,7 +48,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_commit }}
-          path: native-acceptance/candidate
+          path: native-acceptance/source
           fetch-depth: 0
           persist-credentials: false
 
@@ -56,7 +57,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: native-acceptance/candidate/package-lock.json
+          cache-dependency-path: native-acceptance/source/package-lock.json
 
       - name: Validar fuente, rama y constructor amd64
         shell: bash
@@ -64,7 +65,7 @@ jobs:
           set -euo pipefail
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$(git -C "$CANDIDATE" rev-parse HEAD)" == "$SOURCE_COMMIT" ]]
+          [[ "$(git -C "$CHECKOUT_CANDIDATE" rev-parse HEAD)" == "$SOURCE_COMMIT" ]]
           [[ "$(git -C "$HARNESS" rev-parse HEAD)" == "$WORKFLOW_COMMIT" ]]
           git -C "$HARNESS" merge-base --is-ancestor "$SOURCE_COMMIT" "$WORKFLOW_COMMIT"
           [[ "$(uname -m)" == "x86_64" ]]
@@ -79,9 +80,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo chmod 0755 "$NATIVE_ROOT"
+          mkdir -m 0755 "$NATIVE_ROOT"
           sudo install -d -m 0700 -o 1000 -g 1000 \
             "$NATIVE_ROOT/home" "$NATIVE_ROOT/tools" "$ACCEPTED_OUTPUT"
+          mkdir -m 0755 "$PLAYWRIGHT_BROWSERS_PATH"
+          git clone --local --no-hardlinks "$CHECKOUT_CANDIDATE" "$CANDIDATE"
+          git -C "$CANDIDATE" checkout --detach "$SOURCE_COMMIT"
+          [[ "$(git -C "$CANDIDATE" rev-parse HEAD)" == "$SOURCE_COMMIT" ]]
           sudo install -m 0600 -o 1000 -g 1000 \
             "$HARNESS/tests/native/prepare-acceptance.mjs" \
             "$NATIVE_ROOT/tools/prepare-acceptance.mjs"
@@ -105,7 +110,6 @@ jobs:
             npx playwright install --with-deps chromium
           )
           sudo chown -R 1000:1000 "$NATIVE_ROOT"
-          sudo chown -R 1000:1000 "$PLAYWRIGHT_BROWSERS_PATH"
           sudo chmod 0700 "$NATIVE_ROOT"
           sudo chmod 0755 "$CANDIDATE"
           docker_gid="$(getent group docker | cut -d: -f3)"
@@ -180,16 +184,37 @@ jobs:
             setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
             node "$NATIVE_ROOT/tools/prepare-acceptance.mjs" bundle
 
+      - name: Preparar artefactos de salida permitidos
+        shell: bash
+        run: |
+          set -euo pipefail
+          staged_name="native-acceptance-output-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          staged="$GITHUB_WORKSPACE/$staged_name"
+          sudo install -d -m 0755 "$staged"
+          for name in accepted-images.tar.gz acceptance.json source-manifest.json SHA256SUMS; do
+            sudo install -m 0644 "$ACCEPTED_OUTPUT/$name" "$staged/$name"
+            test -r "$staged/$name"
+          done
       - name: Publicar artefacto aceptado (solo éxito)
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: allnutrition-amd64-${{ inputs.source_commit }}
           path: |
-            accepted-output/accepted-images.tar.gz
-            accepted-output/acceptance.json
-            accepted-output/source-manifest.json
-            accepted-output/SHA256SUMS
+            native-acceptance-output-${{ github.run_id }}-${{ github.run_attempt }}/accepted-images.tar.gz
+            native-acceptance-output-${{ github.run_id }}-${{ github.run_attempt }}/acceptance.json
+            native-acceptance-output-${{ github.run_id }}-${{ github.run_attempt }}/source-manifest.json
+            native-acceptance-output-${{ github.run_id }}-${{ github.run_attempt }}/SHA256SUMS
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+      - name: Limpiar entornos y comprobantes temporales
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_root="/tmp/allnutrition-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ "$NATIVE_ROOT" == "$expected_root" ]]
+          sudo rm -rf -- "$NATIVE_ROOT"
+          staged="$GITHUB_WORKSPACE/native-acceptance-output-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo rm -rf -- "$staged"
