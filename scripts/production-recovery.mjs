@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -109,8 +110,15 @@ cat >"$work/manifest.json"
 `;
   const remote = ['sudo', '-n', '/usr/bin/env', '-i', 'HOME=/root', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8', '/bin/bash', '-c', command, 'pair', cache,
     ...(bundleSha256 === undefined ? [] : [bundleSha256])].map(quote).join(' ');
-  const output = run('ssh', ['-a', '-T', ...builderArgs(remote)], { input: JSON.stringify(target), timeout: 3 * 60 * 60_000 });
-  const proof = JSON.parse(output);
+  const output = spawnSync('ssh', ['-a', '-T', ...builderArgs(remote)], {
+    input: JSON.stringify(target), encoding: 'utf8', timeout: 3 * 60 * 60_000, maxBuffer: 256 * 1024,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const failure = /^La suite del invitado falló \((\d{1,3})\)\. (audit-guest:(?:launcher|isolation|media|images|sources|pair):(?:failed|exec-missing|exec-timeout|exec-error|command-failed|invalid-evidence|guard-rejected|(?:bundle|db|image)-load(?:-space|-archive|-unpack)?|image-inspect|image-identity|pair-timeout|pair-compose|pair-docker|pair-identity|pair-sandbox|pair-service|pair-cleanup|pair-rejected))$/m.exec(output.stderr || '');
+  requireThat(output.status === 0, failure
+    ? `El par exacto falló en el invitado (${failure[1]}): ${failure[2]}.`
+    : `No hay comprobante del par exacto desde el constructor (SSH ${output.status ?? 'sin salida'}).`);
+  const proof = JSON.parse(output.stdout);
   requireThat(proof?.accepted === true && proof.zeroOwnedLeftovers === true && same(proof.images, expected),
     'El invitado no acreditó el conjunto exacto de cinco imágenes.');
   return { mode: 'guest', images: expected };

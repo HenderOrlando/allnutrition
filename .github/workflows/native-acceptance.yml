@@ -166,6 +166,27 @@ jobs:
           # Keep the runner's writable evidence and accepted output in private/.
           sudo chown root:root -- "$RELEASE_ROOT"
 
+      - name: Preparar el almacén OCI del ejecutor desechable
+        if: ${{ steps.ast.outputs.docker == 'true' || steps.probe.outputs.docker == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          driver_allowed='any(.[]; . == ["driver-type","io.containerd.snapshotter.v1"])'
+          if ! docker info --format '{{json .DriverStatus}}' | jq -e "$driver_allowed" >/dev/null; then
+            test -z "$(docker ps --all --quiet)"
+            config="$RELEASE_ROOT/private/docker-daemon.json"
+            if sudo test -f /etc/docker/daemon.json; then
+              sudo cat /etc/docker/daemon.json | jq '.features["containerd-snapshotter"] = true' > "$config"
+            else
+              printf '%s\n' '{"features":{"containerd-snapshotter":true}}' > "$config"
+            fi
+            sudo dockerd --validate --config-file "$config"
+            sudo install -o root -g root -m 0644 "$config" /etc/docker/daemon.json
+            sudo systemctl restart docker
+          fi
+          docker info --format '{{json .DriverStatus}}' | jq -e "$driver_allowed" >/dev/null
+
       - name: Preparar credenciales efímeras para BuildKit
         if: ${{ steps.ast.outputs.buildkit == 'true' || steps.probe.outputs.buildkit == 'true' }}
         uses: actions/github-script@v7

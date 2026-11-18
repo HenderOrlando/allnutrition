@@ -97,11 +97,11 @@ function containers() {
   }));
 }
 function image(ref, optional = false) {
-  const output = docker(['image', 'inspect', '--format', '{{.Id}} {{.Os}} {{.Architecture}} {{.Size}}', ref], { optional });
+  const output = docker(['image', 'inspect', '--format', '{{.Id}} {{.Os}} {{.Architecture}} {{.Size}} {{json .Descriptor}}', ref], { optional });
   if (output === null) return null;
-  const [id, os, architecture, size] = output.trim().split(' ');
+  const [id, os, architecture, size, ...descriptor] = output.trim().split(' ');
   requireThat(imageId.test(id) && os === 'linux' && architecture === 'amd64' && Number.isSafeInteger(Number(size)), 'Imagen no es Linux amd64.');
-  return { id, size: Number(size) };
+  return { id, size: Number(size), descriptor: JSON.parse(descriptor.join(' '))?.digest };
 }
 const databaseCode = `
 import { openPostgres } from './lib/db/postgres.mjs';
@@ -180,13 +180,65 @@ function saveReceipt(manifest, snapshot, origin, extra) {
   privateJSON(currentPath, record);
   return record;
 }
+// A containerd image ID is the OCI target descriptor, not the config JSON's digest.
+export function verifyImageArchive(path, images) {
+  const indexTypes = ['application/vnd.oci.image.index.v1+json', 'application/vnd.docker.distribution.manifest.list.v2+json'];
+  const manifestTypes = ['application/vnd.oci.image.manifest.v1+json', 'application/vnd.docker.distribution.manifest.v2+json'];
+  const blob = digest => {
+    requireThat(imageId.test(digest), 'Digest OCI inválido.');
+    return `blobs/sha256/${digest.slice(7)}`;
+  };
+  const read = name => {
+    const result = spawnSync('tar', ['-xOf', path, '--', name], {
+      env, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 2 * 1024 * 1024, timeout: 180_000
+    });
+    requireThat(result.status === 0, `Falta un metadato OCI válido: ${name}.`);
+    return result.stdout;
+  };
+  const descriptor = entry => {
+    const bytes = read(blob(entry.digest));
+    requireThat(entry.size === bytes.length && `sha256:${sha256(bytes)}` === entry.digest, 'Descriptor OCI alterado.');
+    return JSON.parse(bytes);
+  };
+  const amd64 = entry => entry?.os === 'linux' && entry.architecture === 'amd64' && !entry.variant;
+  const index = JSON.parse(read('index.json'));
+  const saved = JSON.parse(read('manifest.json'));
+  const refs = Object.values(images);
+  requireThat(index.schemaVersion === 2 && Array.isArray(index.manifests) && index.manifests.length === refs.length &&
+    Array.isArray(saved) && saved.length === refs.length, 'Conjunto de imágenes OCI inesperado.');
+  for (const { imageTag, imageId: id } of refs) {
+    requireThat(releaseTag.test(imageTag) && imageId.test(id), 'Identidad aprobada inválida.');
+    const entries = index.manifests.filter(entry => entry.annotations?.['io.containerd.image.name'] === `docker.io/library/${imageTag}`);
+    const manifests = saved.filter(entry => same(entry.RepoTags, [imageTag]));
+    requireThat(entries.length === 1 && entries[0].digest === id &&
+      entries[0].annotations['org.opencontainers.image.ref.name'] === imageTag.split(':')[1] && manifests.length === 1,
+    'El tag sellado no identifica al descriptor OCI aprobado.');
+    let entry = entries[0], manifest = descriptor(entry);
+    if (indexTypes.includes(entry.mediaType)) {
+      requireThat(manifest.schemaVersion === 2 && Array.isArray(manifest.manifests), 'Índice OCI inválido.');
+      const platform = manifest.manifests.filter(item => amd64(item.platform));
+      requireThat(platform.length === 1, 'El índice OCI no identifica una única imagen linux/amd64.');
+      entry = platform[0];
+      manifest = descriptor(entry);
+    }
+    requireThat(manifestTypes.includes(entry.mediaType) && manifest.schemaVersion === 2 && Array.isArray(manifest.layers), 'Manifiesto OCI inválido.');
+    const configuration = descriptor(manifest.config);
+    const { Config, Layers } = manifests[0];
+    const diffIds = configuration.rootfs?.diff_ids;
+    requireThat(amd64(configuration) && Config === blob(manifest.config.digest) &&
+      same(Layers, manifest.layers.map(layer => blob(layer.digest))) && Array.isArray(diffIds) &&
+      diffIds.length === Layers.length && diffIds.every(digest => imageId.test(digest)), 'Config o capas OCI distintas al manifiesto Docker.');
+  }
+}
+
 function loadImages(path, images) {
-  const entries = JSON.parse(command('tar', ['-xOf', path, 'manifest.json'], 'Manifiesto de Docker archive'));
-  requireThat(Array.isArray(entries) && entries.length === Object.keys(images).length && entries.every(({ Config, RepoTags }) =>
-    RepoTags?.length === 1 && Object.values(images).some(({ imageTag, imageId: id }) => RepoTags[0] === imageTag && (Config === `blobs/sha256/${id.slice(7)}` || Config === `${id.slice(7)}.json`))), 'Contenido inesperado en archivo de imágenes.');
+  verifyImageArchive(path, images);
   for (const ref of Object.values(images)) requireThat((image(ref.imageTag, true)?.id ?? ref.imageId) === ref.imageId, 'Colisión de tag inmutable.');
   docker(['load', '--input', path], { timeout: 1_200_000 });
-  for (const ref of Object.values(images)) requireThat(image(ref.imageTag).id === ref.imageId, 'ID cargado distinto al ID aprobado.');
+  for (const ref of Object.values(images)) {
+    const tagged = image(ref.imageTag), pinned = image(ref.imageId);
+    requireThat([tagged, pinned].every(value => value.id === ref.imageId && value.descriptor === ref.imageId), 'Descriptor OCI cargado distinto al ID aprobado.');
+  }
 }
 function up(services, options) {
   for (const service of serviceOrder.filter(s => services.includes(s) && s !== 'db')) {

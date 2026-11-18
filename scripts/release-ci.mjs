@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { calculateImpact, canonicalPlan, configFiles, imageTag, requiredChecks, sha40 } from './release-impact.mjs';
 import { units } from './release-impact-matrix.mjs';
 import { nodeSandboxed } from './release-test-plan.mjs';
+import { verifyImageArchive } from './production-host.mjs';
 
 const repository = 'HenderOrlando/allnutrition';
 const activeConfig = ['compose.yaml', 'compose.nginx.yaml', 'deploy/pg_hba.conf', 'deploy/postgres-entrypoint.sh', 'deploy/social-browser-seccomp.json'];
@@ -181,8 +182,11 @@ function validateEvidence(plan, evidence) {
 }
 
 function inspectImage(image) {
-  const actual = command('docker', ['image', 'inspect', '--format', '{{.Id}} {{.Architecture}} {{.Os}}', image.imageTag], { encoding: 'utf8' });
-  assert.equal(actual.trim(), `${image.imageId} amd64 linux`, `La imagen local no coincide: ${image.imageTag}`);
+  for (const ref of [image.imageTag, image.imageId]) {
+    const actual = JSON.parse(command('docker', ['image', 'inspect', '--format', '{{json .}}', ref], { encoding: 'utf8' }));
+    assert.ok(actual.Id === image.imageId && actual.Descriptor?.digest === image.imageId &&
+      actual.Architecture === 'amd64' && actual.Os === 'linux', `La imagen local no coincide con el descriptor OCI: ${ref}`);
+  }
 }
 
 function archive(outputPath, program, args) {
@@ -236,6 +240,7 @@ async function seal(context, expected, plan, evidence, directory) {
     const name = 'accepted-images.tar.gz';
     archive(join(directory, name), 'docker save "$@" | gzip -1', images.map(image => image.imageTag));
     images.forEach(inspectImage);
+    verifyImageArchive(join(directory, name), evidence.images);
     hashes[name] = await hashFile(join(directory, name));
   }
   const latest = await latestProduction(sourceCommit);

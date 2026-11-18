@@ -4,7 +4,7 @@ import { createReadStream, readFileSync, readdirSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { activeFiles, hash, imageId, publicState, requireThat, same, serviceOrder, sha, sha256, stateRoot } from './production-host.mjs';
+import { activeFiles, hash, imageId, publicState, requireThat, same, serviceOrder, sha, sha256, stateRoot, verifyImageArchive } from './production-host.mjs';
 
 export const repo = 'HenderOrlando/allnutrition';
 export const origin = 'https://allnutrition.wintimeapp.co';
@@ -221,6 +221,7 @@ export async function verifyBundle(dir, item, base, { head, plan, canonicalPlan,
     requireThat(imageId.test(built.imageId) && ['app', 'runner'].includes(kind), 'Tipo o ID de imagen inválido.');
     requireThat(built.os === 'linux' && built.architecture === 'amd64' && built.imageTag === imageTag(kind, built.imageId), `Imagen aceptada no válida: ${kind}.`);
   }
+  if (plan.build.length) verifyImageArchive(file('accepted-images.tar.gz'), release.images);
   return { release, sums, dir };
 }
 export function projectTarget(base, head, plan, release, archive) {

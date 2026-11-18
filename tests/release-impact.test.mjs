@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { calculateImpact, requiredChecks } from '../scripts/release-impact.mjs';
 import { playwrightFailures, preflight } from '../scripts/release-test-plan.mjs';
+import { sha256, verifyImageArchive } from '../scripts/production-host.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const noGit = spawnSync('git', ['--version']).error?.code === 'ENOENT';
@@ -236,6 +237,51 @@ test('Playwright diagnostics emit only a redacted title, project and failure sta
   assert.deepEqual(playwrightFailures({ suites: [{ specs: [], suites: [{ specs: [spec] }] }], errors: [{ message: 'private stack' }] }), [
     { title: 'checkout at [URL redactada]', project: 'desktop', status: 'unexpected:failed' },
   ]);
+});
+
+test('OCI release archive pins the descriptor and rejects config IDs, wrong platform, and altered config bytes', t => {
+  const root = mkdtempSync(join(tmpdir(), 'allnutrition-oci-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'blobs', 'sha256'), { recursive: true });
+  const blob = value => {
+    const bytes = JSON.stringify(value);
+    const digest = sha256(bytes);
+    writeFileSync(join(root, 'blobs', 'sha256', digest), bytes);
+    return { digest: `sha256:${digest}`, size: Buffer.byteLength(bytes) };
+  };
+  const layer = blob('fixture layer');
+  const amd64 = { os: 'linux', architecture: 'amd64' };
+  const configuration = blob({ ...amd64, rootfs: { diff_ids: [layer.digest] } });
+  const manifest = {
+    ...blob({ schemaVersion: 2, config: configuration, layers: [layer] }),
+    mediaType: 'application/vnd.oci.image.manifest.v1+json', platform: amd64,
+  };
+  const index = {
+    ...blob({ schemaVersion: 2, manifests: [manifest] }),
+    mediaType: 'application/vnd.oci.image.index.v1+json',
+  };
+  const imageTag = `allnutrition:release-${index.digest.slice(7, 19)}`;
+  const archive = join(root, 'image.tar');
+  const write = descriptor => {
+    writeFileSync(join(root, 'index.json'), JSON.stringify({ schemaVersion: 2, manifests: [{ ...descriptor, annotations: {
+      'io.containerd.image.name': `docker.io/library/${imageTag}`, 'org.opencontainers.image.ref.name': imageTag.split(':')[1]
+    } }] }));
+    writeFileSync(join(root, 'manifest.json'), JSON.stringify([{
+      RepoTags: [imageTag], Config: `blobs/sha256/${configuration.digest.slice(7)}`, Layers: [`blobs/sha256/${layer.digest.slice(7)}`]
+    }]));
+    execFileSync('tar', ['-cf', archive, '-C', root, 'index.json', 'manifest.json', 'blobs']);
+  };
+  write(index);
+  verifyImageArchive(archive, { app: { imageTag, imageId: index.digest } });
+  assert.throws(() => verifyImageArchive(archive, { app: { imageTag, imageId: configuration.digest } }), /descriptor OCI aprobado/);
+  const wrongPlatform = {
+    ...index, ...blob({ schemaVersion: 2, manifests: [{ ...manifest, platform: { os: 'linux', architecture: 'arm64' } }] }),
+  };
+  write(wrongPlatform);
+  assert.throws(() => verifyImageArchive(archive, { app: { imageTag, imageId: wrongPlatform.digest } }), /linux\/amd64/);
+  writeFileSync(join(root, 'blobs', 'sha256', configuration.digest.slice(7)), 'altered');
+  write(index);
+  assert.throws(() => verifyImageArchive(archive, { app: { imageTag, imageId: index.digest } }), /Descriptor OCI alterado/);
 });
 
 test('workflow, harness and npm-script-only changes each require harness checks, not images', fixtureOptions, async t => {
