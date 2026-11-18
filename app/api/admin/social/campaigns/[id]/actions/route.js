@@ -10,7 +10,7 @@ export async function POST(request, { params }) { try {
   const action = text(input.action, 'Acción', 80, true);
   delete input.action;
   const result = await socialCampaignAction(await db(), (await params).id, action, input, session.user.id);
-  const queued = ['approve-organic', 'prepare-paid', 'activate-paid', 'pause', 'resume', 'reconcile', 'link-remote', 'confirm-absent', 'resume-restored', 'sync', 'analyze'].includes(action) || Boolean(result.operationId);
+  const queued = ['publish-organic', 'prepare-paid', 'activate-paid', 'pause', 'resume', 'reconcile', 'link-remote', 'confirm-absent', 'resume-restored', 'sync', 'analyze'].includes(action) || Boolean(result.operationId);
   const status = action === 'duplicate' ? 201 : queued ? 202 : 200;
   return json(result, status);
 } catch (error) { return errorResponse(error); } }

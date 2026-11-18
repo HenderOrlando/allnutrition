@@ -16,7 +16,7 @@ const topics = [
     steps: [
       'El recorrido es Qué anunciar → Preparar contenido → Revisar y publicar. Continuar y Anterior no guardan, publican ni solicitan imágenes.',
       'Sube o elige una foto, úsala tal cual si está lista, o prepara una variante con indicaciones. Por ejemplo: «Aclara el fondo, conserva la etiqueta y la condición Solo con Dúo». El original nunca se sustituye automáticamente.',
-      'Revisa la oferta exacta, los destinos y la estimación. En orgánico, aprobar autoriza publicar o programar. En pauta, primero se prepara sin activar; autorizar inversión es otra decisión.',
+      'Revisa la oferta exacta, los destinos y la estimación. En orgánico, primero aprueba sin publicar; después puedes autorizar el envío desde Administrar publicación. En pauta, primero se prepara sin activar; autorizar inversión es otra decisión.',
     ],
   },
   {

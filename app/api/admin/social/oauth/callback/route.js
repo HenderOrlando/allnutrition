@@ -23,7 +23,20 @@ export function GET() {
     });
     code = null; state = null;
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'No se pudo conectar Meta. Reinicia el flujo desde Conexiones.');
+    if (!response.ok) {
+      const message = result.error || 'No se pudo conectar Meta. Reinicia el flujo desde Conexiones.';
+      const diagnostic = result.diagnostic;
+      const stages = { code_exchange: 'canje del código', long_lived_exchange: 'canje de larga duración', validation: 'validación de la conexión' };
+      if (diagnostic && Object.hasOwn(stages, diagnostic.stage)) {
+        const fields = ['Etapa: ' + stages[diagnostic.stage]];
+        for (const [key, label] of [['httpStatus', 'HTTP de Meta'], ['code', 'Código de Meta'], ['subcode', 'Subcódigo de Meta']]) {
+          if (Number.isSafeInteger(diagnostic[key])) fields.push(label + ': ' + diagnostic[key]);
+        }
+        status.textContent = message + ' ' + fields.join(' · ') + '.';
+        return;
+      }
+      throw new Error(message);
+    }
     window.location.replace('/admin?section=business&tab=social');
   } catch (error) {
     code = null; state = null;

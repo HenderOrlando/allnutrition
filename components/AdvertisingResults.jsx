@@ -25,6 +25,9 @@ const objectives = { reach: 'Llegar a más personas', engagement: 'Conseguir int
 const primaryLabels = { reach: 'Personas alcanzadas', interactions: 'Interacciones', linkClicks: 'Clics al enlace', conversations: 'Conversaciones' };
 const conclusions = { improved: 'Mejoró según este criterio', not_improved: 'No mejoró según este criterio', inconclusive: 'No se puede concluir' };
 const comparisonStates = { below: 'Debajo del rango', within: 'Dentro del rango', above: 'Encima del rango', in_progress: 'En curso: avance, no evaluación final', not_comparable: 'No comparable' };
+const campaignState = campaign => campaign.state === 'ready' && campaign.mode === 'organic'
+  ? campaign.deliveries?.length ? 'Preparada' : 'Aprobada, pendiente de publicar'
+  : states[campaign.state] || campaign.state;
 const reasonLabels = {
   no_linked_orders: 'Sin pedidos vinculados', linked_orders_pending_recognition: 'Hay pedidos pendientes de reconocimiento económico',
   meta_currency_not_cop: 'La moneda de Meta no es COP', positive_meta_spend_required: 'Se necesita gasto Meta positivo',
@@ -211,7 +214,7 @@ function Performance({ campaign, rows }) {
     <Offer offer={approved?.offerSnapshot || (!approved ? campaign.offerSnapshot : null)}/><p>Objetivo: {objectives[campaign.objective]}</p>
     <ul>{campaign.deliveries?.map(delivery => <li key={delivery.id}><strong>{channels[delivery.channel]}: </strong>{states[delivery.state] || delivery.state}{delivery.remoteRefs?.permalink && <> · <a href={delivery.remoteRefs.permalink} target="_blank" rel="noreferrer">Ver en Meta</a></>}{delivery.effectiveSpec && <> · Cambio confirmado en la misma entrega.</>}</li>)}</ul>
     <h3 id="social-result-kpi">¿Logró lo que buscabas?</h3>
-    {!rows?.length && <p>{campaign.deliveries?.length ? 'Sin dato para esta selección de fechas o filtros.' : 'No hay una entrega confirmada. Sin dato no equivale a cero.'}</p>}
+    {!rows?.length && <p>Sin dato para esta selección de fechas o filtros.</p>}
     <div className={styles.metricGrid}>{rows?.map(row => <article className={styles.card} key={row.deliveryId}>
       <h4>{primaryLabels[row.metric]} · {channels[row.channel]}</h4><strong className={styles.metricValue}>{unavailable[row.status] || metricValue(row.value, row.currency)}</strong>
       {row.fetchedAt && <p>{date(row.periodStart, row.timeZone)} — {date(row.periodEnd, row.timeZone)} · última captura mostrada {date(row.fetchedAt)}</p>}
@@ -366,6 +369,7 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
   const current = snapshot?.key === queryKey, sameRecord = Boolean(id && snapshot?.campaignId === id);
   const campaign = sameRecord ? snapshot.campaign : null;
   const results = sameRecord ? snapshot.results : null;
+  const hasDeliveries = Boolean(campaign?.deliveries?.length);
   const pending = current && (campaign?.deliveries?.some(item => ['queued', 'preparing', 'publishing', 'in_review'].includes(item.state)) || campaign?.operations?.some(item => ['prepared', 'sent', 'retry_wait'].includes(item.state) && (!item.nextAttemptAt || Date.parse(item.nextAttemptAt) <= Date.now())) || ['pending', 'running', 'queued'].includes(results?.analysis?.job?.state));
   useEffect(() => {
     if (!id) { setLoading(false); return; }
@@ -418,7 +422,7 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
     if (['duplicate-from-recommendation', 'prepare-in-place'].includes(type) && mounted.current) onNavigate?.({ section: 'advertising', tab: 'campaigns', record: result.id });
   }
   async function campaignAction(name) {
-    if (!current || !campaign || busy || action) return;
+    if (!current || !campaign || busy || action || !hasDeliveries && ['analyze', 'sync'].includes(name)) return;
     const body = { action: name, version: campaign.version }, path = `${ROOT}/campaigns/${encodeURIComponent(id)}/actions`, key = `${path}:${JSON.stringify(body)}`;
     if (!requestIds.current.has(key)) requestIds.current.set(key, crypto.randomUUID());
     const controller = new AbortController(); mutationControllers.current.add(controller); reportAction(true); setError('');
@@ -455,18 +459,21 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
     <header className={styles.toolbar}><div><p className={styles.eyebrow}>Evidencia, no atribución causal</p><h2 ref={headingRef} tabIndex={-1}>{campaign?.name || (id ? 'Resultados de la publicación' : 'Elige una publicación o campaña')}</h2></div>{id && <button type="button" className="button subtle" disabled={loading || busy || !!action} onClick={() => setRefresh(value => value + 1)}>Actualizar vista</button>}</header>
     {!id && <section className={styles.queryPanel} aria-label="Seleccionar publicación"><form method="post" onSubmit={event => { event.preventDefault(); setCampaignQuery({ q: campaignSearch.trim(), page: 1 }); }}><div className={styles.fieldGrid}><Field field={{ name: 'campaignSearch', label: 'Buscar publicaciones', max: 100 }} value={campaignSearch} onChange={setCampaignSearch}/><button type="submit" className="button subtle" disabled={listLoading}>Buscar publicaciones</button></div></form>
       {listError && <p ref={listErrorRef} tabIndex={-1} role="alert" className={styles.error}>{listError}<button type="button" className="text-button" onClick={() => setCampaignQuery(value => ({ ...value }))}>Reintentar listado</button></p>}
-      <label className="field">Publicación o campaña<select value="" disabled={listLoading || Boolean(listError)} onChange={event => change({ record: event.target.value || null, resultsFocus: null, page: 1 })}><option value="">Elige por nombre</option>{campaignList?.campaigns?.map(item => <option key={item.id} value={item.id}>{item.name} · {states[item.state] || item.state}</option>)}</select></label>
+      <label className="field">Publicación o campaña<select value="" disabled={listLoading || Boolean(listError)} onChange={event => change({ record: event.target.value || null, resultsFocus: null, page: 1 })}><option value="">Elige por nombre</option>{campaignList?.campaigns?.map(item => <option key={item.id} value={item.id}>{item.name} · {campaignState(item)}</option>)}</select></label>
       {listLoading && <p role="status">Cargando publicaciones…</p>}{campaignList && <div className={styles.pagination}><button type="button" className="button subtle" disabled={busy || !!action || listLoading || campaignList.page <= 1} onClick={() => setCampaignQuery({ q: campaignQuery.q, page: campaignList.page - 1 })}>Publicaciones anteriores</button><span>Página {campaignList.page} de {campaignList.pages} · {campaignList.total} publicaciones · búsqueda «{campaignQuery.q || 'todas'}»</span><button type="button" className="button subtle" disabled={busy || !!action || listLoading || campaignList.page >= campaignList.pages} onClick={() => setCampaignQuery({ q: campaignQuery.q, page: campaignList.page + 1 })}>Publicaciones siguientes</button></div>}
       {!listLoading && campaignList?.campaigns?.length === 0 && <p>{campaignQuery.q ? 'No hay coincidencias con ese nombre.' : 'Aún no hay piezas para consultar.'} <button type="button" className="text-button" onClick={() => onNavigate?.({ section: 'advertising', tab: 'campaigns', record: 'new' })}>Crear publicidad</button></p>}
     </section>}
     {id && <button type="button" className="button subtle" disabled={busy || !!action} onClick={() => change({ record: null, resultsFocus: null, page: 1 })}>Elegir otra publicación o campaña</button>}
-    {sameRecord && <Performance campaign={campaign} rows={results.performance}/>}
+    {sameRecord && (hasDeliveries ? <Performance campaign={campaign} rows={results.performance}/> : <>
+      <p>{campaignState(campaign)} · Sin entregas; aún no hay rendimiento que analizar.</p>
+      <ApprovedCampaign campaign={campaign} onNavigate={onNavigate}/>
+    </>)}
     {sameRecord && <div className={styles.actions}><button type="button" className="button subtle" disabled={busy || !!action} onClick={() => onNavigate?.({ section: 'advertising', tab: 'campaigns', record: id })}>Administrar publicación</button>
       {campaign.deliveries?.length > 0 && <button type="button" className="button subtle" disabled={busy || !!action || !current} onClick={() => campaignAction('sync')}>Actualizar desde Meta</button>}
       {campaign.operations?.some(op => op.step.startsWith('amend:') && ['sent','uncertain'].includes(op.state)) && <button type="button" className="button subtle" disabled={busy || !!action || !current} onClick={() => campaignAction('reconcile')}>Comprobar el cambio sin reenviar</button>}
     </div>}
-    {sameRecord && <Recommendations analysis={analysis} campaign={campaign} stale={analysisStale || !current || Boolean(error)} measurements={results.measurements} busy={busy || !!action || !current} onAnalyze={() => campaignAction('analyze')} onAction={recommendationAction}/>}
-    {sameRecord && <Learnings id={id} key={id} api={api} refresh={snapshot.loadedAt} onNavigate={onNavigate}/>}
+    {hasDeliveries && <Recommendations analysis={analysis} campaign={campaign} stale={analysisStale || !current || Boolean(error)} measurements={results.measurements} busy={busy || !!action || !current} onAnalyze={() => campaignAction('analyze')} onAction={recommendationAction}/>}
+    {hasDeliveries && <Learnings id={id} key={id} api={api} refresh={snapshot.loadedAt} onNavigate={onNavigate}/>}
     {sameRecord && <details id="social-results-detail" className={styles.technicalDetails}><summary>Medición de esta pieza y filtros</summary>
     <div className={styles.queryPanel} aria-label="Filtrar métricas">
       <form method="post" onSubmit={applyPeriod}><fieldset disabled={busy || !!action} className="editor-fieldset"><div className={styles.fieldGrid}><Field field={{ name: 'from', type: 'date', label: 'Desde' }} value={from} onChange={value => setFrom(value || '')}/><Field field={{ name: 'to', type: 'date', label: 'Hasta' }} value={to} onChange={value => setTo(value || '')}/></div><div className={styles.actions}><button type="submit" className="button subtle">Aplicar fechas</button></div></fieldset></form>
@@ -480,7 +487,7 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
     {notice && id && <p role="status" className={styles.notice}>{notice}</p>}{error && id && <div role="alert" tabIndex={-1} ref={errorRef} className={styles.error}>{error}<button type="button" className="button subtle" disabled={busy || !!action} onClick={() => setRefresh(value => value + 1)}>Reintentar lectura</button>{sameRecord && <p>Se conserva la lectura de esta ficha del {date(snapshot.loadedAt)}; no acredita una actualización exitosa.</p>}</div>}
     {loading && id && <p role="status">{sameRecord ? 'Actualizando sin borrar la evidencia anterior…' : 'Cargando resultados…'}</p>}
     {sameRecord && !current && <p className={styles.warning}>La lectura de esta ficha del {date(snapshot.loadedAt)} todavía corresponde a los filtros anteriores.</p>}
-    {sameRecord && <details id="social-results-captures" className={styles.technicalDetails}><summary>Métricas completas, capturas y estado por destino</summary><div style={{ minWidth: 0 }} inert={!current ? true : undefined} className={styles.stack}>
+    {hasDeliveries && <details id="social-results-captures" className={styles.technicalDetails}><summary>Métricas completas, capturas y estado por destino</summary><div style={{ minWidth: 0 }} inert={!current ? true : undefined} className={styles.stack}>
       <p className={styles.muted}>Corte de lectura social {date(results.asOf)} · cargado localmente {date(snapshot.loadedAt)}. Alcance único entre entregas: no disponible sin deduplicación; no se suman personas de redes o campañas.</p>
       <section className={styles.panel}><h3>Estado de publicación por red</h3>{campaign?.restoreHold && <p className={styles.warning}>Bloqueo de restauración: comprobar el estado en Meta sin reenviar y aceptar la recuperación antes de continuar. Restaurar no detiene anuncios activos.</p>}{campaign?.state === 'scheduled' && campaign.revisions?.at(-1)?.spec?.publishAt && Date.parse(campaign.revisions.at(-1).spec.publishAt) < Date.now() && <p className={styles.warning}>La hora programada ya pasó y no hay confirmación de publicación en este estado. Revisa el procesamiento en segundo plano y las operaciones; el reloj local no acredita que se haya publicado.</p>}{!results.deliveries?.length && <p>No hay entregas aprobadas en esta selección. No significa cero resultados publicados fuera del módulo.</p>}{results.deliveries?.map(delivery => <article className={styles.card} key={delivery.id}><h4>{channels[delivery.channel] || delivery.channel} · {method(delivery.integrationMethod)}</h4><p>Estado local: {states[delivery.state] || delivery.state} · último estado confirmado: {states[delivery.lastConfirmedState] || delivery.lastConfirmedState || 'Sin confirmación remota'}</p><p>Última consulta correcta {date(delivery.metricSync?.lastSuccessAt)} · próximo turno {date(delivery.nextSyncAt || delivery.metricSync?.nextAt)}</p>{delivery.metricSync?.lastError && <p className={styles.warning}>Último error: {text(delivery.metricSync.lastError)}. Se conserva evidencia anterior.</p>}{delivery.metricSync?.blocked && <p className={styles.warning}>Consulta bloqueada: revisar conexión/permisos/interfaz. Actualizar no evade este bloqueo.</p>}{['uncertain', 'blocked', 'needs_attention', 'partial'].includes(delivery.state) && <p className={styles.warning}>Revisar operaciones y comprobar el estado en Meta sin reenviar desde la publicación.</p>}</article>)}</section>
       {grouped.size ? [...grouped].map(([key, group]) => <section key={key} className={styles.stack} style={{ minWidth: 0 }}><h3>{group.title}</h3>{group.items.map(({ item, delivery }) => <Measurement key={item.id} item={item} delivery={delivery}/>)}</section>) : current && !loading && !error && <section className={styles.empty}><h3>Sin capturas en esta selección</h3><p>No disponible no equivale a cero. Puede faltar una entrega, el horizonte, permiso para consultar resultados o una captura compatible con las fechas.</p>{resultFilters.length > 0 && <button type="button" className="button subtle" onClick={clearResultFilters}>Limpiar filtros de resultados</button>}</section>}
@@ -488,7 +495,7 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
         <details className={styles.technicalDetails}><summary>Comparar con la estimación y mi meta de costo</summary><Comparisons analysis={analysis} currency={campaign.currency} stale={analysisStale}/><UserCostTarget campaign={campaign} measurements={results.measurements || []}/></details>
         <ApprovedCampaign campaign={campaign} onNavigate={onNavigate}/>
     </div></details>}
-    {sameRecord && results.business && <details id="social-results-business" className={styles.technicalDetails}><summary>Pedidos y gastos vinculados (separados de Meta)</summary><BusinessPanel business={results.business} stale={commercialStale} links={snapshot.links} onNavigate={onNavigate} onLink={(kind, record) => setAction({ type: 'link', kind, record })}/></details>}
+    {hasDeliveries && results.business && <details id="social-results-business" className={styles.technicalDetails}><summary>Pedidos y gastos vinculados (separados de Meta)</summary><BusinessPanel business={results.business} stale={commercialStale} links={snapshot.links} onNavigate={onNavigate} onLink={(kind, record) => setAction({ type: 'link', kind, record })}/></details>}
     {action && current && <ResultActionDialog action={action} campaignId={id} api={api} requestIds={requestIds} onClose={() => setAction(null)} onSaved={saved} onInteractionStateChange={reportDialog}/>}
   </section>;
 }

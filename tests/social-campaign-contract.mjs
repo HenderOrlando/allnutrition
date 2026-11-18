@@ -11,28 +11,44 @@ import { getSocialOffer, listSocialOffers, resolveSocialOffer } from '../lib/bus
 import { saveCredentials } from '../lib/social/credentials.mjs';
 import { META_PERMISSIONS } from '../lib/social/config.mjs';
 import { claimJob } from '../lib/business/job-leases.mjs';
+import { processSocialApiTurn } from '../lib/business/social-api-jobs.mjs';
+import { processSocialBrowserTurn } from '../lib/business/social-jobs.mjs';
+import { createMetaPublishingProvider } from './social-meta-provider.mjs';
 import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
 import { loadSocialRuntime } from '../lib/social/config.mjs';
 
 const NOW = '2026-11-02T12:00:00.000Z';
+const REQUESTED_AT = '2026-11-02T13:00:00.000Z';
 const START = '2026-11-03T12:00:00.000Z', END = '2026-11-10T12:00:00.000Z';
 const TOKEN = 'CAMPAIGN-SYNTHETIC-USER-TOKEN', PAGE_TOKEN = 'CAMPAIGN-SYNTHETIC-PAGE-TOKEN';
 const editable = data => ({ data: JSON.stringify(data), version: 1, created_at: NOW, updated_at: NOW });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const get = async (store, table, id) => entity(await store.db.get(`SELECT * FROM ${store.t(table)} WHERE id=?`, [id]));
 const rows = (store, table, campaignId) => store.db.all(`SELECT * FROM ${store.t(table)} WHERE campaign_id=?`, [campaignId]);
+const socialJobs = store => store.db.all(`SELECT * FROM ${store.t('job_runs')} WHERE key LIKE 'social:%' ORDER BY key`);
+const publicationInput = ({ revision, specHash }) => ({ revision, specHash, publishAccepted: true });
+const fixtureUser = async store => {
+  const id = randomUUID();
+  await insertRow(store, 'users', { id, email: `${id}@example.test`, password: 'synthetic-not-used', active: 1 });
+  return id;
+};
+async function assertUnqueued(store, campaignId) {
+  assert.deepEqual(await rows(store, 'social_deliveries', campaignId), []);
+  assert.deepEqual(await rows(store, 'social_operations', campaignId), []);
+  assert.deepEqual(await socialJobs(store), []);
+}
 async function patchData(store, table, id, patch, { bump = false } = {}) {
   const row = await store.db.get(`SELECT data FROM ${store.t(table)} WHERE id=?`, [id]);
   await store.db.run(`UPDATE ${store.t(table)} SET data=?${bump ? ',version=version+1' : ''} WHERE id=?`, [JSON.stringify({ ...JSON.parse(row.data), ...patch }), id]);
 }
 function syntheticProvider() {
-  // Independent account state, not an echo of the submitted specification. Every
-  // request must be an allowed read: stage4 cannot create a remote publication.
+  // Account state is independent of the submitted specification. Commands may
+  // only read; worker tests use the stateful synthetic publishing provider.
   const remote = { currency: 'COP', pageTasks: ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE'], accountStatus: 1, permission: true, calls: [], beforeRead: null };
   remote.fetchImpl = async (href, init) => {
     const url = new URL(href), path = url.pathname.replace('/v26.0/', '');
-    assert.equal(url.hostname, 'graph.facebook.com'); assert.equal(init.method, 'GET');
     remote.calls.push(path);
+    assert.equal(url.hostname, 'graph.facebook.com'); assert.equal(init.method, 'GET');
     if (remote.beforeRead) await remote.beforeRead(path);
     let data;
     if (path === 'debug_token') data = { data: { app_id: '42', type: 'USER', is_valid: true, user_id: '100', expires_at: Date.parse(NOW) / 1000 + 86400, data_access_expires_at: Date.parse(NOW) / 1000 + 172800, scopes: META_PERMISSIONS } };
@@ -52,8 +68,7 @@ async function setup(store, t, { method = 'api', mode = 'organic', objective = '
   const env = { APP_URL: 'http://localhost:3310', META_APP_ID: '42', META_APP_SECRET: 'CAMPAIGN-SYNTHETIC-SECRET', META_LOGIN_CONFIG_ID: '43', SOCIAL_PUBLISHING_ENABLED: 'true', SOCIAL_BROWSER_ENABLED: 'true', SOCIAL_MEDIA_DIR: root };
   for (const key of ['SOCIAL_TOKEN_ENCRYPTION_KEY', 'SOCIAL_MEDIA_SIGNING_KEY', 'SOCIAL_BROWSER_CONTROL_KEY', 'SOCIAL_BROWSER_SESSION_KEY']) env[key] = randomBytes(32).toString('base64');
   await configureSocialTestRuntime(store, { env });
-  const actorId = randomUUID(), connectionId = randomUUID(), assetId = randomUUID(), remote = syntheticProvider();
-  await insertRow(store, 'users', { id: actorId, email: `${actorId}@example.test`, password: 'synthetic-not-used', active: 1 });
+  const actorId = await fixtureUser(store), connectionId = randomUUID(), assetId = randomUUID(), remote = syntheticProvider();
   const identities = { userId: '100', businessId: '500', pageId: '200', instagramId: '300', adAccountId: method === 'api' ? 'act_400' : '400' };
   const connectionData = { name: 'Conexión sintética', identities, currency: 'COP', timeZone: 'America/Bogota', sessionEpoch: 0, capabilities: { facebookPublish: true, instagramPublish: true, adsPublish: true, insights: true, whatsappAds: true }, resources: { pages: [{ id: '200', instagramId: '300', whatsappNumber: '+573001234567', businessId: '500', tasks: ['CREATE_CONTENT', 'ADVERTISE', 'ANALYZE'] }], adAccounts: [{ id: identities.adAccountId, currency: 'COP', timeZone: 'America/Bogota', accountStatus: 1, businessId: '500', tasks: ['ADVERTISE', 'ANALYZE'] }] } };
   await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: method, state: 'connected', ...editable(connectionData) });
@@ -66,7 +81,8 @@ async function setup(store, t, { method = 'api', mode = 'organic', objective = '
   const options = { env, now: NOW, transport: { fetchImpl: remote.fetchImpl } };
   const context = { store, env, actorId, connectionId, assetId, assetHash, configuration, options, remote, root };
   context.create = (extra = {}) => saveSocialCampaign(store, { ...configuration, ...extra, requestId: randomUUID() }, actorId, options);
-  context.action = (campaign, action, extra = {}) => socialCampaignAction(store, campaign.id, action, { version: campaign.version, requestId: randomUUID(), ...extra }, actorId, options);
+  context.action = (campaign, action, extra = {}, { actorId: by = actorId, ...overrides } = {}) => socialCampaignAction(store, campaign.id, action, { version: campaign.version, requestId: randomUUID(), ...extra }, by, { ...options, ...overrides });
+  context.publish = (approved, overrides) => context.action(approved, 'publish-organic', publicationInput(approved), overrides);
   context.build = async id => {
     const campaign = await get(store, 'social_campaigns', id), connection = await get(store, 'social_connections', connectionId), asset = await get(store, 'social_assets', assetId);
     return { ...buildSocialSpec(campaign, { connection, asset, now: NOW }), campaign };
@@ -143,6 +159,7 @@ const cases = [
     for (const patch of [{ price: 75000 }, { price: 73000, items: [{ productId: vainilla.id, quantity: 3 }] }]) {
       await patchData(store, 'records', combo.id, patch, { bump: true });
       await assert.rejects(() => f.action(changed, 'approve-organic', f.approvalInput(reviewed)), /ficha comercial/i);
+      await assert.rejects(() => f.publish(approved), /ficha comercial/i);
       await assert.rejects(() => f.create({ offerRef }), { status: 409 });
     }
     assert.deepEqual(await rows(store, 'social_deliveries', changed.id), []);
@@ -150,8 +167,11 @@ const cases = [
     assert.equal(inventory.stockQuantity, 7);
     assert.equal(inventory.stockReserved, 0);
     const historical = await getSocialCampaign(store, approved.id);
-    assert.equal(historical.validation.offerError, undefined);
+    assert.match(historical.validation.offerError, /ficha comercial/i);
+    assert.equal(historical.validation.specHash, null);
     assert.deepEqual(historical.revisions[0].offerSnapshot, snapshot);
+    await assertUnqueued(store, approved.id);
+    assert.deepEqual(f.remote.calls, []);
     const duplicate = await f.action(await f.action(approved, 'cancel'), 'duplicate');
     const copied = await getSocialCampaign(store, duplicate.id, f.options);
     assert.deepEqual(copied.offerSnapshot, snapshot);
@@ -185,19 +205,72 @@ const cases = [
     assert.deepEqual(await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`), before);
     await assert.rejects(() => saveSocialCampaign(store, { name: 'Referencias inválidas', connectionId: randomUUID(), requestId: randomUUID() }, f.actorId, f.options), { status: 404 });
   }],
-  ['dos confirmaciones concurrentes congelan una única revisión y una entrega por red sin operaciones API inventadas', async (store, t) => {
+  ['aprobar con publicación deshabilitada sólo congela una revisión y ningún consumidor tiene trabajo', async (store, t) => {
     const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id), input = { ...f.approvalInput(forecast), version: campaign.version, requestId: randomUUID() };
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
     const [first, replay] = await Promise.all([socialCampaignAction(store, campaign.id, 'approve-organic', input, f.actorId, f.options), socialCampaignAction(store, campaign.id, 'approve-organic', input, f.actorId, f.options)]);
-    assert.deepEqual(first, replay); assert.equal(first.state, 'publishing'); assert.equal(first.deliveryIds.length, 2);
-    assert.equal((await rows(store, 'social_revisions', campaign.id)).length, 1); assert.equal((await rows(store, 'social_deliveries', campaign.id)).length, 2);
+    assert.deepEqual(first, replay);
+    assert.deepEqual({ state: first.state, revision: first.revision, specHash: first.specHash, deliveryIds: first.deliveryIds, operationIds: first.operationIds, deliveries: first.deliveries }, { state: 'ready', revision: 1, specHash: forecast.specHash, deliveryIds: [], operationIds: [], deliveries: [] });
+    const revisions = await rows(store, 'social_revisions', campaign.id);
+    assert.equal(revisions.length, 1); assert.equal(revisions[0].actor_id, f.actorId); assert.equal(revisions[0].approved_at, NOW);
+    const [audit] = await store.db.all(`SELECT actor_id, recorded_at FROM ${store.t('business_audit')} WHERE entity_type='social_campaign' AND entity_id=? AND recorded_at=?`, [campaign.id, NOW]);
+    assert.equal(audit.actor_id, f.actorId);
+    await assertUnqueued(store, campaign.id);
     await assert.rejects(() => f.action(first, 'approve-organic', f.approvalInput(forecast)), { status: 409 });
-    await assert.rejects(() => saveSocialCampaign(store, { id: first.id, version: first.version, requestId: randomUUID(), caption: 'Cambiar mientras procesa' }, f.actorId, f.options), { status: 409 });
+    await assert.rejects(() => f.action(first, 'analyze'), { status: 409 });
+    await assert.rejects(() => saveSocialCampaign(store, { id: first.id, version: first.version, requestId: randomUUID(), caption: 'Cambiar después de aprobar' }, f.actorId, f.options), { status: 409 });
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } });
+    assert.equal((await processSocialApiTurn(store, f.options)).processed, 0);
+    assert.equal((await processSocialBrowserTurn(store, f.options)).processed, 0);
+    await assertUnqueued(store, campaign.id);
+    assert.deepEqual(f.remote.calls, []);
   }],
   ['solicitudes distintas compiten por versión y sólo una aprobación vence', async (store, t) => {
     const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id);
     const results = await Promise.allSettled([f.action(campaign, 'approve-organic', f.approvalInput(forecast)), f.action(campaign, 'approve-organic', f.approvalInput(forecast))]);
     assert.equal(results.filter(result => result.status === 'fulfilled').length, 1); assert.equal(results.find(result => result.status === 'rejected').reason.status, 409);
     assert.equal((await rows(store, 'social_revisions', campaign.id)).length, 1);
+    await assertUnqueued(store, campaign.id);
+  }],
+  ['una hora después se solicita publicación idempotente FB+IG con el reloj y actor del segundo paso', async (store, t) => {
+    const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id);
+    const approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
+    const [revision] = await rows(store, 'social_revisions', campaign.id), requester = await fixtureUser(store);
+    const input = { ...publicationInput(approved), version: approved.version, requestId: randomUUID() };
+    const submit = (body, now = REQUESTED_AT) => socialCampaignAction(store, campaign.id, 'publish-organic', body, requester, { ...f.options, now });
+    const requests = [input, { ...input, requestId: randomUUID() }];
+    const results = await Promise.allSettled(requests.map(body => submit(body)));
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(results.find(result => result.status === 'rejected').reason.status, 409);
+    const winner = results.findIndex(result => result.status === 'fulfilled'), receipt = results[winner].value;
+    assert.equal(receipt.state, 'publishing'); assert.equal(receipt.revision, approved.revision); assert.equal(receipt.specHash, forecast.specHash);
+    assert.deepEqual(receipt.operationIds, []);
+    assert.deepEqual(receipt.deliveries.map(delivery => [delivery.channel, delivery.state]).sort(), [['facebook', 'queued'], ['instagram', 'queued']]);
+    assert.equal(receipt.deliveryIds.length, 2);
+    assert.ok(f.remote.calls.includes('debug_token'));
+    const reads = [...f.remote.calls];
+    const deliveries = (await rows(store, 'social_deliveries', campaign.id)).map(entity);
+    assert.deepEqual(deliveries.map(delivery => delivery.id).sort(), [...receipt.deliveryIds].sort());
+    for (const delivery of deliveries) {
+      assert.equal(delivery.publishRequestedBy, requester); assert.equal(delivery.createdAt, REQUESTED_AT);
+      assert.equal(delivery.specHash, forecast.specHash); assert.deepEqual(delivery.identities, forecast.spec.identities);
+    }
+    assert.deepEqual(await rows(store, 'social_operations', campaign.id), []);
+    assert.deepEqual((await socialJobs(store)).map(job => [job.key, job.state]), [...receipt.deliveryIds].sort().map(id => [`social:delivery:${id}`, 'queued']));
+    const remote = createMetaPublishingProvider({ now: Date.parse(REQUESTED_AT), pageToken: PAGE_TOKEN });
+    const turn = await processSocialApiTurn(store, { ...f.options, now: REQUESTED_AT, maxOperations: 1, transport: { fetchImpl: remote.fetchImpl } });
+    assert.equal(turn.processed, 1); assert.equal(turn.errorCode, null);
+    assert.equal(remote.requests.filter(request => request.method === 'POST').length, 1);
+    assert.deepEqual(await submit(requests[winner], '2026-11-02T14:00:00.000Z'), receipt);
+    await assert.rejects(() => submit({ ...requests[winner], specHash: '0'.repeat(64) }), { status: 409 });
+    assert.deepEqual(f.remote.calls, reads);
+    const audit = await store.db.all(`SELECT actor_id, recorded_at, data FROM ${store.t('business_audit')} WHERE entity_type='social_campaign' AND entity_id=? AND recorded_at=?`, [campaign.id, REQUESTED_AT]);
+    assert.equal(audit.length, 1); assert.equal(audit[0].actor_id, requester);
+    const recorded = JSON.parse(audit[0].data).next;
+    assert.equal(recorded.revision, receipt.revision); assert.deepEqual(recorded.channels, forecast.spec.platforms);
+    assert.deepEqual(recorded.deliveryIds, receipt.deliveryIds);
+    assert.deepEqual(await rows(store, 'social_revisions', campaign.id), [revision]);
+    assert.equal((await rows(store, 'social_deliveries', campaign.id)).length, 2);
   }],
   ['revisión conserva copia inmutable de especificación y previsión aunque cambie el borrador original', async (store, t) => {
     const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id), approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
@@ -224,7 +297,9 @@ const cases = [
     const f = await setup(store, t, { objective: 'traffic', platforms: ['instagram'] }), campaign = await f.create(), forecast = await f.forecast(campaign.id);
     assert.ok(forecast.acceptedWarnings.length > 0);
     await assert.rejects(() => f.action(campaign, 'approve-organic', { ...f.approvalInput(forecast), acceptedWarnings: [] }), { status: 409 });
-    assert.equal((await f.action(campaign, 'approve-organic', f.approvalInput(forecast))).deliveryIds.length, 1);
+    const approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
+    assert.deepEqual(approved.deliveryIds, []);
+    assert.equal((await f.publish(approved)).deliveryIds.length, 1);
   }],
   ['editar invalida evidencia y previsión sin borrar snapshots históricos', async (store, t) => {
     const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id);
@@ -241,42 +316,154 @@ const cases = [
     for (const action of ['duplicate', 'cancel', 'approve-organic']) await assert.rejects(() => f.action(campaign, action, action === 'approve-organic' ? f.approvalInput(forecast) : {}), { status: 403 });
     assert.deepEqual(await rows(store, 'social_revisions', campaign.id), []);
   }],
-  ['flag, capacidades remotas y derivado manipulado bloquean antes de persistir aprobación', async (store, t) => {
-    const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id), confirmation = f.approvalInput(forecast);
-    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } }); await assert.rejects(() => f.action(campaign, 'approve-organic', confirmation), { status: 409 }); assert.deepEqual(f.remote.calls, []);
-    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } }); f.remote.pageTasks = ['ANALYZE']; await assert.rejects(() => f.action(campaign, 'approve-organic', confirmation), { status: 409 });
-    f.remote.pageTasks = ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE']; await writeFile(join(f.root, f.assetId, 'derivative.jpg'), 'tampered');
-    await assert.rejects(() => f.action(campaign, 'approve-organic', confirmation), { status: 409 }); assert.deepEqual(await rows(store, 'social_revisions', campaign.id), []);
+  ['publicar exige aprobación vigente, revisión exacta y consentimiento; cancelar no encola', async (store, t) => {
+    const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id);
+    await assert.rejects(() => f.action(campaign, 'publish-organic', publicationInput({ revision: 1, specHash: forecast.specHash })), { status: 409 });
+    const approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast)), valid = publicationInput(approved);
+    for (const patch of [{ revision: approved.revision + 1 }, { version: campaign.version }, { specHash: '0'.repeat(64) }]) {
+      await assert.rejects(() => f.action(approved, 'publish-organic', { ...valid, ...patch }), { status: 409 });
+    }
+    await assert.rejects(() => f.action(approved, 'publish-organic', { revision: valid.revision, specHash: valid.specHash }));
+    await assert.rejects(() => f.action(approved, 'publish-organic', { ...valid, publishAccepted: false }));
+    await assert.rejects(() => f.action(approved, 'publish-organic', { ...valid, caption: 'Texto no aprobado' }));
+    const [revision] = await rows(store, 'social_revisions', campaign.id);
+    const cancelled = await f.action(approved, 'cancel');
+    assert.equal(cancelled.state, 'cancelled');
+    await assert.rejects(() => f.action(cancelled, 'publish-organic', valid), { status: 409 });
+    const duplicate = await f.action(cancelled, 'duplicate');
+    assert.equal(duplicate.state, 'draft');
+    await assertUnqueued(store, approved.id);
+    await assertUnqueued(store, duplicate.id);
+    assert.deepEqual(await rows(store, 'social_revisions', campaign.id), [revision]);
+    assert.deepEqual(await rows(store, 'social_revisions', duplicate.id), []);
+    assert.deepEqual(f.remote.calls, []);
   }],
-  ['comprobación fuera de transacción fija versiones de cuenta/pieza/campaña/credenciales y actor al commit', async (store, t) => {
+  ['publicación deshabilitada, cuenta revocada o aprobación sin actor vigente bloquean la segunda solicitud', async (store, t) => {
+    const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id);
+    const approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
+    await assert.rejects(() => f.publish(approved), { status: 409 });
+    assert.deepEqual(f.remote.calls, []);
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: true } });
+    f.remote.permission = false;
+    await assert.rejects(() => f.publish(approved));
+    assert.ok(f.remote.calls.includes('me/permissions'));
+    f.remote.permission = true;
+    f.remote.pageTasks = ['ANALYZE'];
+    await assert.rejects(() => f.publish(approved), { status: 409 });
+    f.remote.pageTasks = ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE'];
+    await store.db.run(`UPDATE ${store.t('social_connections')} SET state='reconnect_required' WHERE id=?`, [f.connectionId]);
+    await assert.rejects(() => f.publish(approved), { status: 409 });
+    await store.db.run(`UPDATE ${store.t('social_connections')} SET state='connected' WHERE id=?`, [f.connectionId]);
+    const other = await fixtureUser(store), valid = { ...publicationInput(approved), requestId: randomUUID(), version: approved.version };
+    await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.actorId]);
+    await assert.rejects(() => f.publish(approved), { status: 403 });
+    await assert.rejects(() => socialCampaignAction(store, campaign.id, 'publish-organic', valid, other, f.options));
+    await assertUnqueued(store, campaign.id);
+    assert.equal((await get(store, 'social_campaigns', campaign.id)).state, 'ready');
+  }],
+  ['la pieza manipulada no se aprueba ni se publica después de congelar la revisión', async (store, t) => {
+    const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id), approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
+    const other = await f.create(), otherForecast = await f.forecast(other.id);
+    await writeFile(join(f.root, f.assetId, 'derivative.jpg'), 'tampered');
+    await assert.rejects(() => f.action(other, 'approve-organic', f.approvalInput(otherForecast)), { status: 409 });
+    await assert.rejects(() => f.publish(approved), { status: 409 });
+    assert.deepEqual(await rows(store, 'social_revisions', other.id), []);
+    await assertUnqueued(store, approved.id);
+  }],
+  ['una aprobación restaurada sin entregas no se reanuda ni autoriza envío', async (store, t) => {
+    const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id);
+    const approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
+    await patchData(store, 'social_campaigns', campaign.id, { restore_hold: true }, { bump: true });
+    const held = { ...approved, version: approved.version + 1 };
+    await assert.rejects(() => f.publish(held), { status: 409 });
+    await assert.rejects(() => f.action(held, 'resume-restored', { specHash: approved.specHash, rightsAccepted: true, acceptedWarnings: forecast.acceptedWarnings }), /duplic/i);
+    const duplicate = await f.action(held, 'duplicate');
+    assert.equal(duplicate.state, 'draft'); assert.deepEqual(await rows(store, 'social_revisions', duplicate.id), []);
+    await assertUnqueued(store, approved.id);
+    assert.deepEqual(f.remote.calls, []);
+  }],
+  ['una agenda vencida al solicitar no crea entregas ni permite envío tardío', async (store, t) => {
+    const f = await setup(store, t), campaign = await f.create({ publishAt: START }), forecast = await f.forecast(campaign.id);
+    const approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast)), now = '2026-11-03T12:01:00.000Z';
+    await assert.rejects(() => f.publish(approved, { now }), { status: 409, message: /ya pasó.*reprogram/i });
+    assert.equal((await processSocialApiTurn(store, { ...f.options, now })).processed, 0);
+    assert.equal((await get(store, 'social_campaigns', campaign.id)).state, 'ready');
+    await assertUnqueued(store, campaign.id);
+    assert.deepEqual(f.remote.calls, []);
+  }],
+  ['una solicitud con agenda futura encola pero no envía antes de la fecha congelada', async (store, t) => {
+    const f = await setup(store, t, { platforms: ['facebook'] }), campaign = await f.create({ publishAt: START }), forecast = await f.forecast(campaign.id);
+    const approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
+    const receipt = await f.publish(approved, { now: REQUESTED_AT });
+    assert.equal(receipt.state, 'scheduled');
+    assert.deepEqual(receipt.deliveries, [{ id: receipt.deliveryIds[0], channel: 'facebook', state: 'scheduled' }]);
+    const [job] = await socialJobs(store);
+    assert.equal(JSON.parse(job.data).nextRunAt, START);
+    const remote = createMetaPublishingProvider({ now: Date.parse(START), pageToken: PAGE_TOKEN }), transport = { fetchImpl: remote.fetchImpl };
+    assert.equal((await processSocialApiTurn(store, { ...f.options, now: REQUESTED_AT, transport })).processed, 0);
+    assert.deepEqual(remote.requests, []);
+    assert.equal((await get(store, 'social_deliveries', receipt.deliveryIds[0])).remoteId, null);
+    const turn = await processSocialApiTurn(store, { ...f.options, now: START, maxOperations: 1, transport });
+    assert.equal(turn.processed, 1); assert.equal(turn.errorCode, null);
+    assert.deepEqual(remote.requests.filter(request => request.method === 'POST').map(request => request.path), ['200/photos']);
+  }],
+  ['publicar revalida cuenta, pieza, campaña, credenciales y actor antes del commit', async (store, t) => {
     for (const target of ['social_connections', 'social_assets', 'social_campaigns', 'social_credentials', 'actor']) {
       const f = await setup(store, t), campaign = await f.create(), forecast = await f.forecast(campaign.id), entered = deferred(), release = deferred();
-      f.remote.beforeRead = async path => { if (path === 'debug_token') { entered.resolve(); await release.promise; } };
-      const approval = f.action(campaign, 'approve-organic', f.approvalInput(forecast)), rejected = assert.rejects(approval, { status: target === 'actor' ? 403 : 409 });
-      await entered.promise;
-      if (target === 'actor') await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.actorId]);
-      else if (target === 'social_credentials') await store.db.run(`UPDATE ${store.t(target)} SET version=version+1 WHERE connection_id=?`, [f.connectionId]);
-      else await store.db.run(`UPDATE ${store.t(target)} SET version=version+1 WHERE id=?`, [target === 'social_connections' ? f.connectionId : target === 'social_assets' ? f.assetId : campaign.id]);
-      release.resolve(); await rejected; assert.deepEqual(await rows(store, 'social_revisions', campaign.id), []);
+      const approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
+      const [revision] = await rows(store, 'social_revisions', campaign.id);
+      f.remote.beforeRead = async path => { if (path === 'debug_token') { entered.resolve(true); await release.promise; } };
+      const publication = f.publish(approved);
+      try {
+        assert.equal(await Promise.race([entered.promise, publication]), true, 'La publicación debe comprobar la cuenta en vivo antes de persistir.');
+        if (target === 'actor') await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.actorId]);
+        else if (target === 'social_credentials') await store.db.run(`UPDATE ${store.t(target)} SET version=version+1 WHERE connection_id=?`, [f.connectionId]);
+        else await store.db.run(`UPDATE ${store.t(target)} SET version=version+1 WHERE id=?`, [target === 'social_connections' ? f.connectionId : target === 'social_assets' ? f.assetId : campaign.id]);
+      } finally { release.resolve(); }
+      await assert.rejects(publication, { status: target === 'actor' ? 403 : 409 });
+      await assertUnqueued(store, campaign.id);
+      assert.deepEqual(await rows(store, 'social_revisions', campaign.id), [revision]);
     }
   }],
-  ['cancelación revoca lease del trabajo no enviado y conserva revisión y evidencia', async (store, t) => {
+  ['navegador sólo encola con la segunda acción; cancelar revoca lease sin perder revisión ni actor', async (store, t) => {
     const f = await setup(store, t, { method: 'browser' }), campaign = await f.create({ publishAt: START }), forecast = await f.forecast(campaign.id), approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
-    const revision = (await rows(store, 'social_revisions', campaign.id))[0], lease = await claimJob(store, { key: `social:browser:delivery:${approved.deliveryIds[0]}`, now: NOW }); assert.ok(lease.token);
-    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } }); const cancelled = await f.action(approved, 'cancel'); assert.equal(cancelled.state, 'cancelled');
-    for (const id of approved.deliveryIds) { const job = await store.db.get(`SELECT * FROM ${store.t('job_runs')} WHERE key=?`, [`social:browser:delivery:${id}`]); assert.equal(job.state, 'failed'); assert.equal(job.lease_token, null); assert.equal((await get(store, 'social_deliveries', id)).state, 'cancelled'); }
-    assert.ok((await rows(store, 'social_operations', campaign.id)).every(operation => operation.state === 'failed')); assert.deepEqual((await rows(store, 'social_revisions', campaign.id))[0], revision);
+    await assertUnqueued(store, approved.id);
+    const [revision] = await rows(store, 'social_revisions', campaign.id), requester = await fixtureUser(store);
+    const published = await f.publish(approved, { now: REQUESTED_AT, actorId: requester });
+    assert.equal(published.state, 'scheduled'); assert.equal(published.deliveryIds.length, 2); assert.equal(published.operationIds.length, 2);
+    assert.deepEqual((await socialJobs(store)).map(job => [job.key, job.state, JSON.parse(job.data).nextRunAt]), [...published.deliveryIds].sort().map(id => [`social:browser:delivery:${id}`, 'queued', START]));
+    for (const operation of (await rows(store, 'social_operations', campaign.id)).map(entity)) {
+      assert.equal(operation.step, 'publish'); assert.equal(operation.state, 'prepared'); assert.equal(operation.nextAttemptAt, START);
+      assert.equal(operation.actorId, requester);
+      assert.ok(published.operationIds.includes(operation.id)); assert.ok(published.deliveryIds.includes(operation.deliveryId));
+      assert.equal(operation.remoteDraftRef, undefined);
+    }
+    assert.equal((await processSocialBrowserTurn(store, { ...f.options, now: REQUESTED_AT })).processed, 0);
+    const lease = await claimJob(store, { key: `social:browser:delivery:${published.deliveryIds[0]}`, now: START }); assert.ok(lease.token);
+    await configureSocialTestRuntime(store, { env: f.env, settings: { publishingEnabled: false } });
+    const cancelled = await f.action(published, 'cancel', {}, { now: START }); assert.equal(cancelled.state, 'cancelled');
+    for (const job of await socialJobs(store)) { assert.equal(job.state, 'failed'); assert.equal(job.lease_token, null); }
+    for (const id of published.deliveryIds) {
+      const delivery = await get(store, 'social_deliveries', id);
+      assert.equal(delivery.state, 'cancelled'); assert.equal(delivery.publishRequestedBy, requester); assert.equal(delivery.createdAt, REQUESTED_AT);
+    }
+    assert.ok((await rows(store, 'social_operations', campaign.id)).every(operation => operation.state === 'failed'));
+    assert.deepEqual((await rows(store, 'social_revisions', campaign.id))[0], revision);
+    assert.deepEqual(f.remote.calls, []);
   }],
   ['cancelar preserva la entrega publicada y nunca resuelve un envío incierto', async (store, t) => {
     const f = await setup(store, t, { method: 'browser' }), campaign = await f.create(), forecast = await f.forecast(campaign.id), approved = await f.action(campaign, 'approve-organic', f.approvalInput(forecast));
-    await store.db.run(`UPDATE ${store.t('social_operations')} SET state='sent' WHERE id=?`, [approved.operationIds[0]]);
-    await assert.rejects(() => f.action(approved, 'cancel'), { status: 409 }); assert.equal((await get(store, 'social_campaigns', campaign.id)).state, 'publishing');
-    await store.db.run(`UPDATE ${store.t('social_operations')} SET state='confirmed' WHERE id=?`, [approved.operationIds[0]]); await store.db.run(`UPDATE ${store.t('social_deliveries')} SET state='published',remote_id='999' WHERE id=?`, [approved.deliveryIds[0]]);
-    const cancelled = await f.action(approved, 'cancel');
+    const queued = await f.publish(approved);
+    await store.db.run(`UPDATE ${store.t('social_operations')} SET state='sent' WHERE id=?`, [queued.operationIds[0]]);
+    await assert.rejects(() => f.action(queued, 'cancel'), { status: 409 }); assert.equal((await get(store, 'social_campaigns', campaign.id)).state, 'publishing');
+    await store.db.run(`UPDATE ${store.t('social_operations')} SET state='confirmed' WHERE id=?`, [queued.operationIds[0]]); await store.db.run(`UPDATE ${store.t('social_deliveries')} SET state='published',remote_id='999' WHERE id=?`, [queued.deliveryIds[0]]);
+    const cancelled = await f.action(queued, 'cancel');
     assert.equal(cancelled.state, 'partial');
-    const published = await get(store, 'social_deliveries', approved.deliveryIds[0]);
-    assert.equal(published.state, 'published'); assert.equal(published.remoteId, '999');
-    assert.equal((await get(store, 'social_deliveries', approved.deliveryIds[1])).state, 'cancelled');
+    const published = await get(store, 'social_deliveries', queued.deliveryIds[0]);
+    assert.equal(published.state, 'published'); assert.equal(published.remoteId, '999'); assert.equal(published.publishRequestedBy, f.actorId);
+    assert.equal((await get(store, 'social_deliveries', queued.deliveryIds[1])).state, 'cancelled');
+    assert.deepEqual(f.remote.calls, []);
   }],
   ['duplicar crea borrador limpio sin incrementar presupuesto ni copiar trabajos/aceptación/fechas/vínculos', async (store, t) => {
     const f = await setup(store, t, { mode: 'paid', objective: 'traffic' }), campaign = await f.create(), forecast = await f.forecast(campaign.id), approved = await f.action(campaign, 'prepare-paid', f.approvalInput(forecast));

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, randomUUID } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { openStore } from '../lib/db/index.mjs';
 import { hash, insertRow, stamp, audit } from '../lib/business/commands.mjs';
 import { getSocialConnection } from '../lib/business/social.mjs';
-import { startSocialOAuth, consumeSocialOAuthState, completeSocialOAuth, createBrowserSocialConnection, getSocialConnections, socialConnectionAction, previewSocialConnectionDeletion, deauthorizeSocialMeta, verifyMetaSignedRequest } from '../lib/business/social-connections.mjs';
+import { startSocialOAuth, consumeSocialOAuthState, completeSocialOAuth, socialOAuthDiagnostic, createBrowserSocialConnection, getSocialConnections, socialConnectionAction, previewSocialConnectionDeletion, deauthorizeSocialMeta, verifyMetaSignedRequest } from '../lib/business/social-connections.mjs';
 import { loadCredentials, saveCredentials } from '../lib/social/credentials.mjs';
 import { META_PERMISSIONS, loadSocialRuntime } from '../lib/social/config.mjs';
 import { queueJobTx } from '../lib/business/job-leases.mjs';
@@ -12,6 +13,7 @@ import { socialConnection, socialTestEnv } from './social-contract.mjs';
 import { createBusinessBasics, businessOrderInput, fixtureActor } from './business-fixtures.mjs';
 import { recordExpense } from '../lib/business/expenses.mjs';
 import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
+import { GET as socialOAuthCallback } from '../app/api/admin/social/oauth/callback/route.js';
 
 async function envFor(store) {
   const env = { ...socialTestEnv(), APP_URL: 'https://admin.example.test', META_APP_ID: '901', META_APP_SECRET: 'SYNTHETIC-APP-SECRET', META_LOGIN_CONFIG_ID: '902' };
@@ -58,6 +60,55 @@ async function connect(store, env, fixture, session = admin(), connectionId = nu
   const started = await startSocialOAuth(store, { connectionId }, session, { env });
   const state = new URL(started.authorizationUrl).searchParams.get('state');
   return completeSocialOAuth(store, { code: 'SYNTHETIC-CODE', state }, session, { env, fetchImpl: fixture.fetchImpl });
+}
+
+for (const [stage, label, preceding, fields] of [
+  ['code_exchange', 'canje del código', [], { code: 100, subcode: 36009 }],
+  ['long_lived_exchange', 'canje de larga duración', ['oauth/access_token'], { code: 100, subcode: 1234 }],
+  ['validation', 'validación de la conexión', ['oauth/access_token', 'oauth/access_token', 'debug_token', 'me'], {}],
+]) {
+  test(`OAuth muestra sólo la etapa y números seguros ante un rechazo de Graph: ${stage}`, () => withStore(async store => {
+    const env = await envFor(store), session = admin(), fixture = provider(env);
+    const started = await startSocialOAuth(store, {}, session, { env });
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    const code = 'SYNTHETIC-OAUTH-CODE';
+    const canary = `PRIVATE-GRAPH-BODY ${code} ${state} ${env.META_APP_SECRET} TOKEN-CANARY-USER https://fixture.invalid/graph?secret=private`;
+    const calls = [];
+    let response;
+    await assert.rejects(() => completeSocialOAuth(store, { state, code }, session, { env, fetchImpl: async (url, init) => {
+      calls.push(new URL(url).pathname.slice('/v26.0/'.length));
+      if (calls.length <= preceding.length) return fixture.fetchImpl(url, init);
+      return Response.json({ error: { code: fields.code ?? '100', error_subcode: fields.subcode ?? Number.MAX_SAFE_INTEGER + 1,
+        message: canary, error_user_msg: canary, fbtrace_id: canary } }, { status: 400 });
+    } }), error => {
+      assert.equal(error.status, 409);
+      assert.equal(error.message, 'Meta rechazó la solicitud. Revisa la configuración de la operación.');
+      response = { error: error.message, diagnostic: socialOAuthDiagnostic(error) };
+      assert.deepEqual(response.diagnostic, { stage, httpStatus: 400, ...fields });
+      return true;
+    });
+    assert.deepEqual(calls, [...preceding, stage === 'validation' ? 'me/permissions' : 'oauth/access_token']);
+    assert.deepEqual(await store.db.all(`SELECT id FROM ${store.t('social_connections')}`), []);
+    assert.deepEqual(await store.db.all(`SELECT connection_id FROM ${store.t('social_credentials')}`), []);
+    assert.equal(JSON.stringify(response).includes(canary), false);
+
+    const script = (await socialOAuthCallback().text()).match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
+    const status = {};
+    await runInNewContext(script, {
+      URLSearchParams, window: { location: { search: `?code=${code}&state=${state}` } },
+      history: { replaceState() {} }, document: { getElementById: () => status },
+      fetch: async (path, options) => {
+        assert.equal(path, '/api/admin/social/oauth/complete');
+        assert.equal(options.credentials, 'same-origin');
+        return options.method === 'POST'
+          ? Response.json({ ...response, diagnostic: { ...response.diagnostic, raw: canary, ...(fields.code ? {} : { code: canary }) } }, { status: 409 })
+          : Response.json({ csrf: session.csrf });
+      },
+    });
+    const details = `Etapa: ${label} · HTTP de Meta: 400` +
+      (fields.code ? ` · Código de Meta: ${fields.code} · Subcódigo de Meta: ${fields.subcode}` : '');
+    assert.equal(status.textContent, `${response.error} ${details}.`);
+  }));
 }
 function signed(userId, secret, issuedAt = Math.floor(Date.now() / 1000)) {
   const payload = Buffer.from(JSON.stringify({ algorithm: 'HMAC-SHA256', user_id: userId, issued_at: issuedAt })).toString('base64url');
@@ -229,7 +280,11 @@ test('OAuth denegado y replay no intercambian código ni destruyen credenciales 
   const env = await envFor(store), fixture = provider(env), session = admin(), { connection } = await connect(store, env, fixture, session);
   const started = await startSocialOAuth(store, { connectionId: connection.id }, session, { env });
   const state = new URL(started.authorizationUrl).searchParams.get('state'), exchanges = fixture.remote.exchanges;
-  await assert.rejects(() => completeSocialOAuth(store, { state, error: 'access_denied' }, session, { env, fetchImpl: fixture.fetchImpl }), { status: 400 });
+  await assert.rejects(() => completeSocialOAuth(store, { state, error: 'access_denied' }, session, { env, fetchImpl: fixture.fetchImpl }), error => {
+    assert.equal(error.status, 400);
+    assert.equal(socialOAuthDiagnostic(error), null);
+    return true;
+  });
   await assert.rejects(() => completeSocialOAuth(store, { state, code: 'REPLAY-CODE' }, session, { env, fetchImpl: fixture.fetchImpl }), { status: 403 });
   assert.equal(fixture.remote.exchanges, exchanges);
   assert.equal((await loadCredentials(store, await getSocialConnection(store, connection.id), await loadSocialRuntime(store, { env }))).accessToken, 'TOKEN-CANARY-USER');

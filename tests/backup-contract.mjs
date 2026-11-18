@@ -384,13 +384,14 @@ export async function runSocialBackupContracts(t, factory) {
       assert.ok(!bundle.business.business_requests.some(row => row.scope.startsWith('social:')));
       assert.equal(JSON.parse(bundle.business.business_audit.find(row => row.entity_type === 'social_connection').data).action,'validate');
       const before = stable(await target.exportData());
-      const mutate = (copy,table,fn) => { const row = copy.business[table][0], data = JSON.parse(row.data); fn(data); row.data=JSON.stringify(data); };
+      const mutate = (copy,table,fn,id) => { const row = id ? copy.business[table].find(value => value.id === id) : copy.business[table][0], data = JSON.parse(row.data); fn(data); row.data=JSON.stringify(data); };
       const corruptions = [
         copy => {delete copy.socialVersion;},
         copy => {delete copy.business.social_measurements;},
         copy => {copy.socialVersion=2;},
         copy => {copy.business.social_credentials=[];},
         copy => {copy.business.social_deliveries[0].revision=99;},
+        copy => {const row=copy.business.social_deliveries.find(value => value.id === ids.requestedDelivery); row.data=JSON.stringify({...JSON.parse(row.data),publishRequestedBy:42});},
         copy => {const row=copy.business.social_operations[0];row.delivery_id=ids.deliveries.find(id => id !== row.delivery_id);},
         copy => {copy.business.social_order_links[0].campaign_id=randomUUID();},
         copy => {copy.business.social_forecasts[0].spec_hash='invalid';},
@@ -399,10 +400,10 @@ export async function runSocialBackupContracts(t, factory) {
         copy => mutate(copy,'social_revisions',data => {data.spec.integrationMethod=data.spec.integrationMethod === 'api' ? 'browser' : 'api';}),
         copy => mutate(copy,'social_measurements',data => {data.integrationMethod=data.integrationMethod === 'api' ? 'browser' : 'api';}),
         copy => mutate(copy,'social_operations',data => {data.integrationMethod=data.integrationMethod === 'api' ? 'browser' : 'api';}),
-        copy => mutate(copy,'social_campaigns',data => {data.budgetMinor=0.5;}),
-        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.value=-1;}),
-        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.value=1.5;}),
-        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.unit='count';}),
+        copy => mutate(copy,'social_campaigns',data => {data.budgetMinor=0.5;},ids.campaigns[0]),
+        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.value=-1;},ids.campaigns[0]),
+        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.value=1.5;},ids.campaigns[0]),
+        copy => mutate(copy,'social_campaigns',data => {data.analysis.comparisons[0].spendMinor.unit='count';},ids.campaigns[0]),
         copy => mutate(copy,'social_connections',data => {data.accessToken='social-private-canary';}),
         copy => mutate(copy,'social_connections',data => {data.disconnectPending={state:'waiting_for_pause',action:'disconnect',actorId:'backup-admin',deliveryIds:[ids.deliveries[0]]};}),
         copy => mutate(copy,'social_assets',data => {data.derivativeKey='../outside.jpg';}),
@@ -431,6 +432,12 @@ export async function runSocialBackupContracts(t, factory) {
       for (const table of ['social_revisions','social_operations','social_measurements','social_forecasts','social_recommendations','social_order_links','social_expense_links']) assert.deepEqual(restored.business[table],bundle.business[table]);
       const deliveryEvidence = rows => rows.map(row => Object.fromEntries(['id','campaign_id','revision','channel','state','remote_id','data'].map(key => [key,row[key]])));
       assert.deepEqual(deliveryEvidence(restored.business.social_deliveries),deliveryEvidence(bundle.business.social_deliveries));
+      const requested = restored.business.social_deliveries.find(row => row.id === ids.requestedDelivery);
+      const legacy = restored.business.social_deliveries.find(row => row.id === ids.legacyDelivery);
+      assert.equal(JSON.parse(requested.data).publishRequestedBy,ids.requester);
+      assert.equal(requested.created_at,'2026-11-02T13:00:00.000Z');
+      assert.equal(Object.hasOwn(JSON.parse(legacy.data),'publishRequestedBy'),false);
+      assert.ok(!await target.db.get(`SELECT id FROM ${target.t('users')} WHERE id=?`,[ids.requester]));
       await prepareSocialApiJobs(target); await prepareSocialBrowserJobs(target);
       for (const row of restored.business.social_connections) {
         const old = bundle.business.social_connections.find(value => value.id === row.id);
@@ -439,7 +446,7 @@ export async function runSocialBackupContracts(t, factory) {
         assert.equal(JSON.parse(row.data).sessionEpoch,JSON.parse(old.data).sessionEpoch+1);
       }
       for (const row of restored.business.social_campaigns) assert.equal(JSON.parse(row.data).restore_hold,true);
-      for (const row of restored.business.social_campaigns) {
+      for (const row of restored.business.social_campaigns.filter(row => row.mode === 'paid')) {
         const spend = JSON.parse(row.data).analysis.comparisons[0].spendMinor;
         assert.equal(spend.value,5000000); assert.equal(spend.unit,'minor_currency'); assert.equal(spend.precision,'exact');
       }
@@ -492,7 +499,7 @@ async function createSocialBackupScenario(store) {
   const at = '2026-11-02T12:00:00.000Z', actor = 'backup-admin';
   const editable = {version:1,created_at:at,updated_at:at};
   const expense = await recordExpense(store,{requestId:requestId(),category:'advertising',amountMinor:5000000,incurredOn:'2026-11-02',concept:'Publicidad declarada, sin pago implícito'},actor);
-  const ids = {connections:[randomUUID(),randomUUID()],asset:randomUUID(),campaigns:[randomUUID(),randomUUID()],deliveries:[randomUUID(),randomUUID()]};
+  const ids = {connections:[randomUUID(),randomUUID()],asset:randomUUID(),campaigns:[randomUUID(),randomUUID()],deliveries:[randomUUID(),randomUUID()],requester:randomUUID(),requestedDelivery:randomUUID(),legacyDelivery:randomUUID()};
   await store.transaction(async tx => {
     await tx.lockWrites();
     await insertRow(tx,'social_assets',{id:ids.asset,state:'ready',sha256:hash('derived-jpeg'),bytes:300,data:JSON.stringify({kind:'image',name:'Pieza privada',contentType:'image/png',expectedBytes:100,originalKey:`${ids.asset}/original.png`,originalSha256:hash('original-png'),originalBytes:100,derivativeKey:`${ids.asset}/derivative.jpg`,derivativeSha256:hash('derived-jpeg'),derivativeBytes:200,derivativeContentType:'image/jpeg',reservedBytes:0}),...editable});
@@ -517,6 +524,13 @@ async function createSocialBackupScenario(store) {
       await insertRow(tx,'social_recommendations',{id:randomUUID(),campaign_id:campaignId,evidence_hash:hash(measurement),rule_key:'measurement_gap',state:'suggested',data:JSON.stringify({metricIds:[measurementId],sampleIds:[],observation:'Evidencia conservada',proposedChange:'Completar observación'}),...editable});
       await queueJobTx(tx,`social:${integrationMethod === 'browser' ? 'browser:' : ''}delivery:${deliveryId}`,{deliveryId,requestedBy:actor});
     }
+    const organicId = randomUUID(), requestedAt = '2026-11-02T13:00:00.000Z';
+    const organicSpec = {name:'Publicación orgánica',integrationMethod:'api',connectionId:ids.connections[0],assetId:ids.asset,assetHash:hash('derived-jpeg'),identities:{pageId:'verified-page'},mode:'organic',objective:'reach',platforms:['facebook','instagram']};
+    await insertRow(tx,'users',{id:ids.requester,email:`${ids.requester}@example.test`,password:'unused-synthetic',active:0});
+    await insertRow(tx,'social_campaigns',{id:organicId,connection_id:organicSpec.connectionId,asset_id:ids.asset,name:organicSpec.name,mode:'organic',objective:'reach',state:'publishing',data:JSON.stringify(organicSpec),...editable});
+    await insertRow(tx,'social_revisions',{campaign_id:organicId,revision:1,spec_hash:hash(organicSpec),approved_at:at,actor_id:actor,data:JSON.stringify({spec:organicSpec,rightsAccepted:true,acceptedWarnings:[]})});
+    await insertRow(tx,'social_deliveries',{id:ids.requestedDelivery,campaign_id:organicId,revision:1,channel:'facebook',state:'queued',remote_id:null,next_sync_at:null,data:JSON.stringify({integrationMethod:'api',publishRequestedBy:ids.requester}),...editable,created_at:requestedAt,updated_at:requestedAt});
+    await insertRow(tx,'social_deliveries',{id:ids.legacyDelivery,campaign_id:organicId,revision:1,channel:'instagram',state:'published',remote_id:'historical-post',next_sync_at:null,data:JSON.stringify({integrationMethod:'api'}),...editable});
     const order = (await tx.orders())[0];
     await insertRow(tx,'social_order_links',{order_id:order.id,campaign_id:ids.campaigns[0],actor_id:actor,reason:'Origen declarado por el administrador',data:'{}',...editable});
     await insertRow(tx,'social_expense_links',{expense_id:expense.id,campaign_id:ids.campaigns[0],actor_id:actor,reason:'Gasto completo declarado',data:'{}',...editable});

@@ -89,7 +89,7 @@ async function setup(store, t, { mode = 'organic', platforms = ['facebook'], kin
   await insertRow(store, 'social_campaigns', { id: campaignId, connection_id: connectionId, asset_id: assetId, name: spec.name, mode, objective: spec.objective, state: publishAt ? 'scheduled' : 'publishing', ...editable(configuration) });
   const forecast = { source: 'insufficient', algorithmVersion: 'social-history-v1', specHash, sampleIds: [], sampleCount: 0, metricRanges: {}, unavailableReasons: ['Fixture sin historial.'] };
   const runtime = await loadSocialRuntime(store, { env });
-  await insertRow(store, 'social_revisions', { campaign_id: campaignId, revision: 1, spec_hash: specHash, approved_at: NOW, actor_id: approverId, data: JSON.stringify({ spec, configurationFingerprint: runtime.fingerprint, forecast, rightsAccepted: true, acceptedWarnings: [], ...(mode === 'paid' ? { budgetConfirmation: { investmentAccepted: true, budgetMinor: spec.budgetMinor, currency: spec.currency, startAt: spec.startAt, endAt: spec.endAt } } : {}) }) });
+  await insertRow(store, 'social_revisions', { campaign_id: campaignId, revision: 1, spec_hash: specHash, approved_at: mode === 'organic' ? later(-3600000) : NOW, actor_id: approverId, data: JSON.stringify({ spec, configurationFingerprint: runtime.fingerprint, forecast, rightsAccepted: true, acceptedWarnings: [], ...(mode === 'paid' ? { budgetConfirmation: { investmentAccepted: true, budgetMinor: spec.budgetMinor, currency: spec.currency, startAt: spec.startAt, endAt: spec.endAt } } : {}) }) });
   if (!remote) {
     const clock = { now: Date.parse(NOW) };
     remote = createMetaPublishingProvider({ now: () => clock.now });
@@ -99,7 +99,7 @@ async function setup(store, t, { mode = 'organic', platforms = ['facebook'], kin
   let logicalNow = Date.parse(NOW) - 1000;
   const f = { store, env, root, actorId, approverId, connectionId, connection, campaignId, assetId, assetHash, spec, specHash, remote, deliveries: [], transport: { fetchImpl: await providerHttp(remote, t) } };
   f.delivery = async channel => {
-    const id = randomUUID(); await insertRow(store, 'social_deliveries', { id, campaign_id: campaignId, revision: 1, channel, state: publishAt ? 'scheduled' : 'queued', remote_id: null, next_sync_at: null, ...editable({ integrationMethod: 'api', remoteRefs: {} }) });
+    const id = randomUUID(); await insertRow(store, 'social_deliveries', { id, campaign_id: campaignId, revision: 1, channel, state: publishAt ? 'scheduled' : 'queued', remote_id: null, next_sync_at: null, ...editable({ integrationMethod: 'api', remoteRefs: {}, ...(mode === 'organic' ? { publishRequestedBy: actorId } : {}) }) });
     f.deliveries.push(id); return get(store, 'social_deliveries', id);
   };
   for (const channel of mode === 'paid' ? ['meta_ads'] : platforms) await f.delivery(channel);
@@ -142,6 +142,7 @@ const cases = [
   ['mismo post: preparar/cancelar no cambia Meta; replay y acuse perdido conservan aprobación, objeto y una sola escritura', async (store, t) => {
     const f = await setup(store, t, { platforms: ['facebook', 'instagram'] });
     await f.until(async () => (await get(store, 'social_campaigns', f.campaignId)).state === 'published');
+    await patch(store, 'social_deliveries', f.deliveries[0], { publishRequestedBy: undefined });
     const now = f.now(), revision = await store.db.get(`SELECT * FROM ${store.t('social_revisions')} WHERE campaign_id=?`, [f.campaignId]);
     const facebook = await get(store, 'social_deliveries', f.deliveries[0]), instagram = await get(store, 'social_deliveries', f.deliveries[1]);
     const recommendationId = randomUUID(), evidenceHash = 'b'.repeat(64);
@@ -330,6 +331,34 @@ const cases = [
     const f = await setup(store, t, { mode: 'paid' }); await f.ready(); await f.control('activate');
     await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.actorId]);
     const writes = f.remote.requests.filter(writing).length; assert.equal((await f.turn()).errorCode, 'PERMISSION_REQUIRED'); assert.equal(f.remote.requests.filter(writing).length, writes);
+  }],
+  ['solicitante ausente o inactivo bloquea publicación inicial, pero no lecturas históricas', async (store, t) => {
+    for (const missing of [true, false]) {
+      const history = await setup(store, t);
+      await history.until(async () => (await get(store, 'social_deliveries', history.deliveries[0])).state === 'published');
+      const pending = await setup(store, t);
+      for (const f of [history, pending]) {
+        if (missing) await patch(store, 'social_deliveries', f.deliveries[0], { publishRequestedBy: undefined });
+        else await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.actorId]);
+      }
+      assert.equal((await pending.turn()).errorCode, 'PERMISSION_REQUIRED');
+      assert.equal(pending.remote.requests.filter(writing).length, 0);
+      const writes = history.remote.requests.filter(writing).length, reads = history.remote.requests.length;
+      assert.equal((await history.sync()).errorCode, null);
+      assert.ok(history.remote.requests.length > reads);
+      assert.equal(history.remote.requests.filter(writing).length, writes);
+    }
+  }],
+  ['la consulta del contenedor ya creado no necesita solicitante, pero el envío siguiente sí', async (store, t) => {
+    const f = await setup(store, t, { platforms: ['instagram'] });
+    assert.equal((await f.turn()).errorCode, null);
+    assert.ok((await operations(f)).some(value => value.step === 'wait_container'));
+    await patch(store, 'social_deliveries', f.deliveries[0], { publishRequestedBy: undefined });
+    const writes = f.remote.requests.filter(writing).length;
+    assert.equal((await f.turn({ now: later(600000) })).errorCode, null);
+    assert.ok((await operations(f)).some(value => value.step === 'publish'));
+    assert.equal((await f.turn()).errorCode, 'PERMISSION_REQUIRED');
+    assert.equal(f.remote.requests.filter(writing).length, writes);
   }],
   ['preparación pagada persiste IDs antes de avanzar y no activa; controles hijos primero y campaña al final', async (store, t) => {
     const f = await setup(store, t, { mode: 'paid', platforms: ['facebook', 'instagram'] }), delivery = await f.ready();

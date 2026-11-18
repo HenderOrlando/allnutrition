@@ -1,12 +1,17 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
 import { databaseConfig } from '../../lib/db/config.mjs';
 import { openPostgres } from '../../lib/db/postgres.mjs';
 import { Store } from '../../lib/store.mjs';
 import { testDatabaseEnv } from '../postgres-fixture.mjs';
 import { hash, insertRow } from '../../lib/business/commands.mjs';
 import { SOCIAL_ANALYSIS_VERSION, buildSocialHistoricalForecast } from '../../lib/business/social-analysis.mjs';
+import { saveSocialSettings } from '../../lib/business/social-settings.mjs';
+import { loadSocialRuntime } from '../../lib/social/config.mjs';
+import { saveCredentials } from '../../lib/social/credentials.mjs';
 import { socialMeasurementQueryKey } from '../../lib/social/evidence.mjs';
 import { improvementMeasurement, exactMetric } from '../social-improvements-fixture.mjs';
 import { test, expect } from '@playwright/test';
@@ -501,7 +506,7 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
     await expect(publication.locator(`option[value="${draft.id}"]`)).toHaveCount(1);
     await publication.selectOption(draft.id);
     await expectView(page, { record: draft.id });
-    await expect(page.getByRole('heading', { name: '¿Logró lo que buscabas?' })).toBeVisible();
+    await expect(page.getByText('Borrador · Sin entregas; aún no hay rendimiento que analizar.', { exact: true })).toBeVisible();
     await openDisclosure(page, /^Medición de esta pieza y filtros$/);
     const from = page.locator('input[name="from"]'), to = page.locator('input[name="to"]');
     await from.fill('2026-11-01');
@@ -574,9 +579,9 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
     await expect(from).toHaveValue('');
     await expect(to).toHaveValue('');
     await expect(chips).toHaveCount(0);
-    await openDisclosure(page, /^Métricas completas, capturas y estado por destino$/);
-    await expect(page.getByRole('heading', { name: 'Sin capturas en esta selección', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Abrir borrador', exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Métricas completas, capturas y estado por destino', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Revisar mejoras', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Abrir borrador', exact: true })).toBeVisible();
     const refreshing = page.waitForResponse(response => {
       const url = new URL(response.url());
       return url.pathname === `${ROOT}/results` && url.searchParams.get('campaignId') === draft.id && response.request().method() === 'GET';
@@ -718,4 +723,166 @@ test('publicidad guiada: preparar un cambio aquí o una variante sin enviar', as
     expect(reads.writes).toEqual([]);
   } finally { reads.stop(); }
   } finally { await retireResultsConnection(record); }
+});
+
+test('aprobación orgánica no publica', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop', 'Escenario aislado de Chromium de escritorio.');
+  test.setTimeout(120000);
+  const base = new URL(info.project.use.baseURL);
+  const env = testDatabaseEnv(), database = new URL(env.DATABASE_URL);
+  if (base.protocol !== 'https:' || base.hostname !== 'localhost' ||
+      !['localhost', '127.0.0.1'].includes(database.hostname) || env.DB_SSL !== 'verify' ||
+      !(env.DB_CA_CERT || env.DB_CA_CERT_FILE) ||
+      !['INTEGRATION_SECRETS_DIR', 'SOCIAL_BROWSER_CONTROL_DIR', 'SOCIAL_MEDIA_DIR'].every(name => process.env[name] && isAbsolute(process.env[name]))) {
+    throw new Error('La prueba requiere HTTPS localhost, PostgreSQL local descartable con TLS verificado y rutas absolutas de custodia/medios compartidas con el servidor de prueba.');
+  }
+  // This fixture uses no Meta application, tokens, cookies, or running publication workers.
+  await page.context().route('**/*', route => new URL(route.request().url()).origin === base.origin ? route.continue() : route.abort());
+  const store = new Store(await openPostgres(databaseConfig(env)));
+  let settings, setPublishing;
+  try {
+    if ((await store.db.get('SELECT current_database() AS name')).name !== 'allnutrition_test' ||
+        await store.db.get(`SELECT id FROM ${store.t('social_connections')} LIMIT 1`) ||
+        await store.db.get(`SELECT id FROM ${store.t('social_integration_settings')} LIMIT 1`)) {
+      throw new Error('La prueba exige un fixture recién sembrado, sin conexiones ni configuración social previa.');
+    }
+    const actor = await store.db.get(`SELECT id FROM ${store.t('users')} WHERE email=? AND active=1`, ['e2e@example.test']);
+    expect(actor?.id).toBeTruthy();
+    setPublishing = publishingEnabled => saveSocialSettings(store, {
+      version: settings?.version || 0, requestId: randomUUID(), publicBaseUrl: base.origin,
+      appId: '', loginConfigId: '', browserEnabled: true, publishingEnabled,
+    }, actor.id, { allowedOrigins: [base.origin], env: process.env });
+    settings = await setPublishing(false);
+    const runtime = await loadSocialRuntime(store);
+    const connectionId = randomUUID(), assetId = randomUUID(), now = new Date().toISOString();
+    const identities = { userId: '100', businessId: '500', pageId: '200', instagramId: '300' };
+    const connectionName = 'Cuenta exclusiva de la prueba editorial', assetName = 'Imagen exclusiva de la prueba editorial';
+    const record = { version: 1, created_at: now, updated_at: now };
+    await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: 'browser', state: 'connected', ...record, data: JSON.stringify({
+      name: connectionName, identities, sessionEpoch: 0, validatedAt: now, configurationFingerprint: runtime.fingerprint,
+      capabilities: { facebookPublish: true, instagramPublish: true },
+      resources: { pages: [{ id: '200', name: 'Página sintética', businessId: '500', instagramId: '300', tasks: ['CREATE_CONTENT'] }] },
+    }) });
+    await saveCredentials(store, connectionId, { storageState: { cookies: [], origins: [] } }, { runtime });
+    const width = 540, height = 675;
+    const bytes = await sharp({ create: { width, height, channels: 3, background: '#336699' } }).jpeg().toBuffer();
+    const sha256 = createHash('sha256').update(bytes).digest('hex'), derivativeKey = `${assetId}/derivative.jpg`;
+    await mkdir(join(runtime.mediaRoot, assetId), { recursive: true, mode: 0o700 });
+    await writeFile(join(runtime.mediaRoot, derivativeKey), bytes, { flag: 'wx', mode: 0o600 });
+    await insertRow(store, 'social_assets', { id: assetId, state: 'ready', sha256, bytes: bytes.length, ...record, data: JSON.stringify({
+      name: assetName, kind: 'image', contentType: 'image/jpeg', derivativeKey, derivativeSha256: sha256,
+      derivativeBytes: bytes.length, derivativeContentType: 'image/jpeg', width, height,
+    }) });
+
+    const f = await advertisingFixture(page, info);
+    expect((await f.get(`${ROOT}/connections`)).connections.map(item => item.id)).toEqual([connectionId]);
+    const content = await page.request.get(`${ROOT}/assets/${assetId}/content?variant=derivative`);
+    expect(content.ok(), await content.text()).toBe(true);
+    expect(await content.body()).toEqual(bytes);
+    const caption = 'Texto congelado para Facebook e Instagram.';
+    const name = `${f.marker} doble paso`;
+    const publishAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const draft = await f.post(`${ROOT}/campaigns`, {
+      name, connectionId, assetId, mode: 'organic', objective: 'engagement',
+      caption, platforms: ['facebook', 'instagram'], placements: ['facebook_feed', 'instagram_feed'], aiDisclosure: false, publishAt,
+    });
+    await f.post(`${ROOT}/campaigns/${draft.id}/forecast`, { version: draft.version });
+    const editorURL = `/admin?section=advertising&tab=campaigns&record=${draft.id}`;
+    const pending = page.getByRole('heading', { name: `${name} · Aprobada, pendiente de publicar`, exact: true });
+    const scheduled = page.getByRole('heading', { name: `${name} · Programada`, exact: true });
+    const publish = page.getByRole('button', { name: 'Publicar', exact: true });
+    const actionsPath = `${ROOT}/campaigns/${draft.id}/actions`;
+    const waitForAction = action => page.waitForResponse(response => {
+      const request = response.request();
+      return request.method() === 'POST' && new URL(response.url()).pathname === actionsPath && request.postDataJSON().action === action;
+    });
+    const expectNoDeliveries = async () => {
+      const detail = await f.campaign(draft.id);
+      expect(detail.state).toBe('ready');
+      expect(detail.revisions).toHaveLength(1);
+      expect(detail.revisions[0].spec).toMatchObject({ connectionId, assetId, caption, publishAt });
+      expect(detail.deliveries).toEqual([]);
+      expect(detail.operations).toEqual([]);
+      return detail;
+    };
+    await page.goto(editorURL);
+    await page.getByRole('button', { name: '3. Revisar y publicar', exact: true }).click();
+    const consent = page.getByRole('group', { name: 'Autorización de la revisión' });
+    const approval = consent.getByRole('button', { name: 'Aprobar sin publicar', exact: true });
+    await expect(approval).toBeDisabled();
+    for (const box of await consent.getByRole('checkbox').all()) await box.check();
+    const approvalResponse = waitForAction('approve-organic');
+    await approval.click();
+    const approved = await approvalResponse;
+    expect(approved.status(), await approved.text()).toBe(200);
+    expect(await approved.json()).toMatchObject({ state: 'ready', revision: 1, deliveryIds: [], operationIds: [], deliveries: [] });
+    await expect(pending).toBeVisible();
+    await expect(publish).toHaveCount(0);
+    await expectNoDeliveries();
+
+    settings = await setPublishing(true);
+    await page.reload();
+    await expect(pending).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Configuración aprobada · Solo lectura' })).toBeVisible();
+    await expect(page.locator('textarea[name="caption"]')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Ver rendimiento', exact: true })).toHaveCount(0);
+    await expect(publish).toBeEnabled();
+    const frozen = await expectNoDeliveries();
+    const writing = observeWrites(page);
+    const dialog = page.getByRole('dialog', { name: 'Publicar revisión aprobada' });
+    const confirm = dialog.getByRole('button', { name: 'Confirmar publicación', exact: true });
+    const permission = dialog.getByRole('checkbox');
+    const openPublish = async () => {
+      await publish.click();
+      await expect(dialog).toBeVisible();
+      await expect(permission).not.toBeChecked();
+      await expect(confirm).toBeDisabled();
+    };
+    try {
+      await openPublish();
+      await expect(dialog.getByText(connectionName, { exact: true })).toBeVisible();
+      await expect(dialog.getByText(assetName, { exact: true })).toBeVisible();
+      await expect(dialog.getByText(caption, { exact: true })).toBeVisible();
+      await expect(dialog.getByText(/Página de Facebook.*Cuenta profesional de Instagram/)).toBeVisible();
+      await expect(dialog.getByText('America/Bogota', { exact: true })).toBeVisible();
+      await permission.check();
+      await dialog.getByRole('button', { name: 'Volver sin ejecutar', exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expectNoDeliveries();
+      await openPublish();
+      page.once('dialog', prompt => prompt.accept());
+      await page.reload();
+      await expect(pending).toBeVisible();
+      await expect(dialog).toHaveCount(0);
+      await expectNoDeliveries();
+      expect(writing.writes).toEqual([]);
+    } finally { writing.stop(); }
+
+    await openPublish();
+    await permission.check();
+    const publicationResponse = waitForAction('publish-organic');
+    await confirm.click();
+    const published = await publicationResponse;
+    expect(published.status(), await published.text()).toBe(202);
+    const receipt = await published.json(), request = published.request(), payload = request.postDataJSON();
+    expect(payload).toEqual({ action: 'publish-organic', version: frozen.version, requestId: expect.any(String), revision: 1, specHash: frozen.revisions[0].specHash, publishAccepted: true });
+    expect(receipt.state).toBe('scheduled');
+    expect(receipt.deliveryIds).toHaveLength(2);
+    expect(new Set(receipt.deliveryIds).size).toBe(2);
+    const replay = await page.request.post(actionsPath, { headers: { Origin: base.origin, 'x-csrf-token': await request.headerValue('x-csrf-token') }, data: payload });
+    expect(replay.status(), await replay.text()).toBe(202);
+    expect(await replay.json()).toEqual(receipt);
+    await expect(scheduled).toBeVisible();
+    await page.reload();
+    await expect(scheduled).toBeVisible();
+    await expect(publish).toHaveCount(0);
+    const queued = await f.campaign(draft.id);
+    expect(queued.revisions).toEqual(frozen.revisions);
+    expect(queued.deliveries.map(delivery => delivery.channel)).toEqual(['facebook', 'instagram']);
+    expect(queued.deliveries.map(delivery => delivery.id).sort()).toEqual([...receipt.deliveryIds].sort());
+    for (const delivery of queued.deliveries) expect(delivery).toMatchObject({ state: 'scheduled', remoteId: null, publishRequestedBy: actor.id });
+  } finally {
+    try { if (settings?.publishingEnabled) await setPublishing(false); }
+    finally { await store.close(); }
+  }
 });

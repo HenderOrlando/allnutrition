@@ -120,8 +120,8 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
   const { root, env: deploymentEnv } = installations.get(store), env = { ...deploymentEnv }, clock = clocks.get(store);
   await configureSocialTestRuntime(store, { env });
   const base = new Date(clock.now + 1000).toISOString(), at = milliseconds => new Date(Date.parse(base) + milliseconds).toISOString();
-  const actorId = randomUUID(), approverId = randomUUID();
-  for (const id of [actorId, approverId]) await insertRow(store, 'users', { id, email: `${id}@example.test`, password: 'unused-synthetic', active: 1 });
+  const actorId = randomUUID(), approverId = randomUUID(), requesterId = randomUUID();
+  for (const id of [actorId, approverId, requesterId]) await insertRow(store, 'users', { id, email: `${id}@example.test`, password: 'unused-synthetic', active: 1 });
   const connection = await socialConnection(store, { method: 'browser', data: { identities: ids, currency: 'COP', timeZone: 'America/Bogota', capabilities: { facebookPublish: true, instagramPublish: true, adsPublish: true, insights: true, whatsappAds: true } } });
   await saveCredentials(store, connection.id, { storageState: cookieState }, { runtime: (await configureSocialTestRuntime(store, { env })).runtime });
   const assetId = randomUUID(), bytes = await sharp({ create: { width: 540, height: 675, channels: 3, background: '#336699' } }).jpeg().toBuffer(), assetHash = createHash('sha256').update(bytes).digest('hex');
@@ -133,8 +133,8 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
   await insertRow(store, 'social_campaigns', { id: campaignId, connection_id: connection.id, asset_id: assetId, name: 'Campaña aislada del worker', mode, objective: 'traffic', state: withDelivery ? 'publishing' : 'draft', ...editable(spec) });
   const runtime = await loadSocialRuntime(store, { env });
   const revision = () => ({ spec, configurationFingerprint: runtime.fingerprint, rightsAccepted: true, acceptedWarnings: [], forecast: { specHash: hash(spec), source: 'insufficient', metricRanges: {} } });
-  if (withDelivery) await insertRow(store, 'social_revisions', { campaign_id: campaignId, revision: 1, spec_hash: hash(spec), approved_at: base, actor_id: approverId, data: JSON.stringify(revision()) });
-  const f = { store, env, root, base, at, actorId, approverId, connection, assetId, assetHash, spec, campaignId, remote, transport: { browserClient: remote.client } };
+  if (withDelivery) await insertRow(store, 'social_revisions', { campaign_id: campaignId, revision: 1, spec_hash: hash(spec), approved_at: mode === 'organic' ? at(-3600000) : base, actor_id: approverId, data: JSON.stringify(revision()) });
+  const f = { store, env, root, base, at, actorId, approverId, requesterId, connection, assetId, assetHash, spec, campaignId, remote, transport: { browserClient: remote.client } };
   f.now = () => new Date(clock.now).toISOString();
   f.turn = async (options = {}) => {
     clock.now = options.now ? Date.parse(options.now) : clock.now + 1000;
@@ -145,7 +145,7 @@ async function setup(store, t, { mode = 'organic', withDelivery = true, platform
   f.patch = (table, id, fields) => patch(store, table, id, fields);
   f.refreshSpec = async () => { await patch(store, 'social_campaigns', campaignId, spec); await store.db.run(`UPDATE ${store.t('social_revisions')} SET spec_hash=?,data=? WHERE campaign_id=?`, [hash(spec), JSON.stringify(revision()), campaignId]); };
   f.delivery = async ({ state = 'queued', remoteId = null, data = {}, channel = mode === 'paid' ? 'meta_ads' : platforms[0] } = {}) => {
-    const id = randomUUID(); await insertRow(store, 'social_deliveries', { id, campaign_id: campaignId, revision: 1, channel, state, remote_id: remoteId, next_sync_at: null, ...editable({ integrationMethod: 'browser', remoteRefs: {}, ...data }) }); return get(store, 'social_deliveries', id);
+    const id = randomUUID(); await insertRow(store, 'social_deliveries', { id, campaign_id: campaignId, revision: 1, channel, state, remote_id: remoteId, next_sync_at: null, ...editable({ integrationMethod: 'browser', remoteRefs: {}, ...(mode === 'organic' ? { publishRequestedBy: requesterId } : {}), ...data }), created_at: base, updated_at: base }); return get(store, 'social_deliveries', id);
   };
   f.operation = async (delivery, step = mode === 'paid' ? 'prepare-paid' : 'publish', extra = {}) => {
     const id = randomUUID(), kind = step.split(':')[0], current = delivery && await get(store, 'social_deliveries', delivery.id), campaign = await get(store, 'social_campaigns', campaignId);
@@ -239,7 +239,7 @@ const cases = [
     assert.equal((await f.turn()).hasMore, false); await f.patch('social_campaigns', f.campaignId, { restore_hold: false });
     assert.equal((await f.turn()).errorCode, null); assert.equal(f.remote.writes, 1);
   }],
-  ['respuesta perdida se reconcilia por journal y no vuelve a publicar', async (store, t) => {
+  ['la respuesta perdida se concilia por journal incluso si falta el solicitante histórico, sin volver a publicar', async (store, t) => {
     const f = await setup(store, t), operation = await f.operation(f.firstDelivery); f.remote.loseResponse = true;
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse(f.base) });
     assert.equal((await f.turn()).errorCode, 'OPERATION_UNCERTAIN');
@@ -251,6 +251,7 @@ const cases = [
     assert.equal((await f.turn({ now: new Date(retryAt - 1).toISOString() })).processed, 0);
     assert.equal((await get(store, 'social_operations', operation.id)).state, 'uncertain');
     assert.equal(f.remote.objects.size, 1); assert.equal(f.remote.reads, 0);
+    await f.patch('social_deliveries', f.firstDelivery.id, { publishRequestedBy: undefined });
     assert.equal((await f.turn({ now: new Date(retryAt).toISOString() })).errorCode, null);
     assert.equal((await get(store, 'social_operations', operation.id)).state, 'confirmed');
     assert.equal(f.remote.writes, 1); assert.equal(f.remote.reads, 1);
@@ -279,6 +280,16 @@ const cases = [
       if (fault === 'file') await writeFile(join(f.root, f.assetId, 'derivative.jpg'), 'altered');
       assert.ok((await f.turn({ ...(fault === 'late' ? { now: f.at(901000) } : {}) })).errorCode);
       assert.equal(f.remote.writes, 0); assert.equal((await get(store, 'social_operations', operation.id)).state, 'failed');
+    }
+  }],
+  ['solicitante ausente o inactivo bloquea publicación inicial, sin sustituirlo por el actor de operación', async (store, t) => {
+    for (const missing of [true, false]) {
+      const f = await setup(store, t), operation = await f.operation(f.firstDelivery);
+      if (missing) await f.patch('social_deliveries', f.firstDelivery.id, { publishRequestedBy: undefined });
+      else await store.db.run(`UPDATE ${store.t('users')} SET active=0 WHERE id=?`, [f.requesterId]);
+      assert.equal((await f.turn()).errorCode, 'PERMISSION_REQUIRED');
+      assert.equal(f.remote.writes, 0);
+      assert.equal((await get(store, 'social_operations', operation.id)).sentAt, undefined);
     }
   }],
   ['autorización restaurada ejecuta con actor efectivo y deja revisión histórica intacta', async (store, t) => {

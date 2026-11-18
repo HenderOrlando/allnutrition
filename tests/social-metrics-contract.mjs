@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { entity, hash, insertRow } from '../lib/business/commands.mjs';
-import { syncSocialDelivery, getSocialResults } from '../lib/business/social-metrics.mjs';
+import { syncSocialDelivery, getSocialResults, socialMetricAnchor, socialMetricLifecycle } from '../lib/business/social-metrics.mjs';
 import { createMetaApiConnector } from '../lib/social/meta.mjs';
 import { saveCredentials } from '../lib/social/credentials.mjs';
 import { createMetaMetricsProvider } from './social-meta-metrics-provider.mjs';
@@ -54,6 +54,17 @@ async function setup(store, t, { mode = 'paid', channel = 'meta_ads' } = {}) {
 }
 
 const cases = [
+  ['la ventana orgánica usa publicación verificada, agenda o solicitud, nunca aprobación editorial', async () => {
+    const approvedAt = '2026-10-31T05:00:00.000Z', publishAt = '2026-11-02T05:00:00.000Z';
+    const legacy = { approvedAt }, requested = { ...legacy, createdAt: START }, organic = { mode: 'organic' }, scheduled = { ...organic, publishAt };
+    const sent = socialMetricLifecycle(requested, { state: 'published' }, { operation: { sentAt: NOW }, now: NOW });
+    assert.equal(socialMetricAnchor(legacy, organic), null);
+    assert.equal(socialMetricAnchor(requested, organic), START);
+    assert.equal(socialMetricAnchor(requested, scheduled), publishAt);
+    assert.equal(socialMetricAnchor({ ...requested, metricSync: { publicationAt: NOW } }, scheduled), NOW);
+    assert.equal(socialMetricAnchor({ ...requested, ...sent }, scheduled), NOW);
+    assert.equal(sent.publicationTimeSource, 'publication_request_sent_at');
+  }],
   ['un ciclo persiste consultas separadas, dinero y ratios sin requerir el archivo ni modificar hechos comerciales', async (store, t) => {
     const f = await setup(store, t), before = await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`);
     await f.finish(); const results = await f.results(), aggregate = results.measurements.find(value => value.dimension === 'aggregate');
