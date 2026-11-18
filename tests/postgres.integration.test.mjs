@@ -6,7 +6,7 @@ import { openPostgres } from '../lib/db/postgres.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
 import { runContracts } from './contract.mjs';
 import { resetPostgresStore, withPostgresTestDatabase } from './postgres-fixture.mjs';
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13, migrateAdvertisingIntelligenceV14 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, HEKA_API_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13, migrateAdvertisingIntelligenceV14, migrateHekaApiV15 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
 import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore,runSocialBackupContracts } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
@@ -25,6 +25,7 @@ import { runSocialImprovementContracts } from './social-improvements-contract.mj
 import { runSocialSettingsContracts } from './social-settings-contract.mjs';
 import { runShippingBridgeContracts } from './shipping-bridge-contract.mjs';
 import { runHekaImportContracts } from './heka-import-contract.mjs';
+import { runHekaApiContracts } from './heka-api-contract.mjs';
 import { runAssistantPersistenceContracts } from './assistant-persistence.test.mjs';
 import { runAssistantMigrationContracts } from './assistant-migration.test.mjs';
 import { runAssistantMemoryContracts } from './assistant-memory.test.mjs';
@@ -44,6 +45,7 @@ async function restoreAssistantSchema(store) {
  await migrateAssistantOAuthV12(store);
  await migrateAssistantWorkV13(store);
  await migrateAdvertisingIntelligenceV14(store);
+ await migrateHekaApiV15(store);
 }
 
 async function migrationRows(store,{includeInternals=false}={}) {
@@ -108,6 +110,9 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    await createBusinessFixture(store,{year:2025,pay:true});
    await store.transaction(async tx=>{
     await tx.lockWrites();
+    for(const table of [...HEKA_API_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
+    await tx.db.exec('DROP INDEX allnutrition.shipments_heka_link_identity');
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=15`);
     for(const table of [...ADVERTISING_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
     await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=14`);
     await dropAssistantSchema(tx);
@@ -347,6 +352,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
  await runSocialBackupContracts(t,factory);
  await runShippingBridgeContracts(t,factory);
  await runHekaImportContracts(t,factory);
+ await runHekaApiContracts(t,factory);
  await runAssistantMigrationContracts(t,factory,{openRuntime:()=>openStore(env)});
  await runAssistantPersistenceContracts(t,factory,{openPeer:()=>openStore(env)});
  await runAssistantMemoryContracts(t);

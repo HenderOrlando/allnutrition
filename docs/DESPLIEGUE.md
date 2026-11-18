@@ -189,8 +189,21 @@ Conservar `social_control` privada, salida a proveedor separada, usuario no root
 
 `deploy/social-browser-seccomp.json` conserva el perfil de namespaces de Chromium, `faccessat2` y `clone3` denegado con `ENOSYS`, sin capacidades añadidas. Verificar el sandbox en la arquitectura destino; una aceptación arm64 no certifica amd64. La automatización social requiere permiso de Meta y cuenta autorizada. CAPTCHA, 2FA, checkpoints, expiración y cambios de interfaz requieren intervención, nunca fallback entre API y navegador.
 
-Los respaldos comerciales excluyen credenciales, opciones de integración, emparejamientos, consultas y capturas Heka. Los lotes de importación aceptados sí conservan su procedencia comercial. Restaurar exige un destino vacío; deja las conexiones sociales por reconectar, campañas en `restore_hold` y medios por verificar mediante SHA-256. Una **copia física** debe acompañarse de una copia privada cifrada de ambos volúmenes de claves, fuera del respaldo comercial, repositorio y volumen de medios. Perder esas claves no se resuelve con el JSON comercial.
+Los respaldos comerciales excluyen credenciales, opciones de integración, emparejamientos, consultas y capturas Heka clásico. Los lotes de importación aceptados sí conservan su procedencia comercial. Restaurar exige un destino vacío; deja las conexiones sociales por reconectar, campañas en `restore_hold` y medios por verificar mediante SHA-256. Una **copia física** debe acompañarse de una copia privada cifrada de ambos volúmenes de claves, fuera del respaldo comercial, repositorio y volumen de medios. Perder esas claves no se resuelve con el JSON comercial.
 
+## API oficial de Heka
+
+El esquema **15** añade la configuración y el historial de operaciones. SQLite actualiza al abrir un store nuevo; para PostgreSQL, ejecutar `npm run db:migrate` con el rol de migración antes de iniciar el código nuevo. No se requieren Electron, scheduler ni variables de credenciales Heka. La salida HTTPS del servidor usa `https://apidev.hekaentrega.co/api/v1` en **Pruebas** y `https://api.hekaentrega.co/api/v1` en **Producción**. No configurar tráfico hacia Heka en una aceptación descartable.
+
+El servidor crea `heka.key` en `INTEGRATION_SECRETS_DIR` al guardar la primera llave Heka. Mantener el directorio privado (`0700`) y el archivo de custodia (`0600`), ambos del usuario de ejecución y sin enlaces simbólicos. No respaldar la llave ni los archivos de custodia en Git, imágenes o el volumen de medios. En recuperación física, restaurar el volumen privado original junto con los datos; no regenerar una clave perdida sobre credenciales cifradas existentes.
+
+La exportación comercial no incluye la configuración ni la llave Heka. Conserva el historial mínimo y los bloqueos para no duplicar envíos; no exporta los datos del destinatario ni el texto de las soluciones. Tras restaurar, volver a configurar la conexión. Una operación en curso puede quedar incierta y nunca se reenvía: verificarla con la llave API original, el archivo de custodia original `heka.key` y evidencia del mismo entorno antes de emitir otra guía.
+
+El diario reside en `heka_api_mutations` y se exporta como `hekaEvidence`: identificadores operativos, estados y huellas HMAC no reversibles; no se exportan los leases ni el cifrado de `heka_api_settings`. Una restauración comercial necesita el `heka.key` binario original (32 bytes) y la misma llave API para verificar un resultado incierto. Desconectar o cambiar la llave no borra los bloqueos del diario.
+
+`heka_api_order_links` conserva como evidencia comercial la guía oficial de producción, su envío y pedido locales, el operador y el estado remoto observado al vincular. La vinculación exige confirmación y una lectura exacta de Heka: si la búsqueda omite la transportadora, se requiere el recibo original de creación de esa misma guía y llave. Conserva el identificador de guía y transportadora; nunca crea un evento de entrega ni asienta cobros, gastos o caja. Las lecturas posteriores permiten consultar el estado remoto por separado. Para avanzar el despacho local, registra explícitamente un evento con evidencia y fecha en el envío vinculado.
+
+Una copia sólo cubre el instante de su captura. Antes de reabrir escrituras tras restaurar una copia anterior al corte, conserva o recupera el diario posterior y contrasta manualmente las guías y novedades en Heka. Restaurar la base local no deshace acciones en el proveedor.
 
 ## Complemento Heka y custodia local
 

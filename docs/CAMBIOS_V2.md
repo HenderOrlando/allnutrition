@@ -1,5 +1,11 @@
 # Cambios — administración v3 y antecedentes
 
+## Heka · API oficial en el panel
+
+- Conexión mediante llave cifrada del servidor y entorno explícito. Pedidos ofrece ciudades, bodegas, plantillas, cotización, emisión y búsqueda de guías, historial y calificación de destinatarios, novedades y etiquetas PDF. La solución de novedades requiere rol `seller` en Heka.
+- Confirmación explícita para emitir guías o enviar soluciones; historial persistente distingue resultado confirmado e incierto sin reenvío automático. Verificar no repite la escritura remota. Las escrituras remotas no alteran pedidos locales, Caja ni inventario. Heka clásico permanece independiente.
+- Las guías verificadas en producción pueden vincularse a un pedido local seleccionado por número exacto y con confirmación explícita. No se registra una entrega ni se infieren fechas a partir del estado remoto.
+
 ## 17 de noviembre de 2026 — Verificación de dominio Meta configurable
 
 - Añadido el valor de verificación de Meta al menú Configuración de la vitrina. Se guarda en la configuración existente y genera la metaetiqueta `facebook-domain-verification` en la página de inicio; al vaciar el campo, se retira.
