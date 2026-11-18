@@ -374,7 +374,7 @@ try {
   compose(['stop', 'web'], 'Detención de web antes del restore');
   stopWorker();
   compose(['exec', '-T', 'db', 'createdb', '-U', 'postgres', 'allnutrition_restore'], 'Creación exclusiva de una base restore vacía');
-  compose(['run', '--rm', '-e', 'PGDATABASE=allnutrition_restore', 'backup', 'pg_restore', '--exit-on-error', '--dbname=allnutrition_restore', `/backups/${backup}`], 'Restore TLS en base distinta');
+  compose(['run', '--rm', '-e', 'PGDATABASE=allnutrition_restore', 'backup', 'pg_restore', '--exit-on-error', '--dbname=allnutrition_restore', `/backups/${backup}`], 'Restore TLS en base distinta', { timeout: 15 * 60 * 1000 });
   compose(['run', '--rm', '-e', 'DATABASE_URL', 'checks', 'node', 'tests/docker/operations.mjs', 'assert'], 'Aceptación de la base restaurada con rol runtime', {
     env: { DATABASE_URL: `postgresql://allnutrition_app:${values.DB_APP_PASSWORD}@db:5432/allnutrition_restore` },
   });
