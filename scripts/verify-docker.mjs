@@ -483,6 +483,7 @@ async function verifyWeb({ browser, scheduler, operational }) {
   const root = JSON.parse(compose(['exec', '-T', 'proxy', 'wget', '-qO-', 'http://127.0.0.1:2019/pki/ca/local'], 'Exportación de CA HTTPS pública', { quiet: true, logOutput: false }).stdout).root_certificate;
   ensure(typeof root === 'string' && root.includes('BEGIN CERTIFICATE'), 'Caddy no devolvió su certificado raíz público.');
   httpsCA = root;
+  if (operational) writeFileSync(join(artifacts, 'https-ca.crt'), root, { mode: 0o600, flag: 'wx' });
   await healthy();
   const privacy = existsSync('app/privacy/page.jsx');
   for (const path of ['/', ...(privacy ? ['/privacy'] : [])]) ensure((await request(path)).status === 200, 'Smoke HTTPS rechazado: ' + path);
