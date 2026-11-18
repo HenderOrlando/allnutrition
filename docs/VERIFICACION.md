@@ -1,5 +1,12 @@
 # Verificación v3 — administración de negocio
 
+## Heka oficial · verificación local en Chromium
+
+- `node tests/heka-browser.mjs`: tres recorridos aprobados sobre rutas reales del panel en HTTPS local, con SQLite v15 y custodia separada y desechable por caso: escritorio **1440×900**, móvil **390×844** y vinculación a pedido local.
+- Configuración, comprobación de acceso, retirada de llave y ausencia de clave devuelta o persistida en el navegador; navegación desde Envíos, consultas y paginación, cotización sin emitir, emisión confirmada, historial/calificación de destinatarios, movimientos de novedades y solución confirmada. Ambos modos de PDF descargaron un archivo válido. Un rechazo de acceso no se presentó como resultado vacío.
+- Se verificó en móvil una emisión con respuesta incierta, búsqueda de la guía y asociación explícita sin duplicar el envío. La vinculación desde la rama de Producción fue **simulada**: solo lecturas sintéticas de guías, pedido descartable por número AN exacto y envío local en estado desconocido, sin cambiar el estado del pedido. Persiste al recargar y abre el envío correspondiente.
+- Sin llamadas de red a Heka de Pruebas o Producción, credenciales reales ni despliegue. Las conexiones Heka clásico permanecieron idénticas. El fixture no certifica permisos o respuestas de una cuenta Heka real.
+
 ## Ali · continuidad entre fases · verificación de publicación posterior
 
 - El candidato `2f2ad2647ef32cb2ad6c37f59b4622ce768f8d2c` aprobó CI [43571467779](https://github.com/HenderOrlando/allnutrition/actions/runs/43571467779) y una aceptación nativa nueva Linux/amd64 con **17 compuertas**, sin reutilización de contratos. El runner social y la restauración de respaldo real con el candidato también aprobaron.

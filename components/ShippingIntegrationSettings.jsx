@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { bogotaDate } from '@/lib/business/dates.mjs';
 import { formatMoneyMinor } from '@/lib/business/money.mjs';
+import HekaOfficialSettings from './HekaOfficialSettings';
 import styles from './ShippingIntegrationSettings.module.css';
 
 const ROOT = '/api/admin/shipping';
@@ -265,7 +266,12 @@ export default function ShippingIntegrationSettings({ api, view, onViewChange, o
   const sources = useRead(api, '/api/admin/business/sources', refreshKey);
   const platforms = useRead(api, '/api/admin/business/platforms', refreshKey);
   const retry = () => setRefresh(value => value + 1);
-  return <section className="business-settings" aria-label="Proveedores de envíos"><header className="workspace-heading"><div><h2 ref={heading} tabIndex={-1}>Proveedores de envíos</h2><p>Heka clásico · Solo consulta. No crea ni anula guías, solicita pagos ni modifica bancos. Leer y preparar importación no cambia el negocio.</p><p>Origen real de este panel: <strong>{origin || 'Consultando origen…'}</strong></p>{origin && !origin.startsWith('https:') && <p className="error" role="alert">El bridge requiere un origen HTTPS del panel. Este origen no es HTTPS.</p>}</div></header>{notice && <p role="status">{notice}</p>}<ReadStatus state={connections} label="conexiones" onRetry={retry}/><ReadStatus state={sources} label="fuentes" onRetry={retry}/><ReadStatus state={platforms} label="plataformas" onRetry={retry}/>
+  return <section className="business-settings" aria-label="Proveedores de envíos">
+    <header className="workspace-heading"><div><h2 ref={heading} tabIndex={-1}>Proveedores de envíos</h2><p>Configura la API oficial para despachar sin ingresar al portal. El complemento clásico sigue disponible para consultas e importación de liquidaciones.</p></div></header>
+    <HekaOfficialSettings api={api} onNavigate={onNavigate} onInteractionStateChange={state => report('heka-official', state)}/>
+    <section className="settings-subform" aria-label="Complemento Heka clásico"><h3>Heka clásico · Complemento local</h3><p>Solo consulta. No crea ni anula guías, solicita pagos ni modifica bancos. Leer y preparar importación no cambia el negocio.</p><p>Origen real de este panel: <strong>{origin || 'Consultando origen…'}</strong></p>{origin && !origin.startsWith('https:') && <p className="error" role="alert">El bridge requiere un origen HTTPS del panel. Este origen no es HTTPS.</p>}</section>
+    {notice && <p role="status">{notice}</p>}
+    <ReadStatus state={connections} label="conexiones" onRetry={retry}/><ReadStatus state={sources} label="fuentes" onRetry={retry}/><ReadStatus state={platforms} label="plataformas" onRetry={retry}/>
     {connections.data && sources.data && platforms.data && <CreateConnection api={api} sources={sources.data.records} platforms={platforms.data.records} connections={connections.data.connections} report={report} onSaved={saved} onViewChange={onViewChange} onNavigate={onNavigate}/>}
     {connections.data && !connections.data.connections.length && <p>No hay conexiones Heka. Elige una fuente comercial para comenzar.</p>}
     {connections.data?.connections.map(connection => <Connection key={connection.id} api={api} connection={connection} report={report} onSaved={saved} onNavigate={onNavigate} refresh={refreshKey} origin={origin} selected={view.record === connection.id}/>)}
