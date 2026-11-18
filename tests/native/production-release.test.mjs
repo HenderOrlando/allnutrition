@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { activeFiles, publicState, requireLive, serviceOrder, sha256 } from '../../scripts/production-host.mjs';
-import { configDigest, hashFile, projectTarget, run, verifyBundle } from '../../scripts/production-release.mjs';
+import { configDigest, hashFile, hostCommand, projectTarget, run, verifyBundle } from '../../scripts/production-release.mjs';
 import { canonicalPlan, configFiles, imageTag, requiredChecks } from '../../scripts/release-impact.mjs';
 
 const commit = run('git', ['rev-parse', 'HEAD']).trim();
@@ -19,6 +19,11 @@ const refs = Object.fromEntries(serviceOrder.map((name, i) => {
 }));
 const base = { format: 1, coveredThrough: commit, configCommit: commit, schemaVersion: 15, services: refs, configHashes, deploymentId: '29' };
 const writeJSON = (name, data) => writeFileSync(name, JSON.stringify(data, null, 2) + '\n');
+
+test('remote inspect is forwarded after a non-reserved Node positional argument', () => {
+  const command = hostCommand('inspect', { scoped: true });
+  assert.match(command, /'--' 'production-host' 'inspect' '[a-zA-Z0-9_-]+'/);
+});
 
 test('public deployment payload omits IDs, stages and private state; rejects mixed or altered live pins', () => {
   const live = publicState({ ...base, observed: { private: true }, credentials: 'excluded' });

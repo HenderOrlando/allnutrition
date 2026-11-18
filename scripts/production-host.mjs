@@ -495,7 +495,7 @@ async function host(operation, input) {
 if (process.env.ALLNUTRITION_PRODUCTION_HOST === '1') {
   process.umask(0o077);
   try {
-    const [operation, encoded] = process.argv.slice(1);
+    const [operation, encoded] = process.argv.slice(2);
     const result = await host(operation, JSON.parse(Buffer.from(encoded, 'base64url')));
     console.log(JSON.stringify(result));
   } catch (error) {

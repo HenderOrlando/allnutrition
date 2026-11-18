@@ -25,7 +25,10 @@ const validateLive = snapshot => {
   return live;
 };
 async function inventory() {
-  const observed = host(), indexed = latestProduction();
+  console.error('Inventario: leyendo la VM.');
+  const observed = host('inspect', {}, { timeout: 30_000 });
+  console.error('Inventario: leyendo el éxito registrado en GitHub.');
+  const indexed = latestProduction();
   if (observed.current) {
     const live = validateLive(observed);
     requireThat(!indexed || same(publicState(indexed), live), 'Ya existe una base exitosa distinta. No se reemplaza con inventario.');
@@ -41,8 +44,11 @@ async function inventory() {
       return [service, { imageTag, imageId, sourceCommit: imageId === `sha256:${expected}` ? source : null }];
     })) });
   requireLive(manifest, observed, { strictPins: false });
+  console.error('Inventario: verificando HTTPS público.');
   await smoke(origin, { bootstrap: manifest.schemaVersion < 15 });
-  host('inventory', { manifest, origin });
+  console.error('Inventario: registrando recibo privado en VM.');
+  host('inventory', { manifest, origin }, { timeout: 45_000 });
+  console.error('Inventario: registrando procedencia pública en GitHub.');
   pretty({ deploymentId: publishProduction(manifest, 'inventory'), manifest });
 }
 function status() {

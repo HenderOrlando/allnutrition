@@ -37,7 +37,8 @@ export function vmArgs(command, localBastion = false) {
 }
 export function hostCommand(operation, input) {
   const code = readFileSync(new URL('./production-host.mjs', import.meta.url), 'utf8');
-  const args = shell(['env', 'ALLNUTRITION_PRODUCTION_HOST=1', 'node', '--input-type=module', '-e', code, '--', operation, Buffer.from(JSON.stringify(input)).toString('base64url')]);
+  // Node reserves a first positional argument of `inspect` even with -e.
+  const args = shell(['env', 'ALLNUTRITION_PRODUCTION_HOST=1', 'node', '--input-type=module', '-e', code, '--', 'production-host', operation, Buffer.from(JSON.stringify(input)).toString('base64url')]);
   const lock = quote(join(stateRoot, 'production.lock'));
   if (operation === 'inspect' || operation === 'status') return `if test -f ${lock}; then exec flock -s -w 10 ${lock} ${args}; else exec ${args}; fi`;
   return `set -eu; umask 077; install -d -m 0700 ${quote(stateRoot)}; exec flock -x -w 10 ${lock} ${args}`;
