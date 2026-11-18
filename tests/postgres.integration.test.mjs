@@ -74,15 +74,7 @@ async function insertInsurance(store,fixture) {
   ['insurance-v6','shipping_insurance',100000,'2025-09-02',fixture.person.id,fixture.orderId,fixture.shipmentId,`${fixture.shipmentId}:shipping_insurance`,1,'2025-09-05T12:00:00.000Z',JSON.stringify({datePolicy:'charge_date',source:'manual'}),'2025-09-05T12:00:00.000Z','2025-09-05T12:00:00.000Z']);
 }
 
-const url=process.env.TEST_DATABASE_URL;
-test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},async t=>{
- await withPostgresTestDatabase(async env=>{
- const first=await openStore(env,{migrate:true});try{await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));await first.initialize();await migrateBusinessV3(first);await migrateInventoryV4(first);await migrateImportCancellationV5(first);await migrateShippingInsuranceV6(first);await migrateWorkbookImportV7(first);await migrateSocialV8(first);await migrateStockAlertsV9(first);await migrateRuntimeIntegrationsV10(first);await restoreAssistantSchema(first);assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=13`));}finally{await first.close();}
- const factory=async()=>{
-  const store=await openStore(env);
-  try { await resetPostgresStore(store); return store; }
-  catch (error) { await store.close(); throw error; }
- };
+async function runCoreContracts(t,factory,env) {
  await t.test('una transacción posterior no confirma escrituras cuyo rollback quedó incierto',async context=>{
   const observer=await factory(),table=observer.t('transaction_timeout_'+requestId().replaceAll('-',''));
   let db,backend;
@@ -104,6 +96,10 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
   await db.transaction(async tx=>{await tx.run(`INSERT INTO ${table}(id) VALUES(2)`);});
   assert.deepEqual(await db.all(`SELECT id FROM ${table} ORDER BY id`),[{id:2}]);
  });
+ await runContracts(t,factory);
+}
+
+async function runSchemaContracts(t,factory,env) {
  await t.test('publicidad v8 conserva negocio v7, revierte DDL y exige migración al arrancar',async()=>{
   const store=await factory();
   try{
@@ -335,32 +331,6 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    try{await migrateShippingInsuranceV6(store);await migrateWorkbookImportV7(store);await restoreAssistantSchema(store);}finally{await store.close();}
   }
  });
- await runContracts(t,factory);await runBusinessContracts(t,factory);
- await runBusinessPayrollContracts(t,factory);
- await runImportCancellationContracts(t,factory);
- await runWorkbookImportContracts(t,factory);
- await runSocialContracts(t,factory);
- await runSocialSettingsContracts(t,factory);
- await runSocialMediaContracts(t,factory);
- await runSocialCampaignContracts(t,factory);
- await runSocialApiJobContracts(t,factory);
- await runSocialBrowserJobContracts(t,factory);
- await runSocialMetricsContracts(t,factory);
- await runSocialAnalysisContracts(t,factory);
- await runSocialLinkContracts(t,factory);
- await runSocialImprovementContracts(t,factory);
- await runSocialBackupContracts(t,factory);
- await runShippingBridgeContracts(t,factory);
- await runHekaImportContracts(t,factory);
- await runHekaApiContracts(t,factory);
- await runAssistantMigrationContracts(t,factory,{openRuntime:()=>openStore(env)});
- await runAssistantPersistenceContracts(t,factory,{openPeer:()=>openStore(env)});
- await runAssistantMemoryContracts(t);
- await runAssistantActionsContracts(t,factory);
- await t.test('motor conversacional de Ali con PostgreSQL',async context=>{
-  const store=await factory();
-  try{await runAssistantEngineContracts(context,store);}finally{await store.close();}
- });
  await t.test('libro v7 conserva pagos, ownership, índices y FK y revierte el CHECK al fallar el marcador',async()=>{
   const store=await factory();
   try{
@@ -400,6 +370,21 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
    assert.deepEqual(await migrationRows(store),migrated);assert.deepEqual(await expenseSchema(store),migratedSchema);
   }finally{try{await migrateWorkbookImportV7(store);await restoreAssistantSchema(store);}finally{await store.close();}}
  });
+}
+
+async function runAssistantContracts(t,factory,env) {
+ await runAssistantMigrationContracts(t,factory,{openRuntime:()=>openStore(env)});
+ await runAssistantPersistenceContracts(t,factory,{openPeer:()=>openStore(env)});
+ await runAssistantMemoryContracts(t);
+ await runAssistantActionsContracts(t,factory);
+ await t.test('motor conversacional de Ali con PostgreSQL',async context=>{
+  const store=await factory();
+  try{await runAssistantEngineContracts(context,store);}finally{await store.close();}
+ });
+}
+
+async function runBackupContracts(t,factory) {
+ await runSocialBackupContracts(t,factory);
  await t.test('restaura negocio SQLite en PostgreSQL y reanuda trabajo con el actor original',async()=>{
   const source=await openStore({DB_DRIVER:'sqlite',SQLITE_PATH:':memory:'});
   let target;
@@ -421,5 +406,98 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:!url},asyn
   const target=await factory();
   try{await assertLegacyPartialRestore(target);}finally{await target.close();}
  });
+}
+
+const groups = {
+ core: runCoreContracts,
+ async business(t,factory) {
+  await runBusinessContracts(t,factory);
+  await runBusinessPayrollContracts(t,factory);
+ },
+ async imports(t,factory) {
+  await runImportCancellationContracts(t,factory);
+  await runWorkbookImportContracts(t,factory);
+ },
+ backup: runBackupContracts,
+ async heka(t,factory) {
+  await runShippingBridgeContracts(t,factory);
+  await runHekaImportContracts(t,factory);
+  await runHekaApiContracts(t,factory);
+ },
+ async social(t,factory) {
+  await runSocialContracts(t,factory);
+  await runSocialSettingsContracts(t,factory);
+  await runSocialMediaContracts(t,factory);
+  await runSocialCampaignContracts(t,factory);
+  await runSocialApiJobContracts(t,factory);
+  await runSocialBrowserJobContracts(t,factory);
+  await runSocialMetricsContracts(t,factory);
+  await runSocialAnalysisContracts(t,factory);
+  await runSocialLinkContracts(t,factory);
+  await runSocialImprovementContracts(t,factory);
+ },
+ assistant: runAssistantContracts,
+ schema: runSchemaContracts,
+};
+
+function selectGroups(filter) {
+ const available = Object.keys(groups);
+ if (filter === undefined) return available;
+ const requested = new Set();
+ for (const name of filter.split(',')) {
+  if (!Object.hasOwn(groups,name)) throw new Error(`TEST_PG_GROUPS: grupo inválido ${JSON.stringify(name)}; válidos: ${available.join(',')}`);
+  if (requested.has(name)) throw new Error(`TEST_PG_GROUPS: grupo repetido ${name}`);
+  requested.add(name);
+ }
+ return available.filter(name => requested.has(name));
+}
+
+async function runPostgresGroup(t,name,factory,env) {
+ await t.test(`PostgreSQL group: ${name}`,async context=>{
+  let cases=0;
+  // Count actual direct case executions, not the group wrapper or nested cases.
+  const registrar = {
+   test(title,options,execute) {
+    if (typeof options === 'function') {
+     execute=options;
+     options={};
+    }
+    return context.test(title,options,child=>{
+     cases++;
+     return execute(child);
+    });
+   },
+  };
+  await groups[name](registrar,factory,env);
+  assert.ok(cases>0,`TEST_PG_GROUPS: el grupo ${name} no ejecutó casos`);
+  context.diagnostic(`PG_GROUP ${name} cases=${cases}`);
+ });
+}
+
+const filter=process.env.TEST_PG_GROUPS;
+test('Contrato completo con PostgreSQL real (base descartable)',{skip:filter===undefined && !process.env.TEST_DATABASE_URL},async t=>{
+ const selected=selectGroups(filter);
+ await withPostgresTestDatabase(async env=>{
+  const first=await openStore(env,{migrate:true});
+  try {
+   await first.db.exec(readFileSync(new URL('../db/supabase.sql',import.meta.url),'utf8'));
+   await first.initialize();
+   await migrateBusinessV3(first);
+   await migrateInventoryV4(first);
+   await migrateImportCancellationV5(first);
+   await migrateShippingInsuranceV6(first);
+   await migrateWorkbookImportV7(first);
+   await migrateSocialV8(first);
+   await migrateStockAlertsV9(first);
+   await migrateRuntimeIntegrationsV10(first);
+   await restoreAssistantSchema(first);
+   assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=13`));
+  } finally { await first.close(); }
+  const factory=async()=>{
+   const store=await openStore(env);
+   try { await resetPostgresStore(store); return store; }
+   catch (error) { await store.close(); throw error; }
+  };
+  for (const name of selected) await runPostgresGroup(t,name,factory,env);
  });
 });

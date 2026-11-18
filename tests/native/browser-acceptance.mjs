@@ -2,21 +2,26 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
-import { readFileSync, writeFileSync, appendFileSync, lstatSync, mkdirSync, existsSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, lstatSync, mkdirSync, mkdtempSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 // Disposable native-host operation. No commands execute until this CLI is invoked.
 process.umask(0o077);
+const mode = process.argv[2];
+const pair = mode === 'pair';
 const root = dirname(fileURLToPath(import.meta.url));
-const manifestBytes = readFileSync(join(root, 'manifest.json'));
+const manifestBytes = readFileSync(pair ? process.argv[3] : join(root, 'manifest.json'));
 const manifest = JSON.parse(manifestBytes);
-const candidate = manifest.nativeCandidate;
+const candidate = pair ? resolve(process.env.RELEASE_CANDIDATE || process.cwd()) : manifest.nativeCandidate;
+const configRoot = pair && process.env.RELEASE_CONFIG_ROOT ? resolve(process.env.RELEASE_CONFIG_ROOT) : candidate;
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const manifestSha256 = sha(manifestBytes);
-const cleanEnv = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8', BUILDX_BUILDER: manifest.nativeBuilder, NEXT_TELEMETRY_DISABLED: '1' };
-const mode = process.argv[2];
+const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(?:PATH|HOME|LANG|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|XDG_RUNTIME_DIR)$/.test(key)));
+cleanEnv.NEXT_TELEMETRY_DISABLED = '1';
+if (!pair) cleanEnv.BUILDX_BUILDER = manifest.nativeBuilder;
 const token = randomBytes(10).toString('hex');
 const project = `allnutrition-browser-${mode}-${token}`;
 const owner = 'allnutrition.browser-acceptance';
@@ -24,6 +29,8 @@ let work, composeFile, generated, interrupted = false, cleanupRunning = false;
 const secrets = [];
 const proof = {};
 let imageId = null, releaseTag = null, appImageId = null;
+let expectedIds;
+const ownerId = manifest.id || token;
 const ensure = (condition, message) => assert.ok(condition, message);
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { interrupted = true; });
 function save(path, value) {
@@ -53,6 +60,7 @@ function inspect(kind, id, optional = false) {
   return JSON.parse(result.stdout)[0];
 }
 function sourceVerified() {
+  if (pair) return;
   ensure(sha(readFileSync(join(root, 'source.tar'))) === manifest.archiveSha256, 'Source archive mismatch');
   for (const entry of manifest.directories) {
     ensure(!entry.path.startsWith('/') && !entry.path.split('/').includes('..'), 'Unsafe manifest directory');
@@ -75,7 +83,7 @@ function resources(kind) {
 function own(kind, id) {
   const info = inspect(kind, id);
   const labels = kind === 'container' ? info.Config.Labels : info.Labels;
-  ensure(labels?.['com.docker.compose.project'] === project && labels?.[owner] === manifest.id, 'Cleanup rejected foreign resource');
+  ensure(labels?.['com.docker.compose.project'] === project && labels?.[owner] === ownerId, 'Cleanup rejected foreign resource');
   if (kind === 'container') ensure(info.Id === id, 'Container identity changed');
   else ensure(info.Name === id || info.Id === id, 'Resource identity changed');
   return info;
@@ -116,7 +124,7 @@ function processIdentity(service) {
   return { id: info.Id, pid: info.State.Pid, startedAt: info.State.StartedAt, process: processes };
 }
 function heartbeat() {
-  return exec('web', `const {openStore}=await import('./lib/db/index.mjs'); const store=await openStore(); try {const rows=await store.db.all('SELECT key,updated_at,state FROM '+store.t('job_runs')+' WHERE key IN (?,?) ORDER BY key',['scheduler:heartbeat','scheduler:social-browser:heartbeat']); console.log(JSON.stringify(rows));}finally{await store.close();}`);
+  return exec('web', `const {openStore}=await import('./lib/db/index.mjs'); const store=await openStore(); try {const rows=await store.db.all('SELECT key,updated_at,state,error_code FROM '+store.t('job_runs')+' WHERE key IN (?,?) ORDER BY key',['scheduler:heartbeat','scheduler:social-browser:heartbeat']); console.log(JSON.stringify(rows));}finally{await store.close();}`);
 }
 async function until(probe, accepted, label, timeout = 120000) {
   const deadline = Date.now() + timeout;
@@ -140,8 +148,8 @@ function settingsScript(action, secret) {
 }
 function isolation() {
   const runner = container('social-browser'), worker = container('social-browser-worker');
-  ensure(runner.Image === imageId && runner.Config.User === '1000:1000', 'Runner image/user mismatch');
-  ensure(worker.Image === appImageId && worker.Config.User === 'node', 'Consumer must use accepted app image');
+  ensure(runner.Image === expectedIds['social-browser'] && runner.Config.User === '1000:1000', 'Runner image/user mismatch');
+  ensure(worker.Image === expectedIds['social-browser-worker'] && worker.Config.User === 'node', 'Consumer image/user mismatch');
   const ports = info => Object.values(info.NetworkSettings.Ports || {}).every(value => !value?.length) && Object.values(info.HostConfig.PortBindings || {}).every(value => !value?.length);
   ensure(ports(runner) && ports(worker), 'Published ports are forbidden');
   const allowedEnv = new Set(['PATH','NODE_VERSION','YARN_VERSION','NODE_ENV','PLAYWRIGHT_BROWSERS_PATH','SOCIAL_MEDIA_DIR','SOCIAL_BROWSER_CONTROL_DIR','SOCIAL_BROWSER_MAX_CONTEXTS']);
@@ -158,10 +166,10 @@ function isolation() {
   ensure(host.ReadonlyRootfs && !host.Privileged && !(host.CapAdd || []).length && host.CapDrop?.includes('ALL') && host.SecurityOpt?.some(v=>v==='no-new-privileges:true') && host.SecurityOpt?.some(v=>v.startsWith('seccomp=') && !v.includes('unconfined')), 'Runner sandbox isolation weakened');
   const seccomp = host.SecurityOpt.find(v=>v.startsWith('seccomp='));
   const actualProfile = JSON.parse(seccomp.slice('seccomp='.length));
-  ensure(isDeepStrictEqual(actualProfile, JSON.parse(readFileSync(join(candidate,'deploy/social-browser-seccomp.json')))), 'Runner seccomp differs from product');
+  ensure(isDeepStrictEqual(actualProfile, JSON.parse(readFileSync(join(configRoot,'deploy/social-browser-seccomp.json')))), 'Runner seccomp differs from product');
   ensure(host.Tmpfs?.['/tmp']?.includes('noexec') && host.ShmSize === 512 * 1024 * 1024, 'Runner tmpfs/shm isolation mismatch');
   for (const name of Object.keys(runner.NetworkSettings.Networks)) ensure(inspect('network',name).Internal === true, 'Acceptance runner egress must be internal');
-  return { runnerImageId:runner.Image,consumerImageId:worker.Image,user:1000,noPorts:true,runnerReadonlyControlAndMedia:true,noRunnerDatabaseOrApiKeys:true,consumerNetworks:networks(worker),runnerNetworks:networks(runner),capabilitiesDropped:true,noNewPrivileges:true,readonlyRoot:true,seccompSha256:sha(readFileSync(join(candidate,'deploy/social-browser-seccomp.json'))),egressBlocked:true };
+  return { runnerImageId:runner.Image,consumerImageId:worker.Image,user:1000,noPorts:true,runnerReadonlyControlAndMedia:true,noRunnerDatabaseOrApiKeys:true,consumerNetworks:networks(worker),runnerNetworks:networks(runner),capabilitiesDropped:true,noNewPrivileges:true,readonlyRoot:true,seccompSha256:sha(readFileSync(join(configRoot,'deploy/social-browser-seccomp.json'))),egressBlocked:true };
 }
 async function build() {
   const tag = `allnutrition-social-browser:candidate-${token}`;
@@ -178,28 +186,46 @@ async function build() {
   docker(['image','rm',tag]);
   return { arch:'amd64',os:'linux',node:proof.runtime.node,uid:1000,gid:1000 };
 }
+function pairIdentities() {
+  ensure(manifest.format === 1, 'Invalid pair manifest format');
+  return Object.fromEntries(['web','scheduler','social-browser-worker','social-browser','db'].map(name => {
+    const entry = manifest.services?.[name];
+    ensure(/^sha256:[a-f0-9]{64}$/.test(entry?.imageId || '') && typeof entry.imageTag === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9./_:@-]*$/.test(entry.imageTag), 'Missing image identity: ' + name);
+    const image = inspect('image', entry.imageId);
+    if (name === 'db') ensure(image.Id === entry.imageId && image.Os === 'linux' && image.Architecture === 'amd64', 'PostgreSQL image identity mismatch');
+    else identity(image, entry.imageId);
+    return [name, image.Id];
+  }));
+}
 async function verify() {
-  const accepted=JSON.parse(readFileSync(join(root,'acceptance.json')));
-  ensure(accepted.accepted===true&&accepted.code===0&&accepted.sourceFilesVerified===true&&accepted.archiveSha256===manifest.archiveSha256&&accepted.manifestSha256===manifestSha256&&accepted.result?.exitCode===0,'Successful same-source core acceptance required');
-  ensure(accepted.result.reusedContracts==null,'A new complete acceptance is required');
-  proof.coreAcceptance={mode:'fresh-native',tests:accepted.result.tests};
-  const runner=JSON.parse(readFileSync(join(root,'runner-image.json')));
-  ensure(runner.accepted===true&&runner.archiveSha256===manifest.archiveSha256&&runner.manifestSha256===manifestSha256,'Successful same-source runner build required');
-  imageId=runner.imageId;releaseTag=runner.releaseTag;appImageId=accepted.result.imageId;
-  identity(inspect('image',imageId),imageId);identity(inspect('image',appImageId),appImageId);
-  ensure(releaseTag===`allnutrition-social-browser:release-${imageId.slice(7,19)}`&&inspect('image',releaseTag).Id===imageId,'Immutable runner tag mismatch');
-  ensure(accepted.result.releaseTag===`allnutrition:release-${appImageId.slice(7,19)}`&&inspect('image',accepted.result.releaseTag).Id===appImageId,'Immutable app tag mismatch');
+  let legacyAppTag;
+  if (pair) {
+    expectedIds=pairIdentities();
+    imageId=expectedIds['social-browser']; releaseTag=manifest.services['social-browser'].imageTag; appImageId=expectedIds.web;
+  } else {
+    const accepted=JSON.parse(readFileSync(join(root,'acceptance.json')));
+    ensure(accepted.accepted===true&&accepted.code===0&&accepted.sourceFilesVerified===true&&accepted.archiveSha256===manifest.archiveSha256&&accepted.manifestSha256===manifestSha256&&accepted.result?.exitCode===0,'Successful same-source core acceptance required');
+    ensure(accepted.result.reusedContracts==null,'A new complete acceptance is required');
+    proof.coreAcceptance={mode:'fresh-native',tests:accepted.result.tests};
+    const runner=JSON.parse(readFileSync(join(root,'runner-image.json')));
+    ensure(runner.accepted===true&&runner.archiveSha256===manifest.archiveSha256&&runner.manifestSha256===manifestSha256,'Successful same-source runner build required');
+    imageId=runner.imageId;releaseTag=runner.releaseTag;appImageId=accepted.result.imageId;legacyAppTag=accepted.result.releaseTag;
+    identity(inspect('image',imageId),imageId);identity(inspect('image',appImageId),appImageId);
+    ensure(releaseTag===`allnutrition-social-browser:release-${imageId.slice(7,19)}`&&inspect('image',releaseTag).Id===imageId,'Immutable runner tag mismatch');
+    ensure(legacyAppTag===`allnutrition:release-${appImageId.slice(7,19)}`&&inspect('image',legacyAppTag).Id===appImageId,'Immutable app tag mismatch');
+    expectedIds={web:appImageId,scheduler:appImageId,'social-browser-worker':appImageId,'social-browser':imageId};
+  }
   const previous=process.cwd();process.chdir(work);
   try {const {createDeploymentEnv}=await import(pathToFileURL(join(candidate,'scripts/deploy-env.mjs')));generated=createDeploymentEnv('test',{id:token});} finally {process.chdir(previous);}
   const values=generated.values; secrets.push(values.POSTGRES_PASSWORD,values.DB_APP_PASSWORD,values.ADMIN_PASSWORD);
   ensure(values.POSTGRES_DB==='allnutrition_test','Disposable database name guard');
-  const config=JSON.parse(docker(['compose','-p',project,'--env-file',generated.envFile,'-f',join(candidate,'compose.yaml'),'--profile','tools','config','--format','json'],{env:{...cleanEnv,APP_IMAGE:appImageId,SOCIAL_BROWSER_IMAGE:imageId,APP_URL:'https://browser-proxy'},logOutput:false}).stdout);
+  const config=JSON.parse(docker(['compose','-p',project,'--env-file',generated.envFile,'-f',join(configRoot,'compose.yaml'),'--profile','tools','config','--format','json'],{env:{...cleanEnv,APP_IMAGE:appImageId,SOCIAL_BROWSER_IMAGE:imageId,APP_URL:'https://browser-proxy'},logOutput:false}).stdout);
   const selected=['db','web','scheduler','social-browser-worker','social-browser','migrate'];
   config.services=Object.fromEntries(selected.map(name=>[name,config.services[name]]));
   delete config.name;
-  for(const [name,service] of Object.entries(config.services)) {delete service.build;delete service.profiles;service.restart='no';service.labels={...service.labels,[owner]:manifest.id};if(name==='social-browser')service.security_opt=['no-new-privileges:true',`seccomp=${join(candidate,'deploy/social-browser-seccomp.json')}`];ensure(!service.ports?.length,'Disposable services cannot publish ports');}
-  for(const [name,network] of Object.entries(config.networks)){network.name=`${project}_${name}`;network.internal=true;network.labels={...network.labels,[owner]:manifest.id};}
-  for(const [name,volume] of Object.entries(config.volumes)){volume.name=`${project}_${name}`;volume.labels={...volume.labels,[owner]:manifest.id};}
+  for(const [name,service] of Object.entries(config.services)) {delete service.build;delete service.profiles;service.restart='no';service.labels={...service.labels,[owner]:ownerId};if(expectedIds[name]){service.image=expectedIds[name];service.pull_policy='never';}if(name==='social-browser')service.security_opt=['no-new-privileges:true',`seccomp=${join(configRoot,'deploy/social-browser-seccomp.json')}`];ensure(!service.ports?.length,'Disposable services cannot publish ports');}
+  for(const [name,network] of Object.entries(config.networks)){network.name=`${project}_${name}`;network.internal=true;network.labels={...network.labels,[owner]:ownerId};}
+  for(const [name,volume] of Object.entries(config.volumes)){volume.name=`${project}_${name}`;volume.labels={...volume.labels,[owner]:ownerId};}
   // Remove unused product proxy volumes: this acceptance never starts Caddy.
   delete config.volumes.caddy_data;delete config.volumes.caddy_config;
   const tls=values.DEPLOY_TLS_DIR;
@@ -208,18 +234,22 @@ async function verify() {
   run('openssl',['x509','-req','-in',join(work,'https.csr'),'-CA',join(tls,'ca.crt'),'-CAkey',join(tls,'ca.key'),'-set_serial',`0x${randomBytes(16).toString('hex')}`,'-out',join(work,'https.crt'),'-days','2','-sha256','-extfile',join(work,'https.cnf'),'-extensions','server']);
   writeFileSync(join(work,'nginx.conf'),'events {}\nhttp { access_log off; server { listen 443 ssl; server_name browser-proxy; ssl_certificate /run/https.crt; ssl_certificate_key /run/https.key; location / { proxy_pass http://web:3000; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto https; } } }\n',{mode:0o600,flag:'wx'});
   const bind=(source,target)=>({type:'bind',source,target,read_only:true,bind:{create_host_path:false}});
-  config.services['browser-proxy']={image:'nginx:stable-alpine',restart:'no',labels:{[owner]:manifest.id},networks:['frontend'],volumes:[bind(join(work,'nginx.conf'),'/etc/nginx/nginx.conf'),bind(join(work,'https.crt'),'/run/https.crt'),bind(join(work,'https.key'),'/run/https.key')],depends_on:{web:{condition:'service_healthy'}}};
-  config.services.fixture={image:appImageId,user:'node',restart:'no',labels:{[owner]:manifest.id},networks:['backend'],environment:{...config.services.web.environment,TEST_DATABASE_URL:`postgresql://postgres:${values.POSTGRES_PASSWORD}@db:5432/allnutrition_test`,TEST_ALLOW_DATABASE_RESET:'allnutrition_test',TEST_DB_SSL:'verify',TEST_DB_CA_CERT_FILE:'/run/db-ca/ca.crt'},volumes:[bind(join(tls,'ca.crt'),'/run/db-ca/ca.crt')],command:['node','tests/e2e/setup.mjs']};
+  config.services['browser-proxy']={image:'nginx:stable-alpine',restart:'no',labels:{[owner]:ownerId},networks:['frontend'],volumes:[bind(join(work,'nginx.conf'),'/etc/nginx/nginx.conf'),bind(join(work,'https.crt'),'/run/https.crt'),bind(join(work,'https.key'),'/run/https.key')],depends_on:{web:{condition:'service_healthy'}}};
+  config.services.fixture={image:appImageId,user:'node',restart:'no',labels:{[owner]:ownerId},networks:['backend'],environment:{...config.services.web.environment,TEST_DATABASE_URL:`postgresql://postgres:${values.POSTGRES_PASSWORD}@db:5432/allnutrition_test`,TEST_ALLOW_DATABASE_RESET:'allnutrition_test',TEST_DB_SSL:'verify',TEST_DB_CA_CERT_FILE:'/run/db-ca/ca.crt'},volumes:[bind(join(tls,'ca.crt'),'/run/db-ca/ca.crt')],command:['node','tests/e2e/setup.mjs']};
   composeFile=join(work,'compose.json');save(composeFile,config);
   compose(['config','--quiet']);
   compose(['up','-d','--wait','--wait-timeout','120','db']);
   compose(['run','--rm','--no-deps','migrate'],{timeout:600000});
   compose(['run','--rm','--no-deps','fixture'],{timeout:600000});
   compose(['up','-d','--wait','--wait-timeout','180','web','social-browser','social-browser-worker','scheduler','browser-proxy'],{timeout:300000});
+  const checkIds = () => {
+    for (const [name, expected] of Object.entries(expectedIds)) ensure(container(name).Image === expected, 'Running image identity mismatch: ' + name);
+  };
+  checkIds();
   proof.beforeKeys=keyState();ensure(proof.beforeKeys.every(d=>d.files.length===0),'Custody must start completely empty');
   proof.beforeHealth=runnerHealth();ensure(proof.beforeHealth.alive===true&&proof.beforeHealth.available===false,'Unconfigured runner must be alive but unavailable');
   const start=Date.now();
-  proof.beforeHeartbeats=await until(heartbeat,rows=>rows.length===2&&rows.every(r=>Number.isFinite(Date.parse(r.updated_at))&&Date.now()-Date.parse(r.updated_at)<65000),'Worker heartbeats');
+  proof.beforeHeartbeats=await until(heartbeat,rows=>rows.length===2&&rows.every(r=>r.state==='succeeded'&&!r.error_code&&Number.isFinite(Date.parse(r.updated_at))&&Date.now()-Date.parse(r.updated_at)<65000),'Worker heartbeats');
   proof.beforeProcesses=Object.fromEntries(['social-browser','social-browser-worker','scheduler'].map(service=>[service,processIdentity(service)]));
   proof.isolation=isolation();
   const syntheticSecret=randomBytes(32).toString('hex');secrets.push(syntheticSecret);
@@ -275,26 +305,33 @@ async function verify() {
       console.log(JSON.stringify({options,version:browser.version(),dataPageLoaded:true,providerRequests:0,noSandboxBypass:true,browserPid,noNewPrivileges:1,seccomp:2,commandLineSha256:createHash('sha256').update(JSON.stringify(args)).digest('hex')}));
     }finally{await browser.close();}
   `);
-  proof.afterHeartbeats=await until(heartbeat,rows=>rows.length===2&&rows.every(row=>Date.parse(row.updated_at)>Math.max(start,Date.parse(proof.beforeHeartbeats.find(old=>old.key===row.key).updated_at))),'Continued worker heartbeats',100000);
+  proof.afterHeartbeats=await until(heartbeat,rows=>rows.length===2&&rows.every(row=>row.state==='succeeded'&&!row.error_code&&Date.parse(row.updated_at)>Math.max(start,Date.parse(proof.beforeHeartbeats.find(old=>old.key===row.key).updated_at))),'Continued worker heartbeats',100000);
   proof.afterProcesses=Object.fromEntries(['social-browser','social-browser-worker','scheduler'].map(service=>[service,processIdentity(service)]));
   ensure(JSON.stringify(proof.beforeProcesses)===JSON.stringify(proof.afterProcesses),'Runner or worker process changed while configuring');
   proof.finalHealth=runnerHealth();ensure(proof.finalHealth.alive===true&&proof.finalHealth.available===true,'Runner final readiness');
   proof.finalSettings=exec('web',`const {openStore}=await import('./lib/db/index.mjs');const {getSocialSettings}=await import('./lib/business/social-settings.mjs');const store=await openStore();try{const v=await getSocialSettings(store);if(v.publishingEnabled||!v.browserEnabled||v.version!==3)throw Error('FINAL_FLAGS');console.log(JSON.stringify({version:v.version,publishingEnabled:v.publishingEnabled,browserEnabled:v.browserEnabled}));}finally{await store.close();}`);
+  checkIds();
   sourceVerified();identity(inspect('image',imageId),imageId);identity(inspect('image',appImageId),appImageId);
-  ensure(inspect('image',releaseTag).Id===imageId&&inspect('image',accepted.result.releaseTag).Id===appImageId,'Release tag changed during acceptance');
-  return {};
+  if (pair) ensure(isDeepStrictEqual(pairIdentities(),expectedIds),'Loaded image identity changed during pair acceptance');
+  else ensure(inspect('image',releaseTag).Id===imageId&&inspect('image',legacyAppTag).Id===appImageId,'Release tag changed during acceptance');
+  return { images: expectedIds };
 }
 
 let failure = null, cleanupProof = null, extras = {};
 try {
-  ensure(['build','verify'].includes(mode)&&process.argv.length===3,'Usage: node browser-acceptance.mjs build | verify');
+  ensure(pair ? process.argv.length===4 : ['build','verify'].includes(mode)&&process.argv.length===3,'Usage: node browser-acceptance.mjs build | verify | pair <manifest>');
   ensure(process.platform==='linux'&&process.arch==='x64'&&process.versions.node.startsWith('24.')&&process.getuid()===1000&&process.getgid()===1000,'Native Linux/amd64 Node24 UID/GID1000 required');
-  ensure(resolve(root)===dirname(candidate)&&root!==manifest.productionRoot,'Helper must run only from its native root');
-  ensure(!lstatSync(root).isSymbolicLink()&&(lstatSync(root).mode&511)===0o700,'Native root must be private');
-  work=join(root,`browser-${mode}-${token}`);mkdirSync(work,{mode:0o700});
-  const existing=join(root,mode==='build'?'runner-image.json':'browser-acceptance.json');
-  ensure(!existsSync(existing)||JSON.parse(readFileSync(existing)).accepted!==true,'Successful metadata already exists; refusing to replace observed acceptance');
-  sourceVerified();
+  if (pair) {
+    ensure(![candidate,configRoot].some(path => path === '/home/allnutrition/app' || path.startsWith('/home/allnutrition/app/')), 'Production checkout is not a test source');
+    work=mkdtempSync(join(tmpdir(),`allnutrition-browser-${token}-`));
+  } else {
+    ensure(resolve(root)===dirname(candidate)&&root!==manifest.productionRoot,'Helper must run only from its native root');
+    ensure(!lstatSync(root).isSymbolicLink()&&(lstatSync(root).mode&511)===0o700,'Native root must be private');
+    work=join(root,`browser-${mode}-${token}`);mkdirSync(work,{mode:0o700});
+    const existing=join(root,mode==='build'?'runner-image.json':'browser-acceptance.json');
+    ensure(!existsSync(existing)||JSON.parse(readFileSync(existing)).accepted!==true,'Successful metadata already exists; refusing to replace observed acceptance');
+    sourceVerified();
+  }
   for(const kind of ['container','volume','network'])ensure(resources(kind).length===0,'Disposable project unexpectedly exists');
   extras=await (mode==='build'?build():verify());
 } catch(error) {
@@ -308,9 +345,13 @@ try {
 }
 if(work){
   const result={accepted:!failure&&cleanupProof?.zeroOwnedLeftovers===true,imageId,releaseTag,appImageId,archiveSha256:manifest.archiveSha256,manifestSha256,proof,cleanup:cleanupProof,failure,diagnostics:work,productionWrites:false,...extras};
-  // Never overwrite a previously successful record, including on rejected reruns.
-  const destination=join(root,mode==='build'?'runner-image.json':'browser-acceptance.json');
-  if(!existsSync(destination)||JSON.parse(readFileSync(destination)).accepted!==true)save(destination,result);
-  console.log(JSON.stringify({accepted:result.accepted,imageId,releaseTag,appImageId,diagnostics:work,zeroOwnedLeftovers:cleanupProof?.zeroOwnedLeftovers===true}));
+  if (pair) {
+    rmSync(work,{recursive:true,force:true});
+    console.log(JSON.stringify({accepted:result.accepted,images:extras.images,zeroOwnedLeftovers:cleanupProof?.zeroOwnedLeftovers===true,failure}));
+  } else {
+    const destination=join(root,mode==='build'?'runner-image.json':'browser-acceptance.json');
+    if(!existsSync(destination)||JSON.parse(readFileSync(destination)).accepted!==true)save(destination,result);
+    console.log(JSON.stringify({accepted:result.accepted,imageId,releaseTag,appImageId,diagnostics:work,zeroOwnedLeftovers:cleanupProof?.zeroOwnedLeftovers===true}));
+  }
   process.exitCode=result.accepted?0:1;
 }else{console.error('Native browser acceptance refused: '+(failure?.message||'unknown failure'));process.exitCode=1;}

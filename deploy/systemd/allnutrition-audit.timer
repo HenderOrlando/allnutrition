@@ -1,0 +1,10 @@
+[Unit]
+Description=Revisar la producción All Nutrition los domingos a las 03:17 Bogotá
+
+[Timer]
+OnCalendar=Sun *-*-* 08:17:00 UTC
+Persistent=true
+Unit=allnutrition-audit.service
+
+[Install]
+WantedBy=timers.target

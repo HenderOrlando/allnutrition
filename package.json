@@ -24,6 +24,7 @@
     "test:e2e": "playwright test",
     "deploy": "node scripts/deploy.mjs",
     "deploy:env": "node scripts/deploy-env.mjs",
+    "deploy:production": "node scripts/deploy-production.mjs",
     "verify:docker": "node scripts/verify-docker.mjs",
     "desktop:install": "npm --prefix desktop install",
     "desktop:dev": "npm --prefix desktop run dev",

@@ -1,0 +1,20 @@
+[Unit]
+Description=Auditoría semanal de la producción All Nutrition en constructor aislado
+Wants=network-online.target
+After=network-online.target
+ConditionArchitecture=x86-64
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/allnutrition-audit/production.env
+Environment=PATH=/home/allnutrition/native-toolchain-91b7ab6b/bin:/usr/bin:/bin
+WorkingDirectory=/opt/allnutrition-audit
+StateDirectory=allnutrition-audit
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/bin/flock -n /var/lib/allnutrition-audit/audit.lock /home/allnutrition/native-toolchain-91b7ab6b/bin/node /opt/allnutrition-audit/scripts/audit-production.mjs
+TimeoutStartSec=6h
+Nice=15
+CPUWeight=20
+IOWeight=20

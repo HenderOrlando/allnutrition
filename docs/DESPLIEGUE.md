@@ -430,6 +430,30 @@ El vhost HTTPS debe declarar **`client_max_body_size 10m`**: las subidas Excel e
 
 Confiar en la CA pública normal desde clientes; validar `/api/health`, login, cookie segura y API autenticada `200`. La VM no recibe puertos públicos ni reemplaza al host proxy.
 
+#### Actualizaciones por impacto de la VM existente
+
+Node 24, `gh` autenticado en el repositorio y un checkout sellado de `main` son requisitos de la estación del operador. Configurar **en privado** `ALLNUTRITION_BASTION`, `ALLNUTRITION_BASTION_KEY`, `ALLNUTRITION_VM`, `ALLNUTRITION_VM_KEY`: los valores `*_KEY` son rutas a identidades preexistentes (la segunda en el bastión). Preparar las host keys verificadas en ambos saltos. Para migraciones se requieren `ALLNUTRITION_OFFSITE_BACKUPS` (directorio `0700` fuera de la VM) y `ALLNUTRITION_RECOVERY_KEY` (archivo independiente, `0600`, 32 bytes aleatorios; guardar en un lugar distinto de la copia). El directorio privado de caché del constructor se puede seleccionar con `ALLNUTRITION_BUILDER_CACHE`.
+
+```sh
+npm run deploy:production -- --status
+npm run deploy:production -- --inventory    # Una vez, antes del primer CI por impacto y con autorización
+npm run deploy:production -- --dry-run "$SHA"
+npm run deploy:production -- "$SHA"         # SHA completo del HEAD remoto de main
+```
+
+El mismo comando conserva las procedencias por servicio, no recrea PostgreSQL ni el Nginx compartido, y no hace `git pull` en la VM. La VM guarda el recibo y diario de corte en `~/.local/state/allnutrition-deploy/`; solo el manifiesto público llega a GitHub Deployments. Si se interrumpe el corte revisar `--status` y `--recover <id del diario>`. Este último no repite DDL: restaura las imágenes previas si se acredita que no se migró, o retoma hacia adelante únicamente con el esquema objetivo comprobado. Un esquema parcial/incierto deja las escrituras detenidas: conservar copia y diario, no restaurar sobre datos posteriores ni volver a ejecutar el migrador a ciegas.
+
+Después del primer corte, instalar las dos unidades de `deploy/systemd/` **solo** en el constructor Linux amd64. Instalar el auditor y los módulos operativos/de impacto sellados en `/opt/allnutrition-audit/scripts/`, propiedad de `root`. Preparar `/etc/allnutrition-audit/production.env` (`0600`) con el destino SSH hacia la VM, la ruta preexistente de una identidad privada exclusiva del recolector root en `/etc/allnutrition-audit/`, `ALLNUTRITION_AUDIT_DOCKER_HOST` (socket Unix local, propietario UID 1000, de un daemon rootless dedicado sin permisos sobre credenciales del host) y `ALLNUTRITION_AUDIT_BUILDER` (prefijo exclusivo para sus instancias Buildx). No reutilizar el socket privilegiado del bastión. No instalar el timer en el portátil ni en la VM.
+
+```sh
+systemctl daemon-reload
+systemctl enable --now allnutrition-audit.timer
+systemctl list-timers --all allnutrition-audit.timer
+systemctl start --no-block allnutrition-audit.service
+```
+
+`--status` distingue pendiente, en curso, aprobada, vencida o fallida y conserva el último conjunto realmente observado. Una auditoría posterior no autoriza otro artefacto ni hace ninguna escritura de prueba contra producción; su reporte separa latidos del scheduler y fallos de trabajos de negocio.
+
 ### Registro de despliegue probado (2026-09-30)
 
 - VM independiente `allnutrition-prod`, Ubuntu 24.04 `amd64`, 2 vCPU, 8 GiB RAM, disco qcow2 de 60 GiB; pool dedicado `allnutrition-prod`, `/var/lib/libvirt/images/allnutrition-prod`. Imagen cloud Ubuntu Noble verificada con SHA-256 `6a81c37564db9b1ee84e141922625e1d7c5b389b99bb3c572e0243607d5bb4d2`.

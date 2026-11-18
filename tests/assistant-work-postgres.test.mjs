@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { openStore } from '../lib/db/index.mjs';
 import { resetPostgresStore, withPostgresTestDatabase } from './postgres-fixture.mjs';
-import { runAssistantWorkContracts } from './assistant-work.test.mjs';
+import { runAssistantWorkContracts } from './assistant-work-contract.mjs';
 import { runAssistantEngineContracts } from './assistant-engine-contract.mjs';
 
 test('recoverable assistant work contracts (disposable PostgreSQL)', { skip: !process.env.TEST_DATABASE_URL }, async t => {

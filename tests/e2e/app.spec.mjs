@@ -9,7 +9,7 @@ import { writeExcelSheets } from '../../lib/business/excel.mjs';
 import { bogotaDate } from '../../lib/business/dates.mjs';
 import { adminTasks as navigationTasks } from '../../components/admin-tasks.mjs';
 
-test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',async({page,request},info)=>{
+test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',{tag:['@auth','@storefront','@orders','@media','@business','@cash','@imports']},async({page,request},info)=>{
  expect((await page.goto('/')).status()).toBe(200);await expect(page.locator('article.product-card')).toHaveCount(0);
  await page.screenshot({path:info.outputPath('preparation.png'),fullPage:true});
  expect((await request.get('/api/admin/orders')).status()).toBe(401);
@@ -24,7 +24,7 @@ test('privacidad: sin login no se ven panel, pedidos ni catálogo no aprobado',a
  await page.screenshot({path:info.outputPath('login.png'),fullPage:true});
 });
 
-test('panel permite vista previa y conserva WhatsApp principal',async({page},info)=>{
+test('panel permite vista previa y conserva WhatsApp principal',{tag:'@storefront'},async({page},info)=>{
  await login(page);
  await expect(page.getByRole('navigation',{name:'Administración',exact:true}).and(page.locator(':visible'))).toBeVisible();
  await page.screenshot({path:info.outputPath('panel.png'),fullPage:true});
@@ -42,7 +42,7 @@ test('panel permite vista previa y conserva WhatsApp principal',async({page},inf
  await page.screenshot({path:info.outputPath('catalog-preview.png'),fullPage:true});
 });
 
-test('crea y edita un producto: búsqueda, precio, existencias y publicación',async({page},info)=>{
+test('crea y edita un producto: búsqueda, precio, existencias y publicación',{tag:'@catalog'},async({page},info)=>{
  await login(page);await navigate(page,'Productos');
  await page.getByRole('button',{name:'Crear producto',exact:true}).click();
  const drawer=page.getByRole('dialog');
@@ -74,7 +74,7 @@ test('crea y edita un producto: búsqueda, precio, existencias y publicación',a
  await drawer.getByRole('button',{name:'Cerrar editor'}).click();
  await expect(drawer).toHaveCount(0);
 });
-test('sube una imagen local optimizada y la muestra en la vitrina pública',async({page,request},info)=>{
+test('sube una imagen local optimizada y la muestra en la vitrina pública',{tag:['@media','@catalog','@storefront']},async({page,request},info)=>{
  await login(page);await navigate(page,'Productos');
  await page.getByRole('button',{name:'Crear producto',exact:true}).click();
  const drawer=page.getByRole('dialog'),name=`Producto imagen local ${info.project.name}`;
@@ -107,7 +107,7 @@ test('sube una imagen local optimizada y la muestra en la vitrina pública',asyn
  if(process.env.PLAYWRIGHT_MEDIA_SMOKE_FILE){const manifest=process.env.PLAYWRIGHT_MEDIA_SMOKE_FILE;mkdirSync(dirname(manifest),{recursive:true});writeFileSync(manifest,JSON.stringify({url:imageUrl})+'\n',{mode:0o600});}
 });
 
-test('pedido manual: acuerdo, guía, despacho y conservación del historial',async({page},info)=>{
+test('pedido manual: acuerdo, guía, despacho y conservación del historial',{tag:['@orders','@shipping','@business','@cash']},async({page},info)=>{
  test.setTimeout(90000);
  await login(page);await navigate(page,'Pedidos');
  await openDisclosure(page,/^Filtros de pedidos/);
@@ -231,7 +231,7 @@ test('pedido manual: acuerdo, guía, despacho y conservación del historial',asy
  await page.screenshot({path:info.outputPath('order-shipment.png'),fullPage:true});
 });
 
-test('crea cuentas nuevas únicamente con rol administrador',async({page,context},info)=>{
+test('crea cuentas nuevas únicamente con rol administrador',{tag:'@auth'},async({page,context},info)=>{
  const anonymous=await context.request.get('/api/admin/users');
  expect(anonymous.status()).toBe(401);
  await login(page);
@@ -285,7 +285,7 @@ test('crea cuentas nuevas únicamente con rol administrador',async({page,context
  expect((await page.request.get('/api/admin/orders')).status()).toBe(200);
 });
 
-test('navegación conserva destino, selección y recarga en escritorio y móvil',async({page},info)=>{
+test('navegación conserva destino, selección y recarga en escritorio y móvil',{tag:'@navigation'},async({page},info)=>{
  test.setTimeout(180000);
  const adminTasks=[
   ['home',{section:'home'}],['orders',{section:'orders',tab:'list'}],
@@ -347,7 +347,7 @@ test('navegación conserva destino, selección y recarga en escritorio y móvil'
  expect(ordersAfter.total).toBe(ordersBefore.total);
 });
 
-test('lanzador y guía se usan con foco real, sin abrirse sobre campos o diálogos',async({page},info)=>{
+test('lanzador y guía se usan con foco real, sin abrirse sobre campos o diálogos',{tag:'@navigation'},async({page},info)=>{
  await login(page);
  const trigger=page.getByRole('button').and(page.locator('[aria-keyshortcuts]'));
  await trigger.focus();await page.keyboard.press('Control+k');
@@ -388,7 +388,7 @@ test('lanzador y guía se usan con foco real, sin abrirse sobre campos o diálog
  await page.locator('[data-admin-section-heading]').focus();await page.keyboard.press('Control+Shift+k');await expect(launcher).toHaveCount(0);
 });
 
-test('rechazar Atrás conserva el borrador y su destino; aceptar permite Atrás y Adelante sin reutilizarlo',async({page},info)=>{
+test('rechazar Atrás conserva el borrador y su destino; aceptar permite Atrás y Adelante sin reutilizarlo',{tag:['@navigation','@cash']},async({page},info)=>{
  await guidedCashFixture(page,info);await navigate(page,'Caja');
  const operations=page.getByRole('button',{name:'Registrar ingreso',exact:true});
  await openCashOperation(page,'Registrar ingreso');
@@ -423,7 +423,7 @@ test('rechazar Atrás conserva el borrador y su destino; aceptar permite Atrás 
  expect(confirmations).toBe(4);
 });
 
-test('apertura cero con responsable sin credenciales e ingreso no comercial separado de ventas',async({page},info)=>{
+test('apertura cero con responsable sin credenciales e ingreso no comercial separado de ventas',{tag:['@business','@cash','@reports']},async({page},info)=>{
  test.setTimeout(60000);
  await login(page);await navigate(page,'Caja');
  await page.getByRole('button',{name:'Crear cuenta',exact:true}).first().click();
@@ -484,7 +484,7 @@ test('apertura cero con responsable sin credenciales e ingreso no comercial sepa
  await detailHeading.focus();await page.keyboard.press('Escape');await expect(page).toHaveURL(movementsURL);await expect(detailTrigger).toBeFocused();
 });
 
-test('quitar un chip conserva el otro filtro, reinicia página y mantiene historial y recuperación',async({page},info)=>{
+test('quitar un chip conserva el otro filtro, reinicia página y mantiene historial y recuperación',{tag:'@orders'},async({page},info)=>{
  test.setTimeout(90000);
  await login(page);await navigate(page,'Pedidos');
  await openDisclosure(page,/^Filtros de pedidos/);
@@ -526,7 +526,7 @@ test('quitar un chip conserva el otro filtro, reinicia página y mantiene histor
  await expect(visibleRecord(page,`${marker} 0`)).toHaveCount(1);await expect(retry).toHaveCount(0);
 });
 
-test('comisiones porcentuales conservan centésimas, invalidez, guardas y versiones históricas',async({page},info)=>{
+test('comisiones porcentuales conservan centésimas, invalidez, guardas y versiones históricas',{tag:'@business'},async({page},info)=>{
  test.setTimeout(90000);
  await login(page);await navigate(page,'Configuración');
  await openConfigurationTask(page,'rules');
@@ -588,7 +588,7 @@ test('comisiones porcentuales conservan centésimas, invalidez, guardas y versio
  await expect(drawer).toHaveCount(0);expect(await (await page.request.get(`/api/admin/business/people/${person.id}`)).json()).toEqual(person);
 });
 
-test('importación conserva archivo y resolver: Cancelar y Esc confirman el mismo descarte',async({page},info)=>{
+test('importación conserva archivo y resolver: Cancelar y Esc confirman el mismo descarte',{tag:'@imports'},async({page},info)=>{
  test.setTimeout(360000);
  await login(page);await page.goto('/admin?section=orders&tab=imports&batch=new');
  await openDisclosure(page,'Crear origen de una plataforma');
@@ -656,7 +656,7 @@ test('importación conserva archivo y resolver: Cancelar y Esc confirman el mism
  await openDisclosure(page,'Otras opciones de corrección del archivo');
 });
 
-test('vitrina móvil: destinos nativos, búsqueda de combos y continuidad de pedido y tema',async({page},info)=>{
+test('vitrina móvil: destinos nativos, búsqueda de combos y continuidad de pedido y tema',{tag:['@storefront','@catalog','@orders']},async({page},info)=>{
  test.setTimeout(120000);
  await login(page);await navigate(page,'Datos y publicación');
  const original=await (await page.request.get('/api/admin/settings')).json();
@@ -780,7 +780,7 @@ async function submitCashAction(page,action,label){
 }
 async function cashFilters(page){await openDisclosure(page,/^Filtros(?: \(\d+ activos\))?$/);}
 
-test('caja guiada: el gasto exige elegir pago y corregir o usar Pedidos no duplica salidas',async({page},info)=>{
+test('caja guiada: el gasto exige elegir pago y corregir o usar Pedidos no duplica salidas',{tag:['@cash','@orders']},async({page},info)=>{
  test.setTimeout(120000);
  const f=await guidedCashFixture(page,info),original=await f.get('/api/admin/business/settings');
  const saveSettings=async data=>{const current=await f.get('/api/admin/business/settings');const response=await page.request.put('/api/admin/business/settings',{headers:f.headers,data:{...current,...data,requestId:crypto.randomUUID()}});expect(response.ok(),await response.text()).toBe(true);};
@@ -837,7 +837,7 @@ test('caja guiada: el gasto exige elegir pago y corregir o usar Pedidos no dupli
  }finally{await saveSettings({defaultPaymentAccountId:original.defaultPaymentAccountId});}
 });
 
-test('caja guiada: el cierre consulta cuenta y fecha, descarta respuestas antiguas y conserva el conteo ante errores',async({page},info)=>{
+test('caja guiada: el cierre consulta cuenta y fecha, descarta respuestas antiguas y conserva el conteo ante errores',{tag:'@cash'},async({page},info)=>{
  test.setTimeout(120000);
  const f=await guidedCashFixture(page,info);
  for(const [offset,amountMinor] of [[-2,1000000],[-1,2000000]])await f.post('/api/admin/business/actions/income',{accountId:f.account.id,effectiveOn:f.day(offset),amountMinor,concept:'owner_funding',reference:`${f.marker} ${offset}`});
@@ -885,7 +885,7 @@ test('caja guiada: el cierre consulta cuenta y fecha, descarta respuestas antigu
  await expect(page.locator('.cash-detail').last()).toContainText(money(111000));
 });
 
-test('caja guiada: filtros efectivos, chips, historial y guía de teclado sin escrituras',async({page},info)=>{
+test('caja guiada: filtros efectivos, chips, historial y guía de teclado sin escrituras',{tag:'@cash'},async({page},info)=>{
  test.setTimeout(120000);
  const f=await guidedCashFixture(page,info),otherPerson=await f.post('/api/admin/business/people',{name:`Otra persona ${f.marker}`,active:true});
  const incomes=[];
@@ -952,7 +952,7 @@ test('caja guiada: filtros efectivos, chips, historial y guía de teclado sin es
  await selectWorkspace(page,'Vistas de caja','Resumen y cuentas');await expect(guide).toBeVisible();
 });
 
-test('informes guiados: filtros, modo e historial conservan la consulta y la guía no escribe',async({page},info)=>{
+test('informes guiados: filtros, modo e historial conservan la consulta y la guía no escribe',{tag:'@reports'},async({page},info)=>{
  test.setTimeout(120000);
  const f=await guidedCashFixture(page,info),writes=[],dialogs=[];
  const watch=request=>{if(new URL(request.url()).pathname.startsWith('/api/admin/')&&!['GET','HEAD'].includes(request.method()))writes.push(request.url());};
@@ -1005,7 +1005,7 @@ test('informes guiados: filtros, modo e historial conservan la consulta y la gu�
  }finally{page.off('request',watch);page.off('dialog',dismiss);}
 });
 
-test('informes guiados: un dato desconocido no es cero y los registros devuelven el foco sin modificar el negocio',async({page},info)=>{
+test('informes guiados: un dato desconocido no es cero y los registros devuelven el foco sin modificar el negocio',{tag:'@reports'},async({page},info)=>{
  test.setTimeout(120000);
  const f=await guidedCashFixture(page,info),products=await f.get('/api/admin/products'),product=products.records.find(row=>row.slug==='creatina-vital-force-70-servicios');
  expect(product).toBeTruthy();

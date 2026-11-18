@@ -1,0 +1,14 @@
+# The candidate checkout is the build context. No Next build is performed here.
+FROM node:24-bookworm-slim AS dependencies
+WORKDIR /app
+COPY package*.json ./
+COPY scripts/install.mjs ./scripts/install.mjs
+RUN node scripts/install.mjs
+
+FROM dependencies AS checks
+COPY . .
+COPY --from=heka_contract /heka.mjs ./desktop/providers/heka.mjs
+ENV NEXT_TELEMETRY_DISABLED=1
+
+FROM checks AS checks-with-web
+COPY --from=accepted_web / /app/.next/

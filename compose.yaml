@@ -89,7 +89,7 @@ services:
     logging: *logging
 
   scheduler:
-    image: ${APP_IMAGE:?}
+    image: ${SCHEDULER_IMAGE:-${APP_IMAGE:?}}
     environment: *runtime-environment
     volumes:
       - *db-ca
@@ -108,7 +108,7 @@ services:
     logging: *logging
 
   social-browser-worker:
-    image: ${APP_IMAGE:?}
+    image: ${SOCIAL_BROWSER_WORKER_IMAGE:-${APP_IMAGE:?}}
     environment: *runtime-environment
     volumes:
       - *db-ca

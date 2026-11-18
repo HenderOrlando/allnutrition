@@ -4,217 +4,259 @@ on:
   workflow_dispatch:
     inputs:
       source_commit:
-        description: Commit completo en main que se aceptará y transferirá
+        description: Commit completo de main que se verificará
         required: true
         type: string
+      mode:
+        description: Alcance de la aceptación
+        type: choice
+        options:
+          - impact
+          - full
+        default: impact
+        required: true
+  workflow_call:
+    inputs:
+      harness_commit:
+        description: SHA publicado de las herramientas para wrappers fijados en trunk
+        type: string
+        required: false
 
 permissions:
   contents: read
+  deployments: read
+
+# This executor never cuts production. Supersede automatic runs per PR/branch,
+# and do not let a dispatch for another candidate cancel an ongoing check.
+concurrency:
+  group: native-acceptance-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}-{1}', github.event.inputs.source_commit, github.event.inputs.mode) || 'automatic' }}
+  cancel-in-progress: true
 
 jobs:
-  acceptance:
-    name: Verificador completo, runner aislado y transferencia
+  verify:
+    name: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
+      HARNESS_COMMIT: ${{ inputs.harness_commit || github.sha }}
+      SOURCE_COMMIT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_commit || github.sha }}
+      RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode || 'impact' }}
       HARNESS: ${{ github.workspace }}/harness
-      CHECKOUT_CANDIDATE: ${{ github.workspace }}/native-acceptance/source
-      NATIVE_ROOT: /tmp/allnutrition-native-${{ github.run_id }}-${{ github.run_attempt }}
-      CANDIDATE: /tmp/allnutrition-native-${{ github.run_id }}-${{ github.run_attempt }}/candidate
-      ACCEPTED_OUTPUT: /tmp/allnutrition-native-${{ github.run_id }}-${{ github.run_attempt }}/accepted-output
-      SOURCE_COMMIT: ${{ inputs.source_commit }}
-      WORKFLOW_COMMIT: ${{ github.sha }}
-      PLAYWRIGHT_BROWSERS_PATH: /tmp/allnutrition-native-${{ github.run_id }}-${{ github.run_attempt }}/playwright-browsers
-      NEXT_TELEMETRY_DISABLED: "1"
+      SOURCE_CHECKOUT: ${{ github.workspace }}/candidate-source
+      RELEASE_ROOT: /tmp/allnutrition-release-${{ github.run_id }}-${{ github.run_attempt }}
+
     steps:
-      - name: Checkout de herramientas de aceptación
+      - name: Validar identidades y preparar rutas privadas
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$HARNESS_COMMIT" =~ ^[a-f0-9]{40}$ && "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Para aceptación manual use --ref main'; exit 1; }
+          fi
+          [[ "$(uname -m)" == x86_64 ]]
+          umask 077
+          mkdir -m 0755 -- "$RELEASE_ROOT"
+          mkdir -- "$RELEASE_ROOT/private"
+
+      - name: Checkout de herramientas por SHA
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.HARNESS_COMMIT }}
           path: harness
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Preflight de herramientas de aceptación
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -r "$HARNESS/tests/native/prepare-acceptance.mjs"
-          test -r "$HARNESS/tests/native/browser-acceptance.mjs"
-          node --check "$HARNESS/tests/native/prepare-acceptance.mjs"
-          node --check "$HARNESS/tests/native/browser-acceptance.mjs"
-
-      - name: Checkout del código sellado
+      - name: Checkout del candidato por SHA
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_commit }}
-          path: native-acceptance/source
+          ref: ${{ env.SOURCE_COMMIT }}
+          path: candidate-source
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Configurar Node 24
+      - name: Configurar Node 24 sin dependencias
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: "24"
+
+      - name: Resolver la base y el último deployment exitoso
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.ref == 'refs/heads/main' && github.repository == 'HenderOrlando/allnutrition' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.token || '' }}
+        run: node "$HARNESS/scripts/release-ci.mjs" discover "$RELEASE_ROOT/private"
+
+      - name: Clasificar el impacto sin instalar dependencias
+        id: probe
+        shell: bash
+        env:
+          RELEASE_CANDIDATE: ${{ env.SOURCE_CHECKOUT }}
+        run: |
+          status=0
+          node "$HARNESS/scripts/release-ci.mjs" plan "$RELEASE_ROOT/private" || status=$?
+          if (( status == 42 )); then
+            echo 'need_ast=true' >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
+
+      - name: Restaurar caché npm solo para planes que la usan
+        if: ${{ steps.probe.outputs.need_ast == 'true' || steps.probe.outputs.npm == 'true' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
           cache: npm
-          cache-dependency-path: native-acceptance/source/package-lock.json
+          cache-dependency-path: |
+            harness/package-lock.json
+            candidate-source/package-lock.json
 
-      - name: Validar fuente, rama y constructor amd64
+      - name: Instalar herramientas del selector o su compuerta
+        id: ast
+        if: ${{ steps.probe.outputs.need_ast == 'true' || steps.probe.outputs.harness_npm == 'true' }}
+        working-directory: harness
         shell: bash
+        env:
+          NEEDS_AST: ${{ steps.probe.outputs.need_ast }}
+          RELEASE_CANDIDATE: ${{ env.SOURCE_CHECKOUT }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF" == "refs/heads/main" ]]
-          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$(git -C "$CHECKOUT_CANDIDATE" rev-parse HEAD)" == "$SOURCE_COMMIT" ]]
-          [[ "$(git -C "$HARNESS" rev-parse HEAD)" == "$WORKFLOW_COMMIT" ]]
-          git -C "$HARNESS" merge-base --is-ancestor "$SOURCE_COMMIT" "$WORKFLOW_COMMIT"
-          [[ "$(uname -m)" == "x86_64" ]]
-          [[ "$(node -p 'process.versions.node.split(".")[0]')" == "24" ]]
-          docker info --format '{{.ServerVersion}}' >/dev/null
-          docker buildx inspect default >/dev/null
-          command -v setpriv >/dev/null
-          command -v gzip >/dev/null
-          getent group docker >/dev/null
+          npm ci --ignore-scripts
+          if [[ "$NEEDS_AST" == true ]]; then
+            node scripts/release-ci.mjs plan "$RELEASE_ROOT/private"
+          fi
 
-      - name: Preparar entorno temporal privado
+      - name: Preparar árbol descartable y dependencias seleccionadas
         shell: bash
+        env:
+          NEEDS_WORK: ${{ steps.ast.outputs.work || steps.probe.outputs.work }}
+          NEEDS_NPM: ${{ steps.ast.outputs.npm || steps.probe.outputs.npm }}
+          NEEDS_BROWSER: ${{ steps.ast.outputs.browser || steps.probe.outputs.browser }}
+          NEEDS_FFMPEG: ${{ steps.ast.outputs.ffmpeg || steps.probe.outputs.ffmpeg }}
         run: |
           set -euo pipefail
-          mkdir -m 0755 "$NATIVE_ROOT"
-          sudo install -d -m 0700 -o 1000 -g 1000 \
-            "$NATIVE_ROOT/home" "$NATIVE_ROOT/tools" "$ACCEPTED_OUTPUT"
-          mkdir -m 0755 "$PLAYWRIGHT_BROWSERS_PATH"
-          git clone --local --no-hardlinks "$CHECKOUT_CANDIDATE" "$CANDIDATE"
-          git -C "$CANDIDATE" checkout --detach "$SOURCE_COMMIT"
-          [[ "$(git -C "$CANDIDATE" rev-parse HEAD)" == "$SOURCE_COMMIT" ]]
-          sudo install -m 0600 -o 1000 -g 1000 \
-            "$HARNESS/tests/native/prepare-acceptance.mjs" \
-            "$NATIVE_ROOT/tools/prepare-acceptance.mjs"
-          sudo install -m 0600 -o 1000 -g 1000 \
-            "$HARNESS/tests/native/browser-acceptance.mjs" \
-            "$NATIVE_ROOT/tools/browser-acceptance.mjs"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            setpriv --reuid=1000 --regid=1000 --clear-groups -- \
-            node --check "$NATIVE_ROOT/tools/prepare-acceptance.mjs"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            setpriv --reuid=1000 --regid=1000 --clear-groups -- \
-            node --check "$NATIVE_ROOT/tools/browser-acceptance.mjs"
+          run_root="$RELEASE_ROOT/run"
+          candidate="$run_root/candidate"
+          mkdir -p -- "$candidate" "$run_root/home" "$run_root/browsers" "$run_root/docker" "$run_root/native"
+          chmod 0700 "$run_root" "$run_root/home" "$run_root/docker" "$run_root/native"
+          if [[ "$NEEDS_WORK" == true ]]; then
+            git -C "$SOURCE_CHECKOUT" archive --format=tar "$SOURCE_COMMIT" | tar -xf - -C "$candidate"
+          fi
+          install -m 0444 "$RELEASE_ROOT/private/impact.json" "$RELEASE_ROOT/plan.json"
+          # Expose the trusted history to UID 1000 without copying it or
+          # granting that UID write access to the runner's checkout.
+          mkdir -- "$RELEASE_ROOT/harness"
+          sudo mount --bind "$HARNESS" "$RELEASE_ROOT/harness"
+          sudo mount -o remount,bind,ro "$RELEASE_ROOT/harness"
+          git config --file "$run_root/home/.gitconfig" --add safe.directory "$RELEASE_ROOT/harness"
+          cd "$candidate"
+          if [[ "$NEEDS_NPM" == true ]]; then
+            env -i PATH="$PATH" HOME="$run_root/home" npm_config_cache="$HOME/.npm" \
+              CI=true NEXT_TELEMETRY_DISABLED=1 npm ci
+          fi
+          if [[ "$NEEDS_BROWSER" == true ]]; then
+            env -i PATH="$PATH" HOME="$run_root/home" PLAYWRIGHT_BROWSERS_PATH="$run_root/browsers" \
+              CI=true ./node_modules/.bin/playwright install --with-deps chromium
+          fi
+          if [[ "$NEEDS_FFMPEG" == true ]] && ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          sudo chown -hR 1000:1000 -- "$run_root"
 
-      - name: Instalar dependencias y sellar fuente exacta
+      - name: Preparar credenciales efímeras para BuildKit
+        if: ${{ steps.ast.outputs.buildkit == 'true' || steps.probe.outputs.buildkit == 'true' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { writeFileSync } = require('node:fs');
+            const { ACTIONS_RUNTIME_TOKEN, ACTIONS_RESULTS_URL, RELEASE_ROOT } = process.env;
+            if (!ACTIONS_RUNTIME_TOKEN || !ACTIONS_RESULTS_URL) throw Error('GitHub cache v2 no disponible');
+            writeFileSync(`${RELEASE_ROOT}/private/buildkit.json`, JSON.stringify({ ACTIONS_RUNTIME_TOKEN, ACTIONS_RESULTS_URL }), { flag: 'wx', mode: 0o600 });
+
+      - name: Ejecutar el plan con entorno aislado
         shell: bash
+        env:
+          NEEDS_DOCKER: ${{ steps.ast.outputs.docker || steps.probe.outputs.docker }}
+          NEEDS_BUILDKIT: ${{ steps.ast.outputs.buildkit || steps.probe.outputs.buildkit }}
+          CACHE_MODE: ${{ github.repository == 'HenderOrlando/allnutrition' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && 'write' || 'read' }}
         run: |
           set -euo pipefail
-          (
-            cd "$CANDIDATE"
-            npm ci
-            npx playwright install --with-deps chromium
-          )
-          sudo chown -R 1000:1000 "$NATIVE_ROOT"
-          sudo chmod 0700 "$NATIVE_ROOT"
-          sudo chmod 0755 "$CANDIDATE"
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$NATIVE_ROOT/tools/prepare-acceptance.mjs" prepare
+          cd "$RELEASE_ROOT/harness"
+          run_root="$RELEASE_ROOT/run"
+          clean=(sudo env -i PATH="$(dirname "$(command -v node)"):/usr/local/bin:/usr/bin:/bin" \
+            HOME="$run_root/home" DOCKER_CONFIG="$run_root/docker")
+          identity=(setpriv --reuid=1000 --regid=1000 --no-new-privs --clear-groups)
+          buildkit=()
+          cache_input=/dev/null
+          if [[ "$NEEDS_DOCKER" == true ]]; then
+            docker_gid="$(getent group docker | cut -d: -f3)"
+            [[ "$docker_gid" =~ ^[0-9]+$ ]]
+            identity=(setpriv --reuid=1000 --regid=1000 --no-new-privs --groups="$docker_gid")
+          fi
+          if [[ "$NEEDS_BUILDKIT" == true ]]; then
+            builder="allnutrition-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            trap '"${clean[@]}" "${identity[@]}" docker buildx rm "$builder" >/dev/null 2>&1 || true' EXIT
+            "${clean[@]}" "${identity[@]}" docker buildx create --driver docker-container --name "$builder" --bootstrap
+            cache_input="$RELEASE_ROOT/private/buildkit.json"
+            buildkit=(RELEASE_GHA_CACHE="$CACHE_MODE" BUILDX_BUILDER="$builder")
+          fi
+          evidence="$run_root/evidence.json"
+          status=0
+          "${clean[@]}" "${buildkit[@]}" CI=true NEXT_TELEMETRY_DISABLED=1 \
+            PLAYWRIGHT_BROWSERS_PATH="$run_root/browsers" NATIVE_ROOT="$run_root/native" \
+            RELEASE_CANDIDATE="$run_root/candidate" RELEASE_EVIDENCE_FILE="$evidence" RELEASE_MODE="$RELEASE_MODE" \
+            "${identity[@]}" node scripts/verify-docker.mjs --plan "$RELEASE_ROOT/plan.json" < "$cache_input" || status=$?
+          if "${clean[@]}" "${identity[@]}" test -f "$evidence"; then
+            umask 077
+            "${clean[@]}" "${identity[@]}" cat -- "$evidence" > "$RELEASE_ROOT/private/evidence.json"
+          fi
+          exit "$status"
 
-      - name: Ejecutar el verificador Docker completo sin wrappers
+      - name: Validar evidencia y sellar solo desde main
+        id: seal
         shell: bash
-        run: |
-          set -euo pipefail
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            NEXT_TELEMETRY_DISABLED="$NEXT_TELEMETRY_DISABLED" \
-            PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            bash -euo pipefail -c 'cd "$CANDIDATE"; npm run verify:docker'
+        env:
+          GH_TOKEN: ${{ github.ref == 'refs/heads/main' && github.repository == 'HenderOrlando/allnutrition' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.token || '' }}
+        run: node "$HARNESS/scripts/release-ci.mjs" seal "$RELEASE_ROOT/private" "$RELEASE_ROOT/accepted"
 
-      - name: Sellar el resultado completo
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            node "$NATIVE_ROOT/tools/prepare-acceptance.mjs" core
-
-      - name: Construir el runner Linux amd64
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$NATIVE_ROOT/browser-acceptance.mjs" build
-
-      - name: Verificar runner aislado, TLS y DB sintética
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$NATIVE_ROOT/browser-acceptance.mjs" verify
-
-      - name: Exportar imágenes y comprobantes permitidos
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$NATIVE_ROOT/tools/prepare-acceptance.mjs" bundle
-
-      - name: Preparar artefactos de salida permitidos
-        shell: bash
-        run: |
-          set -euo pipefail
-          staged_name="native-acceptance-output-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          staged="$GITHUB_WORKSPACE/$staged_name"
-          sudo install -d -m 0755 "$staged"
-          for name in accepted-images.tar.gz acceptance.json source-manifest.json SHA256SUMS; do
-            sudo install -m 0644 "$ACCEPTED_OUTPUT/$name" "$staged/$name"
-            test -r "$staged/$name"
-          done
-      - name: Publicar artefacto aceptado (solo éxito)
-        if: success()
+      - name: Publicar solo los archivos permitidos
+        id: upload
+        if: ${{ steps.seal.outputs.artifact != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: allnutrition-amd64-${{ inputs.source_commit }}
+          name: ${{ steps.seal.outputs.artifact }}
           path: |
-            native-acceptance-output-${{ github.run_id }}-${{ github.run_attempt }}/accepted-images.tar.gz
-            native-acceptance-output-${{ github.run_id }}-${{ github.run_attempt }}/acceptance.json
-            native-acceptance-output-${{ github.run_id }}-${{ github.run_attempt }}/source-manifest.json
-            native-acceptance-output-${{ github.run_id }}-${{ github.run_attempt }}/SHA256SUMS
+            ${{ env.RELEASE_ROOT }}/accepted/release.json
+            ${{ env.RELEASE_ROOT }}/accepted/impact.json
+            ${{ env.RELEASE_ROOT }}/accepted/source-manifest.json
+            ${{ env.RELEASE_ROOT }}/accepted/SHA256SUMS
+            ${{ env.RELEASE_ROOT }}/accepted/sealed-source.tar.gz
+            ${{ env.RELEASE_ROOT }}/accepted/accepted-images.tar.gz
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
-      - name: Limpiar entornos y comprobantes temporales
-        if: always()
+
+      - name: Resumir alcance, motivos y tiempos
+        if: ${{ always() }}
+        shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+          PUBLISHED: ${{ steps.upload.outcome == 'success' && steps.seal.outputs.artifact || '' }}
+          EXPORT_REASON: ${{ steps.seal.outputs.export_reason }}
+        run: |
+          if [[ -f "$HARNESS/scripts/release-ci.mjs" ]]; then
+            node "$HARNESS/scripts/release-ci.mjs" summary "$RELEASE_ROOT/private" "$JOB_STATUS" "$PUBLISHED" "$EXPORT_REASON"
+          else
+            printf '## Aceptación Linux amd64\n\nNo se pudo preparar el harness (%s).\n' "$JOB_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Limpiar entornos privados del run
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
-          expected_root="/tmp/allnutrition-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          [[ "$NATIVE_ROOT" == "$expected_root" ]]
-          sudo rm -rf -- "$NATIVE_ROOT"
-          staged="$GITHUB_WORKSPACE/native-acceptance-output-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          sudo rm -rf -- "$staged"
+          [[ "$RELEASE_ROOT" == "/tmp/allnutrition-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ]]
+          if mountpoint -q -- "$RELEASE_ROOT/harness"; then
+            sudo umount -- "$RELEASE_ROOT/harness"
+          fi
+          sudo rm -rf -- "$RELEASE_ROOT"

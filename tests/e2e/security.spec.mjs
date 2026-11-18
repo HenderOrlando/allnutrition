@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { login, navigate, signOut } from './helpers.mjs';
 
-test('sesión HTTPS, CSRF, origen, concurrencia y cierre de sesión', async ({ page, context }, info) => {
+test('sesión HTTPS, CSRF, origen, concurrencia y cierre de sesión', { tag: ['@auth', '@catalog'] }, async ({ page, context }, info) => {
   await login(page);
   const session = (await context.cookies()).find(cookie => cookie.name === 'allnutrition_session');
   // Assert only metadata: failure output must not include the session value.
@@ -63,7 +63,7 @@ test('sesión HTTPS, CSRF, origen, concurrencia y cierre de sesión', async ({ p
   expect((await context.request.get('/api/admin/orders')).status()).toBe(401);
 });
 
-test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privadas',async({page,context})=>{
+test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privadas',{tag:['@auth','@business','@shipping','@cash','@imports','@reports','@assistant','@media']},async({page,context})=>{
   const reads=[
     '/api/admin/dashboard','/api/admin/reports','/api/admin/reports/export','/api/admin/reports/unknown','/api/admin/business/onboarding',
     '/api/admin/alerts','/api/admin/alerts/unknown','/api/admin/alert-rules','/api/admin/alert-rules/unknown',
@@ -106,7 +106,7 @@ test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privada
   expect((await context.request.post('/api/admin/upload',{headers,data:Buffer.alloc(10*1024*1024+1)})).status()).toBe(413);
 });
 
-test('descargar informe usa bytes privados y una sesión vencida no descarga JSON como Excel',async({page,context})=>{
+test('descargar informe usa bytes privados y una sesión vencida no descarga JSON como Excel',{tag:['@auth','@reports']},async({page,context})=>{
   await login(page);await navigate(page,'Informes');
   const exportButton=page.getByRole('button',{name:'Descargar Excel',exact:true});
   await expect(exportButton).toBeEnabled();
@@ -152,7 +152,7 @@ async function savePublication(page, approved) {
   await expect(page.getByText(/^Selección pendiente:/)).toHaveCount(0);
 }
 
-test('publicar habilita la ficha anónima y despublicar vuelve a protegerla', async ({ page, browser, baseURL }, info) => {
+test('publicar habilita la ficha anónima y despublicar vuelve a protegerla', { tag: ['@auth', '@storefront'] }, async ({ page, browser, baseURL }, info) => {
   await login(page);
   const productsResponse = await page.request.get('/api/admin/products');
   expect(productsResponse.status()).toBe(200);
