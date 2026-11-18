@@ -640,29 +640,27 @@ async function seedResults(f) {
       data: JSON.stringify({ proposedChange: { type: 'copy', text: 'Texto claro en la prueba anterior' }, primaryEvidence: { channel: 'facebook' }, observation: 'Prueba anterior para esta oferta.',
         successCriterion: { text: 'Aumentar interacciones al mismo horizonte.', metric: 'organicResponse', operator: 'gt', target: 0.1 }, conclusion: 'improved',
         evaluation: { complete: true, conclusion: 'improved', metric: 'organicResponse', parentValue: 0.08, childValue: 0.14, asOf: at } }), ...common });
-    return { id: draft.id, name, recommendationId, campaignIds: [draft.id], connectionId, assetId, forecastId, deliveryId, captureId, productId: product.id };
+    return { id: draft.id, name, recommendationId, connectionId };
   } finally { await store.close(); }
 }
 
-async function cleanupResults(record) {
-  const env = testDatabaseEnv(), store = new Store(await openPostgres(databaseConfig(env)));
+async function retireResultsConnection(record) {
+  const env = testDatabaseEnv(), dbURL = new URL(env.DATABASE_URL);
+  if (!['db','localhost','127.0.0.1'].includes(dbURL.hostname) || env.DB_SSL !== 'verify' || !(env.DB_CA_CERT || env.DB_CA_CERT_FILE)) {
+    throw new Error('Solo se puede retirar la conexión sintética de este test en PostgreSQL local con TLS verificado.');
+  }
+  const store = new Store(await openPostgres(databaseConfig(env)));
   try {
+    if ((await store.db.get('SELECT current_database() AS name')).name !== 'allnutrition_test') {
+      throw new Error('La limpieza solo puede tocar el fixture allnutrition_test.');
+    }
     await store.transaction(async tx => {
-      const campaigns = record.campaignIds;
-      const campaignMarks = campaigns.map(() => '?').join(',');
-      const deliveryMarks = [record.deliveryId].map(() => '?').join(',');
-      const campaignParams = campaigns, deliveryParams = [record.deliveryId];
-      await tx.db.run(`DELETE FROM ${tx.t('social_operations')} WHERE campaign_id IN (${campaignMarks})`, campaignParams);
-      await tx.db.run(`DELETE FROM ${tx.t('social_measurements')} WHERE delivery_id IN (${deliveryMarks})`, deliveryParams);
-      for (const table of ['social_recommendations','social_forecasts']) {
-        await tx.db.run(`DELETE FROM ${tx.t(table)} WHERE campaign_id IN (${campaignMarks})`, campaignParams);
+      const connection = await tx.db.get(`SELECT provider,integration_method,state,version FROM ${tx.t('social_connections')} WHERE id=?`, [record.connectionId]);
+      if (!connection || connection.provider !== 'meta' || connection.integration_method !== 'api') {
+        throw new Error('La limpieza no reconoció la conexión API sintética propia del test.');
       }
-      await tx.db.run(`DELETE FROM ${tx.t('social_deliveries')} WHERE id=?`, [record.deliveryId]);
-      await tx.db.run(`DELETE FROM ${tx.t('social_revisions')} WHERE campaign_id IN (${campaignMarks})`, campaignParams);
-      await tx.db.run(`DELETE FROM ${tx.t('social_campaigns')} WHERE id IN (${campaignMarks})`, campaignParams);
-      await tx.db.run(`DELETE FROM ${tx.t('social_assets')} WHERE id=?`, [record.assetId]);
-      await tx.db.run(`DELETE FROM ${tx.t('social_connections')} WHERE id=?`, [record.connectionId]);
-      await tx.db.run(`DELETE FROM ${tx.t('records')} WHERE kind='products' AND id=?`, [record.productId]);
+      const result = await tx.db.run(`UPDATE ${tx.t('social_connections')} SET state='disconnected',version=version+1,updated_at=? WHERE id=? AND provider='meta' AND integration_method='api' AND version=?`, [new Date().toISOString(), record.connectionId, connection.version]);
+      if (result.changes !== 1) throw new Error('No se pudo retirar la conexión API sintética del test.');
     });
   } finally { await store.close(); }
 }
@@ -684,7 +682,6 @@ test('publicidad guiada: preparar un cambio aquí o una variante sin enviar', as
   const same = await prepared;
   expect(same.status(), await same.text()).toBe(201);
   const change = await same.json();
-  record.campaignIds.push(change.id);
   await expectView(page, { tab: 'campaigns', record: change.id });
   const local = await f.campaign(change.id);
   expect(local.applicationMode).toBe('same');
@@ -701,7 +698,6 @@ test('publicidad guiada: preparar un cambio aquí o una variante sin enviar', as
   const response = await created;
   expect(response.status(), await response.text()).toBe(201);
   const newDraft = await response.json();
-  record.campaignIds.push(newDraft.id);
   await expectView(page, { tab: 'campaigns', record: newDraft.id });
   const child = await f.campaign(newDraft.id);
   expect(child.caption).toBe('Texto actual de la publicación');
@@ -721,5 +717,5 @@ test('publicidad guiada: preparar un cambio aquí o una variante sin enviar', as
     await expect(page.locator('textarea[name="caption"]')).toHaveValue(child.caption);
     expect(reads.writes).toEqual([]);
   } finally { reads.stop(); }
-  } finally { await cleanupResults(record); }
+  } finally { await retireResultsConnection(record); }
 });
