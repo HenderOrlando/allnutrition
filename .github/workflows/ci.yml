@@ -5,30 +5,19 @@ on:
   pull_request:
 permissions:
   contents: read
+  deployments: read
 jobs:
+  native:
+    uses: HenderOrlando/allnutrition/.github/workflows/native-acceptance.yml@a65ddec185b1da3469f291dd70aa1aaf06be87a8
+    with:
+      harness_commit: 'a65ddec185b1da3469f291dd70aa1aaf06be87a8'
   verify:
-    runs-on: ubuntu-latest
-    env:
-      NEXT_TELEMETRY_DISABLED: "1"
+    name: verify
+    needs: native
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run verify:docker
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: fallos-docker-navegador
-          include-hidden-files: true
-          path: |
-            playwright-report/
-            test-results/
-            .test-data/docker/*/artifacts/
-            !.test-data/docker/*/artifacts/operational.json
-            !.test-data/docker/*/env
-            !.test-data/docker/*/tls/**
-            !**/*.key
+      - name: Resultado de aceptación
+        env:
+          ACCEPTANCE_RESULT: ${{ needs.native.result }}
+        run: test "$ACCEPTANCE_RESULT" = success

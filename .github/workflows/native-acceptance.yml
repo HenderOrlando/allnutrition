@@ -1,173 +1,25 @@
-name: Aceptación nativa Linux amd64
-
+name: Registro de aceptación nativa (ejecutar con --ref main)
 on:
   workflow_dispatch:
     inputs:
       source_commit:
-        description: Commit completo en main que se aceptará y transferirá
+        description: Commit completo de main que se verificará
         required: true
         type: string
+      mode:
+        description: Alcance de la aceptación
+        type: choice
+        options:
+          - impact
+          - full
+        default: impact
+        required: true
 
 permissions:
   contents: read
-
+  deployments: read
 jobs:
   acceptance:
-    name: Verificador completo, runner aislado y transferencia
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    env:
-      HARNESS: ${{ github.workspace }}/harness
-      CANDIDATE: ${{ github.workspace }}/native-acceptance/candidate
-      NATIVE_ROOT: ${{ github.workspace }}/native-acceptance
-      ACCEPTED_OUTPUT: ${{ github.workspace }}/accepted-output
-      SOURCE_COMMIT: ${{ inputs.source_commit }}
-      WORKFLOW_COMMIT: ${{ github.sha }}
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/playwright-browsers
-      NEXT_TELEMETRY_DISABLED: "1"
-    steps:
-      - name: Checkout de herramientas de aceptación
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          path: harness
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Checkout del código sellado
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.source_commit }}
-          path: native-acceptance/candidate
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Configurar Node 24
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: native-acceptance/candidate/package-lock.json
-
-      - name: Validar fuente, rama y constructor amd64
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_REF" == "refs/heads/main" ]]
-          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$(git -C "$CANDIDATE" rev-parse HEAD)" == "$SOURCE_COMMIT" ]]
-          [[ "$(git -C "$HARNESS" rev-parse HEAD)" == "$WORKFLOW_COMMIT" ]]
-          git -C "$HARNESS" merge-base --is-ancestor "$SOURCE_COMMIT" "$WORKFLOW_COMMIT"
-          [[ "$(uname -m)" == "x86_64" ]]
-          [[ "$(node -p 'process.versions.node.split(".")[0]')" == "24" ]]
-          docker info --format '{{.ServerVersion}}' >/dev/null
-          docker buildx inspect default >/dev/null
-          command -v setpriv >/dev/null
-          command -v gzip >/dev/null
-          getent group docker >/dev/null
-
-      - name: Preparar entorno temporal privado
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo install -d -m 0700 -o 1000 -g 1000 \
-            "$NATIVE_ROOT/home" "$ACCEPTED_OUTPUT"
-
-      - name: Instalar dependencias y sellar fuente exacta
-        shell: bash
-        run: |
-          set -euo pipefail
-          (
-            cd "$CANDIDATE"
-            npm ci
-            npx playwright install --with-deps chromium
-          )
-          sudo chown -R 1000:1000 "$NATIVE_ROOT"
-          sudo chown -R 1000:1000 "$PLAYWRIGHT_BROWSERS_PATH"
-          sudo chmod 0700 "$NATIVE_ROOT"
-          sudo chmod 0755 "$CANDIDATE"
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$GITHUB_WORKSPACE/harness/tests/native/prepare-acceptance.mjs" prepare
-
-      - name: Ejecutar el verificador Docker completo sin wrappers
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            NEXT_TELEMETRY_DISABLED="$NEXT_TELEMETRY_DISABLED" \
-            PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            bash -euo pipefail -c 'cd "$CANDIDATE"; npm run verify:docker'
-
-      - name: Sellar el resultado completo
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            node "$GITHUB_WORKSPACE/harness/tests/native/prepare-acceptance.mjs" core
-
-      - name: Construir el runner Linux amd64
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$NATIVE_ROOT/browser-acceptance.mjs" build
-
-      - name: Verificar runner aislado, TLS y DB sintética
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$NATIVE_ROOT/browser-acceptance.mjs" verify
-
-      - name: Exportar imágenes y comprobantes permitidos
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_gid="$(getent group docker | cut -d: -f3)"
-          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
-            CANDIDATE="$CANDIDATE" NATIVE_ROOT="$NATIVE_ROOT" \
-            ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
-            WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$GITHUB_WORKSPACE/harness/tests/native/prepare-acceptance.mjs" bundle
-
-      - name: Publicar artefacto aceptado (solo éxito)
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: allnutrition-amd64-${{ inputs.source_commit }}
-          path: |
-            accepted-output/accepted-images.tar.gz
-            accepted-output/acceptance.json
-            accepted-output/source-manifest.json
-            accepted-output/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
+    uses: HenderOrlando/allnutrition/.github/workflows/native-acceptance.yml@a65ddec185b1da3469f291dd70aa1aaf06be87a8
+    with:
+      harness_commit: 'a65ddec185b1da3469f291dd70aa1aaf06be87a8'
