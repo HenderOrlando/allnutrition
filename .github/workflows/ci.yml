@@ -8,9 +8,9 @@ permissions:
   deployments: read
 jobs:
   native:
-    uses: HenderOrlando/allnutrition/.github/workflows/native-acceptance.yml@a65ddec185b1da3469f291dd70aa1aaf06be87a8
+    uses: HenderOrlando/allnutrition/.github/workflows/native-acceptance.yml@4b7024dbb703a0d310b349175a87e36f184636d6
     with:
-      harness_commit: 'a65ddec185b1da3469f291dd70aa1aaf06be87a8'
+      harness_commit: '4b7024dbb703a0d310b349175a87e36f184636d6'
   verify:
     name: verify
     needs: native
