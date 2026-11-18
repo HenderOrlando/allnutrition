@@ -1,5 +1,10 @@
 # Cambios — administración v3 y antecedentes
 
+## 17 de noviembre de 2026 — Verificación de dominio Meta configurable
+
+- Añadido el valor de verificación de Meta al menú Configuración de la vitrina. Se guarda en la configuración existente y genera la metaetiqueta `facebook-domain-verification` en la página de inicio; al vaciar el campo, se retira.
+- Verificado guardado y lectura pública con SQLite aislado. No requiere migración de base de datos y no se ha desplegado a producción.
+
 ## 17 de noviembre de 2026 — Política de privacidad pública
 
 - Política en español publicada en [allnutrition.wintimeapp.co/privacy](https://allnutrition.wintimeapp.co/privacy), con medios de contacto, finalidades, proveedores, seguridad, derechos de titulares y límites de eliminación de datos de Meta.

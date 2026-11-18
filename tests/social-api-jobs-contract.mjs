@@ -11,13 +11,16 @@ import sharp from 'sharp';
 import { entity, insertRow } from '../lib/business/commands.mjs';
 import { jobClock, queueJobTx } from '../lib/business/job-leases.mjs';
 import { normalizeSocialCampaignInput, buildSocialSpec } from '../lib/business/social-spec.mjs';
-import { getSocialCampaign, socialCampaignAction } from '../lib/business/social.mjs';
+import { getSocialCampaign, socialCampaignAction, socialRecommendationAction, saveSocialCampaign } from '../lib/business/social.mjs';
 import { processSocialApiTurn, prepareSocialApiJobs, queueSocialApiJobTx } from '../lib/business/social-api-jobs.mjs';
 import { deferSocialAccountTx, socialAccountNotBefore, socialAccountScope } from '../lib/business/social-schedule.mjs';
 import { saveCredentials } from '../lib/social/credentials.mjs';
 import { createMetaPublishingProvider } from './social-meta-provider.mjs';
 import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
 import { loadSocialRuntime } from '../lib/social/config.mjs';
+import { readSocialAnalysis, SOCIAL_ANALYSIS_VERSION } from '../lib/business/social-analysis.mjs';
+import { projectSocialChangeDraft } from '../lib/business/social-changes.mjs';
+import { getSocialLearnings } from '../lib/business/social-learnings.mjs';
 
 const NOW = '2026-11-02T12:00:00.000Z';
 const later = (ms, origin = NOW) => new Date(Date.parse(origin) + ms).toISOString();
@@ -136,6 +139,100 @@ const pathOf = input => new URL(input).pathname.replace(/^\//, '').replace(/^v26
 const writing = request => request.method === 'POST';
 
 const cases = [
+  ['mismo post: preparar/cancelar no cambia Meta; replay y acuse perdido conservan aprobación, objeto y una sola escritura', async (store, t) => {
+    const f = await setup(store, t, { platforms: ['facebook', 'instagram'] });
+    await f.until(async () => (await get(store, 'social_campaigns', f.campaignId)).state === 'published');
+    const now = f.now(), revision = await store.db.get(`SELECT * FROM ${store.t('social_revisions')} WHERE campaign_id=?`, [f.campaignId]);
+    const facebook = await get(store, 'social_deliveries', f.deliveries[0]), instagram = await get(store, 'social_deliveries', f.deliveries[1]);
+    const recommendationId = randomUUID(), evidenceHash = 'b'.repeat(64);
+    const businessRevision = Number((await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`)).value);
+    await patch(store, 'social_campaigns', f.campaignId, { analysis: { evidenceHash, analysisVersion: SOCIAL_ANALYSIS_VERSION, checkedAt: now, asOf: now, businessRevision, measurementCount: 0, recommendationIds: [recommendationId] } });
+    await insertRow(store, 'social_recommendations', { id: recommendationId, campaign_id: f.campaignId, evidence_hash: evidenceHash, rule_key: 'organic_response', state: 'suggested',
+      ...editable({ proposedChange: { type: 'copy', text: 'Prueba otro texto' }, successCriterion: { metric: 'organicResponse', target: 0.12, operator: 'gt' }, primaryEvidence: { channel: 'facebook' } }) });
+    const params = { env: f.env, now }, make = async () => {
+      const rec = await get(store, 'social_recommendations', recommendationId);
+      const input = { deliveryId: facebook.id, evidenceHash, version: rec.version, requestId: randomUUID() };
+      const result = await socialRecommendationAction(store, rec.id, 'prepare-in-place', input, f.actorId, params);
+      assert.deepEqual(await socialRecommendationAction(store, rec.id, 'prepare-in-place', input, f.actorId, params), result);
+      return result;
+    };
+    const countWrites = () => f.remote.requests.filter(writing).length, initialWrites = countWrites();
+    await assert.rejects(() => socialRecommendationAction(store, recommendationId, 'prepare-in-place', { deliveryId: instagram.id, version: 1, evidenceHash, requestId: randomUUID() }, f.actorId, params), { status: 409 });
+    const first = await make(), initial = await projectSocialChangeDraft(store, await get(store, 'social_campaigns', first.id), params);
+    assert.equal(initial.unchanged, true);
+    await socialRecommendationAction(store, recommendationId, 'cancel-in-place', { deliveryId: facebook.id, evidenceHash, version: initial.recommendationVersion, draftId: first.id, draftVersion: first.version, requestId: randomUUID() }, f.actorId, params);
+    assert.equal((await get(store, 'social_recommendations', recommendationId)).state, 'suggested');
+    const second = await make();
+    await assert.rejects(() => saveSocialCampaign(store, { id: second.id, version: second.version, objective: 'engagement', requestId: randomUUID() }, f.actorId, params), { status: 409 });
+    const edited = await saveSocialCampaign(store, { id: second.id, version: second.version, caption: 'Texto revisado de esta misma publicación', requestId: randomUUID() }, f.actorId, params);
+    const diff = await projectSocialChangeDraft(store, await get(store, 'social_campaigns', second.id), params);
+    assert.equal(diff.eligibility.allowed, true);
+    const approve = { deliveryId: facebook.id, evidenceHash, version: diff.recommendationVersion, draftId: second.id, draftVersion: edited.version, diffHash: diff.diffHash, rightsAccepted: true, acknowledged: true, requestId: randomUUID() };
+    const pending = await socialRecommendationAction(store, recommendationId, 'confirm-in-place', approve, f.actorId, params);
+    assert.deepEqual(await socialRecommendationAction(store, recommendationId, 'confirm-in-place', approve, f.actorId, params), pending);
+    assert.equal(countWrites(), initialWrites);
+    f.remote.state.loseResponse = { path: facebook.remoteId, times: 1 };
+    assert.equal((await f.turn()).errorCode, 'OPERATION_UNCERTAIN');
+    assert.equal((await get(store, 'social_recommendations', recommendationId)).state, 'suggested');
+    await f.turn({ now: later(65000, f.now()) });
+    assert.equal((await get(store, 'social_operations', pending.operationId)).state, 'confirmed');
+    const detail = await getSocialCampaign(store, f.campaignId);
+    assert.equal(detail.deliveries[0].remoteId, facebook.remoteId);
+    assert.equal(detail.deliveries[0].effectiveSpec.caption, diff.after);
+    assert.equal(detail.deliveries[1].effectiveSpec, undefined);
+    assert.deepEqual(await store.db.get(`SELECT * FROM ${store.t('social_revisions')} WHERE campaign_id=?`, [f.campaignId]), revision);
+    assert.equal(countWrites(), initialWrites + 1);
+    const history = await getSocialLearnings(store, { campaignId: f.campaignId });
+    assert.equal(history.learnings[0].conclusion, 'inconclusive');
+    assert.equal(history.learnings[0].operationId, pending.operationId);
+  }],
+  ['pausar vuelve obsoleta la propuesta sin encolar en GET; refrescar permite cambiar en pausa y reanudar solo con las referencias efectivas', async (store, t) => {
+    const f = await setup(store, t, { mode: 'paid' }); await f.ready();
+    const deliveryId = f.deliveries[0], recommendationId = randomUUID(), evidenceHash = 'd'.repeat(64);
+    const delivery = () => get(store, 'social_deliveries', deliveryId);
+    const params = () => ({ env: f.env, now: f.now(), transport: f.transport });
+    const wait = id => f.until(async () => (await get(store, 'social_operations', id)).state === 'confirmed');
+    const control = async (action, preparedRefs) => {
+      const campaign = await getSocialCampaign(store, f.campaignId), current = await delivery();
+      return socialCampaignAction(store, campaign.id, action, { version: campaign.version, requestId: randomUUID(),
+        ...(action === 'pause' ? {} : { specHash: f.specHash, preparedRefs: preparedRefs || current.preparedRefs, investmentAccepted: true, remainingBudgetMinor: current.budgetSnapshot.remainingMinor })
+      }, f.actorId, params());
+    };
+    await wait((await control('activate-paid')).operationId);
+    const businessRevision = Number((await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`)).value);
+    const setAnalysis = () => patch(store, 'social_campaigns', f.campaignId, { analysis: { evidenceHash, analysisVersion: SOCIAL_ANALYSIS_VERSION, checkedAt: f.now(), asOf: f.now(), businessRevision, measurementCount: 0, recommendationIds: [recommendationId] } });
+    await insertRow(store, 'social_recommendations', { id: recommendationId, campaign_id: f.campaignId, evidence_hash: evidenceHash, rule_key: 'weak_link_ctr', state: 'suggested',
+      ...editable({ proposedChange: { type: 'copy', text: 'Prueba otro texto' }, successCriterion: { metric: 'ctrLinkPercent', target: 1.2, operator: 'gt' }, primaryEvidence: { channel: 'meta_ads' } }) });
+    await setAnalysis();
+    const prepare = () => socialRecommendationAction(store, recommendationId, 'prepare-in-place', { deliveryId, evidenceHash, version: 1, requestId: randomUUID() }, f.actorId, params());
+    await assert.rejects(prepare, /pausada/);
+    await wait((await control('pause')).operationId);
+    assert.equal((await readSocialAnalysis(store, f.campaignId, { asOf: f.now() })).stale, true);
+    assert.equal(await store.db.get(`SELECT key FROM ${store.t('job_runs')} WHERE key=?`, [`social:analysis:${f.campaignId}`]), null);
+    await assert.rejects(prepare, /vigente/);
+    await f.sync(later(1000, f.now()));
+    const paused = await delivery();
+    assert.equal(paused.state, 'paused');
+    assert.ok(paused.budgetSnapshot.checkedAt >= paused.pausedAt);
+    await setAnalysis();
+    const draft = await prepare(), edited = await saveSocialCampaign(store, { id: draft.id, version: draft.version, caption: 'Texto aprobado para el anuncio pausado', requestId: randomUUID() }, f.actorId, params());
+    const diff = await projectSocialChangeDraft(store, await get(store, 'social_campaigns', draft.id), params());
+    const staged = await socialRecommendationAction(store, recommendationId, 'confirm-in-place', { deliveryId, evidenceHash, version: diff.recommendationVersion, draftId: draft.id, draftVersion: edited.version,
+      diffHash: diff.diffHash, rightsAccepted: true, acknowledged: true, requestId: randomUUID() }, f.actorId, params());
+    await assert.rejects(() => control('resume'), /pendiente/);
+    await wait(staged.operationId);
+    const amended = await delivery();
+    assert.equal(amended.state, 'paused');
+    assert.equal(amended.effectiveContentOperationId, staged.operationId);
+    assert.notEqual(amended.preparedRefs.creativeId, paused.preparedRefs.creativeId);
+    assert.equal(f.remote.state.activationCount, 1);
+    await assert.rejects(() => control('resume', paused.preparedRefs), { status: 409 });
+    await wait((await control('resume')).operationId);
+    assert.equal((await delivery()).state, 'active');
+    assert.equal((await delivery()).preparedRefs.adId, paused.preparedRefs.adId);
+    assert.equal((await delivery()).budgetSnapshot.endAt, f.spec.endAt);
+    assert.equal(f.remote.state.activationCount, 2);
+  }],
   ['el consumidor publica con custodia persistida y sin variables de integración', async (store, t) => {
     const f = await setup(store, t);
     for (const key of ['APP_URL', 'META_APP_ID', 'META_APP_SECRET', 'META_LOGIN_CONFIG_ID', 'META_GRAPH_VERSION', 'SOCIAL_PUBLISHING_ENABLED', 'SOCIAL_BROWSER_ENABLED', 'SOCIAL_TOKEN_ENCRYPTION_KEY', 'SOCIAL_MEDIA_SIGNING_KEY', 'SOCIAL_BROWSER_CONTROL_KEY', 'SOCIAL_BROWSER_SESSION_KEY']) delete f.env[key];

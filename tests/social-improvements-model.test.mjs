@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSocialRecommendations, evaluateSocialRecommendation, selectSocialComparableSamples } from '../lib/business/social-analysis.mjs';
-import { buildSocialMetricQueries } from '../lib/business/social-metrics.mjs';
+import { buildSocialRecommendations, evaluateSocialRecommendation, evaluateSameSocialChange, selectSocialComparableSamples } from '../lib/business/social-analysis.mjs';
+import { buildSocialMetricQueries, socialDeliveryPerformance } from '../lib/business/social-metrics.mjs';
 import { CUT, DAY, exactMetric, improvementInput, improvementCandidates, improvementMeasurement, financialEvidence, addFatigue, addPlacements, refreshRatios } from './social-improvements-fixture.mjs';
 
 const rules = input => buildSocialRecommendations(input).recommendations.map(rec => rec.ruleKey);
@@ -228,4 +228,44 @@ test('child evaluation blocks before horizon and resolves unknown or incompatibl
     const result = evaluateSocialRecommendation(p.recommendation, p);
     assert.equal(result.complete, true); assert.equal(result.conclusion, 'inconclusive', String(mutate));
   }
+});
+
+test('primary results respect the objective, reported zero, organic scope and incomplete newer reads', () => {
+  for (const [objective, metric] of [['traffic','linkClicks'], ['whatsapp','conversations'], ['reach','reach'], ['engagement','interactions']]) {
+    const input = improvementInput({ objective }), delivery = input.deliveries[0], base = current(input);
+    base.values[metric] = exactMetric(0);
+    const partial = { ...base, id: 'partial', fetchedAt: CUT, coverage: { complete: false } };
+    base.fetchedAt = '2026-11-02T11:59:59.000Z';
+    const result = socialDeliveryPerformance(delivery, input.spec, [base, partial], CUT);
+    assert.equal(result.metric, metric);
+    assert.equal(result.status, 'zero');
+    assert.equal(result.captureId, base.id);
+    assert.equal(result.newerPartial, true);
+    assert.equal(result.costMinor, null);
+  }
+  const organic = improvementInput({ mode: 'organic', objective: 'engagement' }), delivery = organic.deliveries[0], reading = current(organic);
+  delete reading.values.interactions;
+  assert.equal(socialDeliveryPerformance(delivery, organic.spec, [reading], CUT).status, 'unavailable');
+  assert.equal(socialDeliveryPerformance(delivery, organic.spec, [reading], CUT).spend, null);
+});
+
+test('same-ad evaluation uses exact isolated complete windows; overlap, pause, delay or unbalanced spend are inconclusive', () => {
+  const input = improvementInput(), delivery = input.deliveries[0], spec = input.spec;
+  const a = improvementMeasurement(spec, delivery, { window: 'previous_3d', id: 'before' });
+  const from = '2026-11-03T12:00:00.000Z', through = '2026-11-03T12:01:00.000Z', end = '2026-11-07T05:00:00.000Z', asOf = '2026-11-10T12:00:00.000Z';
+  a.evidence = { configurationVerifiedAt: a.fetchedAt, continuousActiveSince: a.periodStart, activeAtCapture: true };
+  const b = { ...structuredClone(a), id: 'after', fetchedAt: asOf, periodStart: '2026-11-04T05:00:00.000Z', periodEnd: end, evidence: { ...a.evidence, contentOperationId: 'change', continuousActiveSince: '2026-11-04T00:00:00.000Z' } };
+  b.values.linkClicks = exactMetric(250);
+  const trial = { deliveryId: delivery.id, criterion: { metric: 'ctrLinkPercent', operator: 'gt', target: 2 }, transition: { from, through }, expectedAt: asOf };
+  const operation = { id: 'change', change: { baselineCaptures: [{ id: a.id }] } };
+  const evaluate = (after = b, cut = asOf) => evaluateSameSocialChange({ operation, trial, spec, measurements: [a, after], asOf: cut });
+  assert.equal(evaluate().conclusion, 'improved');
+  assert.equal(evaluate({ ...b, values: { ...b.values, linkClicks: exactMetric(175) } }).conclusion, 'not_improved');
+  for (const after of [{ ...b, periodStart: '2026-11-03T05:00:00.000Z' }, { ...b, fetchedAt: '2026-11-07T12:00:00.000Z' },
+    { ...b, evidence: { ...b.evidence, activeAtCapture: false, activeInterruptedAt: '2026-11-06T05:00:00.000Z' } },
+    { ...b, values: { ...b.values, spendMinor: exactMetric(1000000, 'fixture_spend', 'minor_currency') } }]) {
+    assert.equal(evaluate(after).conclusion, 'inconclusive');
+  }
+  assert.equal(evaluate(b, '2026-11-08T12:00:00.000Z').complete, false);
+  assert.equal(evaluateSameSocialChange({ operation, trial, spec: { mode: 'organic' }, measurements: [], asOf }).reasons[0], 'lifetime_cannot_isolate_change');
 });

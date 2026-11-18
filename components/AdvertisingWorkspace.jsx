@@ -4,19 +4,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import WorkspaceTabs from './WorkspaceTabs';
 import { Field } from './Fields';
 import AdvertisingCampaignEditor from './AdvertisingCampaignEditor';
-import { useAssistantBridge, useAssistantForm } from './AssistantBridge.jsx';
+import { useAssistantBridge } from './AssistantBridge.jsx';
 import AdvertisingResults from './AdvertisingResults';
 import AdvertisingGuide from './AdvertisingGuide';
 import AdvertisingGeneration from './AdvertisingGeneration';
+import AdvertisingAssetUpload from './AdvertisingAssetUpload';
+import { offerLabel } from './AdvertisingOfferPicker';
 import MetaAccountAnalysis from './MetaAccountAnalysis';
 import AdvertisingMeasurement from './AdvertisingMeasurement';
 import { readAdminView } from '@/lib/admin-view.mjs';
 import styles from './AdvertisingWorkspace.module.css';
 
 const ROOT = '/api/admin/social';
-const tabs = [{ id: 'campaigns', label: 'Publicaciones' }, { id: 'assets', label: 'Imágenes y videos' }, { id: 'results', label: 'Resultados' }];
-const states = { draft: 'Borrador', ready: 'Preparada, sin gasto autorizado', scheduled: 'Programada', publishing: 'En preparación o publicación', partial: 'Resultado parcial', published: 'Publicada', in_review: 'En revisión de Meta', active: 'Activa', paused: 'Pausada', completed: 'Finalizada', failed: 'Falló', needs_attention: 'Requiere atención', cancelled: 'Cancelada', queued: 'En cola', preparing: 'Preparando', uncertain: 'Envío incierto: comprobar estado en Meta sin reenviar', blocked: 'Bloqueada', connected: 'Conectada', reconnect_required: 'Sesión vencida o revocada: reconectar', disconnected: 'Desconectada', login_required: 'Necesita iniciar sesión', login_in_progress: 'Acceso en curso; control exclusivo', challenge_required: 'Desafío pendiente: intervención humana', layout_changed: 'Interfaz incompatible: revalidar adaptador' };
-const ASSET_STATES = { uploading: 'Carga pendiente o en curso', processing: 'Preparando archivo', ready: 'Lista para usar', failed: 'No se pudo preparar', archived: 'Archivada', missing_file: 'Archivo no disponible' };
+const tabs = [{ id: 'campaigns', label: 'Publicaciones y campañas' }, { id: 'assets', label: 'Biblioteca' }, { id: 'results', label: 'Resultados' }];
+const states = { draft: 'Borrador', ready: 'Preparada, sin gasto autorizado', scheduled: 'Programada', publishing: 'En preparación o publicación', partial: 'Publicación parcial', published: 'Publicada', in_review: 'En revisión de Meta', active: 'Activa', paused: 'Pausada', completed: 'Finalizada', failed: 'Falló', needs_attention: 'Requiere atención', cancelled: 'Cancelada', queued: 'En cola', preparing: 'Preparando', uncertain: 'Envío incierto: comprobar estado en Meta sin reenviar', blocked: 'Bloqueada', connected: 'Conectada', reconnect_required: 'Sesión vencida o revocada: reconectar', disconnected: 'Desconectada', login_required: 'Necesita iniciar sesión', login_in_progress: 'Acceso en curso; control exclusivo', challenge_required: 'Desafío pendiente: intervención humana', layout_changed: 'Interfaz incompatible: revalidar adaptador' };
+const ASSET_STATES = { uploading: 'Carga pendiente o en curso', processing: 'Preparando imagen o video', ready: 'Lista para revisar', failed: 'No se pudo preparar', archived: 'Archivada', missing_file: 'Archivo no disponible' };
 const objectives = { whatsapp: 'Consultas por WhatsApp', traffic: 'Clics al sitio web', reach: 'Alcance', engagement: 'Interacción' };
 const methods = { api: 'Conexión oficial de Meta (API)', browser: 'Acceso asistido por navegador' };
 const pendingCampaign = row => ['publishing', 'in_review'].includes(row.state) || row.deliveries?.some(item => ['queued', 'preparing', 'publishing', 'in_review', 'uncertain'].includes(item.state));
@@ -73,6 +75,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
   const [refresh, setRefresh] = useState(0), [inventory, setInventory] = useState({ data: null, error: '', loading: false, fetchedAt: null });
   const [notice, setNotice] = useState('');
   const heading = useRef(null), queryPanel = useRef(null), interaction = useRef(new Map()), callbacks = useRef({}), mounted = useRef(true);
+  const imageContinuation = useRef(null);
   callbacks.current = { onInteractionStateChange, onMutation, onViewChange, view };
   const assistantBridge = useAssistantBridge(), assistantOpenNotice = useRef('');
   const [assistantOpenContext, setAssistantOpenContext] = useState(null);
@@ -109,6 +112,8 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
   const editorReport = useCallback(state => report('editor', state), [report]);
   const resultsReport = useCallback(state => report('results', state), [report]);
   const generationReport = useCallback(state => report('generation', state), [report]);
+  const editorUploadReport = useCallback(state => report('editor-upload', state), [report]);
+  const editorComposerReport = useCallback(state => report('editor-composer', state), [report]);
   const accountAnalysisReport = useCallback(state => report('account-analysis', state), [report]);
   const measurementReport = useCallback(state => report('measurement', state), [report]);
   useEffect(() => {
@@ -117,7 +122,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
     window.addEventListener('beforeunload', beforeUnload);
     return () => { mounted.current = false; window.removeEventListener('beforeunload', beforeUnload); callbacks.current.onInteractionStateChange?.({ dirty: false, busy: false }); };
   }, []);
-  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [tab, view.record]);
+  useEffect(() => { if (tab !== 'campaigns' || !view.record) heading.current?.focus({ preventScroll: true }); }, [tab, view.record]);
   const invalidate = useCallback(async () => {
     if (mounted.current) setRefresh(value => value + 1);
     try { await callbacks.current.onMutation?.(); } catch (cause) { if (mounted.current) setNotice(`Operación guardada; actualización general pendiente. ${cause.message}`); }
@@ -152,15 +157,19 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
   useEffect(() => { setListPending(Boolean(campaignRead.data?.campaigns.some(pendingCampaign))); }, [campaignRead.data]);
   const change = patch => onViewChange({ ...patch, page: patch.page ?? 1 });
   const navigate = patch => onNavigate ? onNavigate({ section: 'advertising', ...patch }) : change(patch);
-  const committed = useCallback(result => {
+  const committed = useCallback((result, next) => {
     // Only release this editor's interaction after its complete commit chain.
     // Other owners remain guarded by the parent navigation machinery.
     report('editor', { dirty: false, busy: false });
+    if (result?.id && next?.openImage) imageContinuation.current = { campaignId: result.id, baseAssetId: next.baseAssetId, instructions: next.instructions };
     // Only a newly assigned record needs canonical navigation; saving in place keeps Back intact.
     if (result?.id && (callbacks.current.view.record !== result.id || callbacks.current.view.tab !== 'campaigns')) callbacks.current.onViewChange({ tab: 'campaigns', record: result.id, page: 1 });
     setRefresh(value => value + 1);
   }, [report]);
-  const readyAssets = inventory.data?.assets.filter(item => item.state === 'ready') || [];
+  const takeImageContinuation = useCallback(id => {
+    const next = imageContinuation.current; imageContinuation.current = null;
+    return next?.campaignId === id ? next : null;
+  }, []);
   const campaignFilters = [
     ['q', 'Búsqueda', view.q], ['mode', 'Tipo de publicación', { organic: 'Publicación sin inversión', paid: 'Anuncio pagado' }[view.mode]],
     ['status', 'Estado', states[view.status]], ['network', 'Red', { facebook: 'Facebook', instagram: 'Instagram' }[view.network]],
@@ -169,14 +178,14 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
   const clearCampaignFilters = () => { change({ q: null, mode: null, status: null, network: null, objective: null, record: null, page: 1 }); queryPanel.current?.querySelector('input[name="q"]')?.focus(); };
   const currentCampaignQuery = campaignRead.path === listPath;
   return <section className={styles.workspace} aria-label="Publicidad en redes sociales">
-    <header className="workspace-heading"><div><p className={styles.eyebrow}>Facebook e Instagram</p><h1 ref={heading} tabIndex={-1} data-admin-section-heading>Publicidad</h1><p>Prepara publicaciones, organiza tus imágenes y videos y revisa sus resultados. Tú decides qué se publica y cuándo autorizas inversión.</p></div>{tab === 'campaigns' && !view.record && <button type="button" className="button primary" onClick={() => change({ record: 'new' })}>Crear publicación</button>}</header>
+    <header className="workspace-heading"><div><p className={styles.eyebrow}>Facebook e Instagram</p><h1 ref={heading} tabIndex={-1} data-admin-section-heading>Publicidad</h1><p>Elige qué anunciar, prepara la pieza y revisa qué lograste. Tú decides qué se publica y cuándo autorizas inversión.</p></div>{tab === 'campaigns' && !view.record && <button type="button" className="button primary" onClick={() => change({ record: 'new' })}>Crear publicidad</button>}</header>
     <AdvertisingGuide key={tab} tab={tab}/>
-    <WorkspaceTabs label="Vistas de publicidad" items={tabs} value={tab} onChange={value => change({ tab: value, record: null, status: null, q: null })}/>
-    <p className={styles.taskIntro}>{{ campaigns: 'Guarda ideas como borradores y retómalas después. Guardar no publica ni autoriza gasto.', assets: 'Sube archivos propios o solicita imágenes y GIF con OpenAI tras aceptar su costo. Revisa el resultado antes de usarlo.', results: 'Elige el objetivo y la medición; revisa el análisis anual de Meta, su cobertura y las propuestas sustentadas. Resultados reportados y hechos de tu negocio son distintos.' }[tab]}</p>
+    <WorkspaceTabs label="Vistas de publicidad" items={tabs} value={tab} onChange={value => change({ tab: value, record: null, resultsFocus: null, status: null, q: null })}/>
+    <p className={styles.taskIntro}>{{ campaigns: 'Guarda un borrador y retómalo después. Guardar no publica ni autoriza gasto.', assets: 'Sube archivos propios o elige Crear imagen y revisa el resultado antes de usarlo.', results: 'Revisa el rendimiento de una pieza, qué probar y qué aprendiste.' }[tab]}</p>
     {notice && <p className={styles.notice} role="status">{notice}</p>}
     {tab === 'campaigns' && view.record ? <>
       <ReadStatus state={connectionRead} label="cuentas conectadas" onRetry={() => setRefresh(value => value + 1)}/><ReadStatus state={inventory} label="imágenes y videos privados" onRetry={() => setRefresh(value => value + 1)}/>
-      <AdvertisingCampaignEditor api={api} campaignId={view.record} connections={connections} assets={readyAssets} initialMode={view.mode || 'organic'} initialObjective={view.objective || 'engagement'} onSaved={committed} onNavigate={navigate} onInteractionStateChange={editorReport} onMutation={invalidate} revision={revision}/>
+      <AdvertisingCampaignEditor api={api} campaignId={view.record} connections={connections} assets={inventory.data?.assets} initialMode={view.mode || 'organic'} initialObjective={view.objective || 'engagement'} onSaved={committed} takeImageContinuation={takeImageContinuation} onNavigate={navigate} onInteractionStateChange={editorReport} onUploadState={editorUploadReport} onComposerState={editorComposerReport} onMutation={invalidate} revision={revision}/>
     </> : tab === 'campaigns' ? <>
       <section ref={queryPanel} className={styles.queryPanel} aria-label="Buscar y filtrar publicaciones">
         <div className={styles.filterBar}>
@@ -194,25 +203,32 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
       <ReadStatus state={campaignRead} label="publicaciones" onRetry={() => setRefresh(value => value + 1)}/>
       {campaignRead.data && !currentCampaignQuery && <p role="status" className={styles.warning}>Resultados de la consulta anterior; actualizando filtros</p>}
       {campaignRead.data && <div inert={!currentCampaignQuery} aria-busy={campaignRead.loading}>
-        <div className={styles.stack}>{campaignRead.data.campaigns.map(campaign => <CampaignRow key={campaign.id} campaign={campaign} onOpen={() => change({ record: campaign.id })} onResults={() => change({ tab: 'results', record: campaign.id })}/>)}</div>
+        <div className={styles.stack}>{campaignRead.data.campaigns.map(campaign => <CampaignRow key={campaign.id} campaign={campaign} asset={inventory.data?.assets.find(item => item.id === campaign.assetId && item.state === 'ready')} onOpen={() => change({ record: campaign.id })} onResults={resultsFocus => change({ tab: 'results', record: campaign.id, resultsFocus: resultsFocus || null })}/>)}</div>
         {currentCampaignQuery && !campaignRead.loading && !campaignRead.error && !campaignRead.data.campaigns.length && <div className={`admin-empty ${styles.empty}`}>
-          {campaignRead.data.total > 0 ? <><h2>Esta página no tiene publicaciones</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : campaignFilters.length ? <><h2>No hay publicaciones con estos filtros</h2><button type="button" className="button subtle" onClick={clearCampaignFilters}>Limpiar filtros</button></> : <><h2>Empieza con un borrador</h2><p>Solo necesitas un nombre; puedes añadir la cuenta y el archivo después.</p><div className={styles.actions}><button type="button" className="button primary" onClick={() => change({ record: 'new' })}>Crear publicación</button><button type="button" className="button subtle" onClick={() => change({ tab: 'assets', record: null })}>Imágenes y videos</button><button type="button" className="button subtle" onClick={() => navigate({ section: 'business', tab: 'social', record: null })}>Configurar redes sociales</button></div></>}
+          {campaignRead.data.total > 0 ? <><h2>Esta página no tiene publicaciones</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : campaignFilters.length ? <><h2>No hay publicaciones con estos filtros</h2><button type="button" className="button subtle" onClick={clearCampaignFilters}>Limpiar filtros</button></> : <><h2>Empieza con un borrador</h2><p>Elige una oferta o anuncia tu marca. Puedes añadir la cuenta y la pieza después.</p><div className={styles.actions}><button type="button" className="button primary" onClick={() => change({ record: 'new' })}>Crear publicidad</button><button type="button" className="button subtle" onClick={() => change({ tab: 'assets', record: null })}>Biblioteca</button></div></>}
         </div>}
         <Pagination page={campaignRead.data.page} pages={campaignRead.data.pages} total={campaignRead.data.total} disabled={campaignRead.loading || !currentCampaignQuery} onPage={page => change({ page })}/>
       </div>}
     </> : tab === 'assets' ? <>
-      <AdvertisingGeneration api={api} onInteractionStateChange={generationReport} onMutation={invalidate} sourceRevision={`${refreshKey}:${inventory.fetchedAt || ''}`}/>
+      <LibraryComposer api={api} onInteractionStateChange={generationReport} onMutation={invalidate} sourceRevision={`${refreshKey}:${inventory.fetchedAt || ''}`}/>
       <AssetsPanel api={api} view={view} inventory={inventory} change={change} report={report} onMutation={invalidate} onRetry={() => setRefresh(value => value + 1)}/>
     </> : <>
-      <ReadStatus state={connectionRead} label="cuentas para análisis y medición" onRetry={() => setRefresh(value => value + 1)}/>
-      <AdvertisingMeasurement api={api} connections={connections} onInteractionStateChange={measurementReport} onMutation={invalidate}/>
-      <MetaAccountAnalysis api={api} connections={connections} onInteractionStateChange={accountAnalysisReport} onMutation={invalidate}/>
       <AdvertisingResults api={api} campaignId={view.record && view.record !== 'new' ? view.record : null} view={view} onViewChange={onViewChange} onNavigate={navigate} onInteractionStateChange={resultsReport} onMutation={invalidate} revision={revision}/>
+      {(!view.record || view.record === 'new') && <>
+        <ReadStatus state={connectionRead} label="cuentas para análisis y medición" onRetry={() => setRefresh(value => value + 1)}/>
+        <AdvertisingMeasurement api={api} connections={connections} onInteractionStateChange={measurementReport} onMutation={invalidate}/>
+        <MetaAccountAnalysis api={api} connections={connections} onInteractionStateChange={accountAnalysisReport} onMutation={invalidate}/>
+      </>}
     </>}
   </section>;
 }
 
-function CampaignRow({ campaign, onOpen, onResults }) {
+function LibraryComposer(props) {
+  const [opened, setOpened] = useState(false);
+  return <details className={styles.guide} onToggle={event => setOpened(event.currentTarget.open)}><summary>Crear imagen</summary>{opened && <AdvertisingGeneration {...props}/>}</details>;
+}
+
+function CampaignRow({ campaign, asset, onOpen, onResults }) {
   const deliveries = campaign.deliveries || [];
   const syncDates = deliveries.map(item => item.metricSync?.lastCompletedAt).filter(Boolean).sort();
   const spendSummary = campaign.lastMeasurementSummary, spend = spendSummary?.spendMinor;
@@ -221,32 +237,33 @@ function CampaignRow({ campaign, onOpen, onResults }) {
     : 'No disponible';
   return <article className={styles.card}><header className={styles.toolbar}><h2>{campaign.name}</h2><span className={styles.badge}>{states[campaign.state] || campaign.state}</span></header>
     <p>{campaign.mode === 'paid' ? 'Anuncio pagado' : 'Publicación sin inversión'} · {objectives[campaign.objective]} · {campaign.platforms?.map(value => value === 'facebook' ? 'Facebook' : 'Instagram').join(' · ') || 'Sin destinos elegidos'}</p>
+    {(asset?.kind === 'image' || campaign.offerSnapshot?.primary?.image) && <img className={styles.cardThumb} width={72} height={72} loading="lazy" src={asset?.kind === 'image' ? asset.previewUrl : campaign.offerSnapshot.primary.image} alt=""/>}
+    {campaign.offerSnapshot?.primary && <p>{offerLabel(campaign.offerSnapshot.primary)}</p>}
     <dl className="summary-values"><div><dt>{campaign.mode === 'paid' ? 'Inicio / fin' : 'Publicación'}</dt><dd>{campaign.mode === 'paid' ? `${date(campaign.startAt)} / ${date(campaign.endAt)}` : campaign.publishAt ? date(campaign.publishAt) : 'Al aprobar y procesar la solicitud'}</dd></div>{campaign.mode === 'paid' && <div><dt>Gasto reportado</dt><dd>{spendText}{spendSummary && <small className={styles.muted}> · {spendSummary.complete ? 'Consulta completa' : 'Cobertura parcial'} · {date(spendSummary.fetchedAt)} · {methods[spendSummary.integrationMethod] || 'Fuente no informada'}</small>}</dd></div>}<div><dt>Última consulta completa</dt><dd>{date(syncDates.at(-1))}</dd></div></dl>
     {campaign.restoreHold || campaign.restore_hold ? <p className={styles.warning}>Restaurada: bloqueada hasta reconexión, comprobación de estado en Meta sin reenviar y reanudación explícita.</p> : null}
     {deliveries.length > 0 && <ul className={styles.choiceList}>{deliveries.map(delivery => <li key={delivery.id}><strong>{delivery.channel === 'meta_ads' ? 'Anuncio Meta · presupuesto único' : delivery.channel === 'facebook' ? 'Facebook' : 'Instagram'}</strong>: {states[delivery.state] || delivery.state}{delivery.lastConfirmedState && <span> · Último confirmado: {states[delivery.lastConfirmedState] || delivery.lastConfirmedState}</span>}{delivery.state === 'uncertain' && <p className={styles.warning}>Envío incierto: comprueba el estado en Meta sin reenviar.</p>}{['queued', 'scheduled'].includes(delivery.state) && campaign.publishAt && Date.parse(campaign.publishAt) < Date.now() - 900000 && <p className={styles.warning}>Horario vencido por más de 15 minutos: requiere revisión; no se presenta como publicada.</p>}</li>)}</ul>}
     <details className={styles.technicalDetails}><summary>Detalles del seguimiento</summary><p>{methods[campaign.integrationMethod] || 'Sin conexión seleccionada'}</p>{deliveries.map(delivery => <p key={delivery.id}>{delivery.channel} · Próxima consulta: {date(delivery.nextSyncAt)}{delivery.metricSync?.lastError?.code ? ` · ${delivery.metricSync.lastError.code}` : ''}</p>)}</details>
-    <div className={styles.actions}><button type="button" className="button primary" onClick={onOpen}>Abrir {campaign.state === 'draft' ? 'borrador' : 'publicación'}</button><button type="button" className="button subtle" aria-label={`Ver resultados: ${campaign.name}`} onClick={onResults}>Ver resultados</button></div>
+    <div className={styles.actions}>
+      {campaign.state === 'draft' ? <button type="button" className="button primary" onClick={onOpen}>Continuar borrador</button> : pendingCampaign(campaign) || ['failed', 'needs_attention', 'partial', 'ready', 'scheduled'].includes(campaign.state)
+        ? <button type="button" className="button primary" onClick={onOpen}>Comprobar publicación</button> : <button type="button" className="button primary" onClick={() => onResults()}>Ver rendimiento</button>}
+      {campaign.state !== 'draft' && <button type="button" className="button subtle" onClick={onOpen}>Abrir ficha</button>}
+      {campaign.state === 'draft' && <button type="button" className="button subtle" aria-label={`Ver rendimiento: ${campaign.name}`} onClick={() => onResults()}>Ver rendimiento</button>}
+      {campaign.improvementState && <button type="button" className="button subtle" onClick={() => onResults(campaign.improvementState === 'suggested' ? 'recommendations' : 'learnings')}>{{ suggested: 'Mejora disponible · Ver propuesta', observing: 'Prueba en curso', concluded: 'Ya hay una conclusión' }[campaign.improvementState]}</button>}
+    </div>
   </article>;
 }
 
 
 function AssetsPanel({ api, view, inventory, change, report, onMutation, onRetry }) {
-  const [file, setFile] = useState(null), [name, setName] = useState(''), [busy, setBusy] = useState(false), [phase, setPhase] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [slot, setSlot] = useState(null);
-  const input = useRef(null), searchPanel = useRef(null), listHeading = useRef(null), errorRef = useRef(null), archiveFocus = useRef(null), requests = useRef(new Set()), locked = useRef(false), fileSelection = useRef(null), rid = useRequestIds();
-  const assistant = useAssistantForm({
-    target: 'asset-metadata', values: { name }, dirty: Boolean(file || name), busy,
-    generationKey: JSON.stringify([fileSelection.current, slot?.id, slot?.version]),
-    applyPatch: patch => {
-      if (Object.keys(patch).some(key => key !== 'name')) throw new Error('El archivo y la carga siempre se eligen manualmente.');
-      if (Object.hasOwn(patch, 'name')) changeName(patch.name);
-    },
-  });
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const input = useRef(null), searchPanel = useRef(null), listHeading = useRef(null), errorRef = useRef(null), archiveFocus = useRef(null), requests = useRef(new Set()), locked = useRef(false), rid = useRequestIds();
+  const uploadReport = useCallback(state => report('assets-upload', state), [report]);
   const assets = inventory.data?.assets || [], stateFilter = Object.hasOwn(ASSET_STATES, view.status || '') ? view.status : '';
   const query = (view.q || '').trim().toLocaleLowerCase('es');
   const filtered = assets.filter(asset => (!stateFilter || asset.state === stateFilter) && (!query || [asset.name, asset.originalName].some(value => (value || '').trim().toLocaleLowerCase('es').includes(query))));
   const page = Number(view.page || 1), pages = Math.max(1, Math.ceil(filtered.length / 20)), visible = filtered.slice((page - 1) * 20, page * 20);
   const selected = view.record ? assets.find(asset => asset.id === view.record) : null, quota = inventory.data?.quota;
-  useEffect(() => { report('assets', { dirty: Boolean(file || name), busy:busy||assistant.assistantBusy }); }, [file, name, busy, assistant.assistantBusy, report]);
+  useEffect(() => { report('assets', { dirty: false, busy }); }, [busy, report]);
   useEffect(() => () => { for (const controller of requests.current) controller.abort(); report('assets', { dirty: false, busy: false }); }, [report]);
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
   useEffect(() => {
@@ -257,35 +274,8 @@ function AssetsPanel({ api, view, inventory, change, report, onMutation, onRetry
   }, [inventory.data, inventory.loading, query, stateFilter]);
   const focusSearch = () => requestAnimationFrame(() => searchPanel.current?.querySelector('input[name="assetQuery"]')?.focus());
   const clearFilters = () => { change({ q: null, status: null, record: null, page: 1 }); focusSearch(); };
-  function changeName(value) { setName(value); setSlot(null); }
-  function pick(value) {
-    fileSelection.current = value ? crypto.randomUUID() : null;
-    setError(''); setSlot(null); setFile(value); setName(value?.name || '');
-    if (!value) return;
-    const image = ['image/jpeg', 'image/png', 'image/webp'].includes(value.type), video = ['video/mp4', 'video/quicktime'].includes(value.type);
-    if ((!image && !video) || value.size <= 0 || value.size > (image ? 10 : 250) * 1048576) setError('Archivo no admitido. Usa JPEG/PNG/WebP de hasta 10 MiB o MP4/MOV de hasta 250 MiB; no se admite un archivo vacío.');
-  }
-  async function upload(event) {
-    event.preventDefault(); if (locked.current || assistant.assistantBusy || !file) return; locked.current = true; setBusy(true); setError(''); setNotice('');
-    const controller = new AbortController(); requests.current.add(controller);
-    try {
-      const payload = { name: name.trim(), contentType: file.type, expectedBytes: file.size };
-      const image = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type), video = ['video/mp4', 'video/quicktime'].includes(file.type);
-      if ((!image && !video) || file.size <= 0 || file.size > (image ? 10 : 250) * 1048576) throw new Error('El tipo o tamaño del archivo no cumple los límites indicados. El servidor comprobará además su contenido real.');
-      if (!payload.name) throw new Error('Escribe un nombre para encontrar el archivo después.');
-      setPhase('Reservando espacio privado para el original y el archivo preparado para publicar (derivado)…');
-      const reserved = slot || await api(ROOT + '/assets', { method: 'POST', body: JSON.stringify({ ...payload, requestId: rid('reserve', { ...payload, selectionId: fileSelection.current, fileName: file.name, lastModified: file.lastModified }) }), signal: controller.signal });
-      setSlot(reserved); setPhase('Enviando archivo original; aún no es publicable…');
-      const uploaded = await api(`${ROOT}/assets/${reserved.id}/content`, { method: 'PUT', body: file, headers: { 'content-type': file.type, 'x-asset-version': String(reserved.version), 'x-request-id': rid(`upload:${reserved.id}`, { version: reserved.version, size: file.size, type: file.type }) }, signal: controller.signal });
-      if (!['processing', 'ready'].includes(uploaded.state)) throw new Error(uploaded.diagnostic?.message || `El archivo está en estado ${ASSET_STATES[uploaded.state] || uploaded.state}. Selecciona una carga nueva si el original no fue recibido íntegro.`);
-      fileSelection.current = null; setFile(null); setName(''); setSlot(null); if (input.current) input.current.value = '';
-      report('assets', { dirty: false, busy: false }); setNotice('Original recibido. Procesamiento en segundo plano encolado; no estará listo para usar hasta verificar el archivo preparado para publicar (derivado).');
-      await onMutation();
-    } catch (cause) { if (cause.name !== 'AbortError') { setError(`No se confirmó la carga completa. Revisa el estado guardado antes de reenviar; una carga interrumpida requiere un nuevo archivo. ${cause.message}`); onRetry(); } }
-    finally { requests.current.delete(controller); locked.current = false; setBusy(false); setPhase(''); }
-  }
   async function action(asset, actionName) {
-    if (locked.current || assistant.assistantBusy) return;
+    if (locked.current) return;
     if (actionName === 'archive' && !window.confirm(`¿Archivar «${asset.name}»? No se borran archivos ni historia, no se libera espacio ocupado y no se modifica contenido publicado. Una entrega pendiente puede impedirlo.`)) return;
     locked.current = true; setBusy(true); setError(''); const controller = new AbortController(); requests.current.add(controller);
     try {
@@ -298,7 +288,7 @@ function AssetsPanel({ api, view, inventory, change, report, onMutation, onRetry
   function renderAsset(asset, detail = false) {
     return <article className={styles.card} key={asset.id}><header className={styles.toolbar}><div><h2>{asset.name}</h2><p>{asset.kind === 'video' ? 'Video' : 'Imagen'} · {ASSET_STATES[asset.state] || asset.state}</p></div>{!detail && <button type="button" className="button subtle" disabled={busy} onClick={() => change({ record: asset.id, page })}>Ver archivo</button>}</header>
       <p>Registrada: {date(asset.createdAt)}</p>
-      {asset.aiDisclosure && <p className={styles.warning}>Generada con IA · Revisión humana requerida de producto, etiquetas, texto y afirmaciones. Su uso exige divulgación verificable; no se publica automáticamente.</p>}
+      {asset.reviewRequired && <p className={styles.warning}>Comprueba producto, etiquetas, texto y derechos al revisar la pieza; no se publica automáticamente.</p>}
       {asset.diagnostic && <p className={styles.warning}>{asset.diagnostic.message || asset.diagnostic.code}</p>}
       {asset.state === 'uploading' && <p role="status">Reserva de carga hasta {date(asset.uploadExpiresAt)}. Si la carga quedó incompleta, espera su diagnóstico o registra un nuevo archivo; la reserva no acredita que el archivo exista.</p>}
       {asset.state === 'processing' && <p role="status">El procesamiento en segundo plano está preparando y verificando el archivo. Todavía no está listo para usar.</p>}
@@ -307,15 +297,15 @@ function AssetsPanel({ api, view, inventory, change, report, onMutation, onRetry
       {detail && <dl className="summary-values"><div><dt>Archivo preparado</dt><dd>{asset.derivativeContentType || 'Todavía no disponible'} · {asset.width && asset.height ? `${asset.width} × ${asset.height}` : 'Dimensiones no informadas'}{asset.durationSeconds != null ? ` · ${asset.durationSeconds} s` : ''}</dd></div></dl>}
       {detail && asset.contentType === 'image/gif' && asset.originalSha256 && <p><a href={`${ROOT}/assets/${asset.id}/content?variant=original`} target="_blank" rel="noreferrer">Ver o guardar GIF animado original</a> · La publicación utiliza el MP4 preparado, que debes revisar.</p>}
       <details className={styles.technicalDetails}><summary>Detalles del archivo</summary><dl className="summary-values"><div><dt>Original</dt><dd>{bytes(asset.originalBytes ?? asset.expectedBytes)} · {asset.originalName || 'Nombre no informado'}</dd></div><div><dt>Archivo preparado (derivado)</dt><dd>{bytes(asset.derivativeBytes)}</dd></div><div><dt>SHA-256 del original</dt><dd>{asset.originalSha256 || 'Todavía no verificado'}</dd></div><div><dt>SHA-256 del derivado</dt><dd>{asset.derivativeSha256 || 'Todavía no verificado'}</dd></div></dl></details>
-      <div className={styles.actions}>{asset.state === 'failed' && asset.originalSha256 && asset.originalBytes > 0 && <button type="button" className="button primary" disabled={busy || assistant.assistantBusy} onClick={() => action(asset, 'retry-processing')}>Reintentar procesamiento</button>}{['ready', 'failed'].includes(asset.state) && <button type="button" className="button subtle" disabled={busy || assistant.assistantBusy} onClick={() => action(asset, 'archive')}>Archivar con confirmación</button>}</div>
+      <div className={styles.actions}>{asset.state === 'failed' && asset.originalSha256 && asset.originalBytes > 0 && <button type="button" className="button primary" disabled={busy} onClick={() => action(asset, 'retry-processing')}>Reintentar procesamiento</button>}{['ready', 'failed'].includes(asset.state) && <button type="button" className="button subtle" disabled={busy} onClick={() => action(asset, 'archive')}>Archivar con confirmación</button>}</div>
     </article>;
   }
-  return <><section className={styles.panel} inert={assistant.assistantBusy}><h2>Subir imágenes y videos</h2><p>Archivos propios en almacenamiento privado, independiente del catálogo. La generación con OpenAI se solicita por separado arriba y requiere consentimiento de costo. El original recibido no equivale a un archivo listo para usar; revisa la vista previa del archivo preparado para publicar.</p>
+  return <><section ref={input} className={styles.panel}><h2>Subir imágenes y videos</h2><p>Archivos propios en almacenamiento privado, independiente del catálogo. Espera a que la pieza esté lista para revisar el archivo que se podría publicar.</p>
     <ul><li>Imágenes JPEG/PNG/WebP hasta 10 MiB, no animadas, proporción 4:5–1,91:1 y ancho mínimo 320 px.</li><li>Videos MP4/MOV hasta 250 MiB, verticales 9:16, mínimo 540 × 960 y 3–90 segundos.</li></ul>
     <details className={styles.technicalDetails}><summary>Detalles de formatos y preparación</summary><p>Imágenes: un fotograma, hasta 40 megapíxeles; conversión a JPEG sRGB, sin ampliar y hasta 1440 px. Videos: archivo preparado H.264/AAC a 30 fps, hasta 1080 × 1920; no se inventa audio ni se recorta.</p>{quota && <p>Reservado para cargas: {bytes(quota.reservedBytes)} · Cuota total: {bytes(quota.limitBytes)}</p>}</details>
     {quota && <p>Espacio disponible: <strong>{bytes(quota.availableBytes)}</strong> · Ocupado: <strong>{bytes(quota.usedBytes)}</strong></p>}
-    <form method="post" onSubmit={upload}><fieldset disabled={busy || assistant.assistantBusy} className={styles.fieldGrid}><legend>Archivo propio</legend><label className="field">Archivo de imagen o video<input ref={input} type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,.mov" onChange={event => pick(event.target.files?.[0] || null)}/></label><Field field={{ name: 'assetName', label: 'Nombre para encontrarlo después', required: true, max: 200 }} value={name} onChange={changeName}/></fieldset><button type="button" className="button subtle" disabled={assistant.assistantBusy || busy} onClick={assistant.openAssistant}>Ayúdame con el nombre</button>{file && <p>{file.name} · {bytes(file.size)} · Se envía directamente desde el archivo, sin cargar el video completo en memoria.</p>}<div className={styles.actions}><button type="submit" className="button primary" disabled={busy || assistant.assistantBusy || !file || !name.trim()}>{busy ? 'Carga en curso…' : slot ? 'Revisar o reintentar esta carga' : 'Subir archivo'}</button>{file && <button type="button" className="button subtle" disabled={busy || assistant.assistantBusy} onClick={() => { fileSelection.current = null; setFile(null); setName(''); setSlot(null); if (input.current) input.current.value = ''; }}>Descartar selección local</button>}</div></form>
-    {phase && <p role="status">{phase}</p>}{notice && <p role="status" className={styles.notice}>{notice}</p>}{error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}</section>
+    <AdvertisingAssetUpload api={api} onInteractionStateChange={uploadReport} disabled={busy} onMutation={onMutation}/>
+    {notice && <p role="status" className={styles.notice}>{notice}</p>}{error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}</section>
     <ReadStatus state={inventory} label="imágenes, videos y espacio disponible" onRetry={onRetry}/>
     <section ref={searchPanel} className={styles.queryPanel} aria-label="Buscar y filtrar imágenes y videos"><div className={styles.filterBar}>
       <Field field={{ name: 'assetQuery', label: 'Buscar imagen o video', max: 100 }} value={view.q || ''} onChange={value => change({ q: value || null, page: 1 })}/>
@@ -323,7 +313,7 @@ function AssetsPanel({ api, view, inventory, change, report, onMutation, onRetry
     </div>{(view.q || stateFilter) ? <div className="active-filters" aria-label="Filtros de imágenes y videos">{[[view.q && 'q', 'Búsqueda', view.q], [stateFilter && 'status', 'Estado', ASSET_STATES[stateFilter]]].filter(([key]) => key).map(([key, label, value]) => <button key={key} type="button" className="filter-chip" aria-label={`Quitar filtro: ${label}: ${value}`} onClick={() => { change({ [key]: null, page: 1 }); focusSearch(); }}>{label}: {value} <span aria-hidden="true">×</span></button>)}<button type="button" className="text-button" onClick={clearFilters}>Limpiar filtros</button></div> : <p className={styles.help}>Se muestran todas las imágenes y videos</p>}</section>
     {view.record && <section className={styles.detail}><button type="button" className="button subtle" disabled={busy} onClick={() => change({ record: null, page })}>Cerrar archivo</button>{selected ? renderAsset(selected, true) : inventory.data && !inventory.loading && !inventory.error && <p role="status">El archivo no aparece en la lectura actual. Reintenta la consulta; no se sustituye por otro archivo.</p>}</section>}
     <section className={styles.stack} aria-label="Biblioteca de imágenes y videos"><h2 ref={listHeading} tabIndex={-1}>Imágenes y videos guardados</h2>{visible.map(asset => renderAsset(asset))}</section>
-    {inventory.data && !inventory.loading && !inventory.error && !visible.length && <div className={`admin-empty ${styles.empty}`}>{filtered.length ? <><h2>Esta página no tiene archivos</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : (view.q || stateFilter) ? <><h2>No hay imágenes o videos con estos filtros</h2><button type="button" className="button subtle" onClick={clearFilters}>Limpiar filtros</button></> : <><h2>Aún no hay imágenes ni videos</h2><p>Elige un archivo propio con los requisitos indicados.</p><button type="button" className="button primary" onClick={() => input.current?.focus()}>Elegir archivo</button></>}</div>}
+    {inventory.data && !inventory.loading && !inventory.error && !visible.length && <div className={`admin-empty ${styles.empty}`}>{filtered.length ? <><h2>Esta página no tiene archivos</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : (view.q || stateFilter) ? <><h2>No hay imágenes o videos con estos filtros</h2><button type="button" className="button subtle" onClick={clearFilters}>Limpiar filtros</button></> : <><h2>Aún no hay imágenes ni videos</h2><p>Elige un archivo propio con los requisitos indicados.</p><button type="button" className="button primary" onClick={() => input.current?.querySelector('input[type="file"]')?.focus()}>Elegir archivo</button></>}</div>}
     <Pagination page={page} pages={pages} total={filtered.length} disabled={busy || inventory.loading} onPage={value => change({ page: value, record: null })}/>
   </>;
 }

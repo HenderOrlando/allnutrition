@@ -78,6 +78,7 @@ export async function createSocialBrowserProvider() {
       ${checkbox('shareToFeed', 'Share Reel to feed', config.shareToFeed)}
       <button name="action" value="save">Save draft</button><button name="action" value="publish">${object.kind === 'paid' ? 'Publish campaign' : 'Publish post'}</button><button name="action" value="pause">Pause campaign</button><button name="action" value="resume">Resume campaign</button>
       </form>
+      ${state.allowCaptionEdit && object.state === 'Published' && object.channel === 'facebook' ? `<form role="form" aria-label="Edit published post text" action="/caption/${object.id}" method="post"><label for="revised-caption">Revised post text</label><textarea id="revised-caption" name="caption">${esc(config.caption)}</textarea><button>Save published post text</button></form>` : ''}
       <label>Search locations<input role="combobox" aria-autocomplete="list" oninput="searchReferences(this.value,false)"></label><label>Search interests<input role="combobox" aria-autocomplete="list" oninput="searchReferences(this.value,true)"></label><ul role="listbox" hidden></ul>
       <script>
       const catalog=${JSON.stringify(catalog)}, selected=${JSON.stringify({ regions: config.regions, cities: config.cities, interests: config.interests })};
@@ -155,12 +156,18 @@ export async function createSocialBrowserProvider() {
         if (kind !== 'paid') object.config.platforms = [kind];
         objects.set(id, object); if (state.loseCreate) { req.socket.destroy(); return; } redirect(`/draft/${id}`); return;
       }
-      const match = path.match(/^\/(draft|object|save|upload|media|insights|export)\/(\d+)$/);
+      const match = path.match(/^\/(draft|object|save|upload|media|insights|export|caption)\/(\d+)$/);
       if (!match) return send(404, chrome('<h1>Not found</h1>'));
       const [, action, id] = match;
       if (action === 'media') { const upload = uploads.get(id); if (!upload) return send(404, ''); res.writeHead(200, { 'content-type': upload.format === 'Video' ? 'video/mp4' : 'image/jpeg', 'content-length': upload.bytes.length }); res.end(upload.bytes); return; }
       const object = objects.get(id);
       if (!object) return send(404, chrome('<h1>Not found</h1>'));
+      if (action === 'caption' && req.method === 'POST') {
+        if (!state.allowCaptionEdit || object.state !== 'Published' || object.channel !== 'facebook' || !data.get('caption')) return send(409, chrome('<h1>Caption editing unavailable</h1>'));
+        object.config.caption = data.get('caption'); state.captionEditCount = (state.captionEditCount || 0) + 1;
+        if (state.loseCaptionEdit) { req.socket.destroy(); return; }
+        redirect(`/object/${id}`); return;
+      }
       if (action === 'upload' && req.method === 'POST') {
         const media = { id: String(++next), name: url.searchParams.get('name'), format: /\.mp4$/i.test(url.searchParams.get('name') || '') ? 'Video' : 'Image', sha256: createHash('sha256').update(body).digest('hex') };
         uploads.set(media.id, { ...media, bytes: body }); object.config.media = media;

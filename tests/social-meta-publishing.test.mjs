@@ -11,9 +11,9 @@ import { createMetaPublishingProvider } from './social-meta-provider.mjs';
 
 const NOW = Date.parse('2026-11-02T13:00:00Z');
 const identities = { userId: '100', businessId: '500', pageId: '200', instagramId: '300', adAccountId: 'act_400' };
-async function fixture(t, { mode = 'paid', channel = 'meta_ads', kind = 'image', objective = 'traffic', currency = 'COP', provider = null } = {}) {
+async function fixture(t, { mode = 'paid', channel = 'meta_ads', kind = 'image', objective = 'traffic', currency = 'COP', provider = null, imageMarker = 1 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'meta-publishing-'));
-  const bytes = kind === 'image' ? Buffer.from([255,216,255,224,0,16,74,70,73,70,0,1,255,217]) : Buffer.alloc(150000, 0x5a);
+  const bytes = kind === 'image' ? Buffer.from([255,216,255,224,0,16,74,70,73,70,0,imageMarker,255,217]) : Buffer.alloc(150000, 0x5a);
   const path = join(root, kind === 'image' ? 'derivative.jpg' : 'derivative.mp4');
   await writeFile(path, bytes);
   const handle = await open(path, 'r');
@@ -324,4 +324,73 @@ test('manual partial campaign linking is read-only and its durable resolution co
   const recovered = await f.connector.inspectDelivery({ delivery: { ...f.operation, remoteRefs: verified.remoteRefs }, operation: { ...pendingOperation, remoteRefs: verified.remoteRefs, resolution: { kind: 'link', acceptedContentVerification: true, specHash: f.operation.specHash } }, spec: f.spec });
   assert.equal(recovered.status, 'confirmed'); assert.equal(recovered.nextStep, 'create_adset');
   assert.equal(f.provider.requests.filter(request => request.method === 'POST').length, posts);
+});
+
+function amendment(fixture, proposal, variable, stage) {
+  const { operation, spec } = fixture, id = randomUUID();
+  return { ...operation, id, step: `amend:${id}`, state: 'prepared', progress: { amendStage: stage },
+    change: { remoteId: operation.remoteRefs.remoteId, baseHash: hash(spec), proposedHash: hash(proposal), spec: proposal, variable,
+      ...(spec.mode === 'paid' ? { budget: { budgetMinor: spec.budgetMinor, remainingMinor: spec.budgetMinor, currency: spec.currency, startAt: spec.startAt, endAt: spec.endAt } } : {}) } };
+}
+
+test('Facebook Feed edit rereads the same post and attachment; lost acknowledgement never reposts', async t => {
+  const f = await fixture(t, { mode: 'organic', channel: 'facebook' }), published = await f.prepare();
+  const proposal = { ...f.spec, caption: 'Otro mensaje revisado' }, operation = amendment(f, proposal, 'caption', 'update');
+  f.provider.state.loseResponse = { path: published.remoteRefs.postId, times: 1 };
+  await assert.rejects(() => f.connector.executeStep({ operation, spec: f.spec, beforeSend: f.beforeSend }), error => error.uncertain);
+  const previousCount = f.provider.requests.filter(request => request.method === 'POST').length;
+  const checked = await f.connector.inspectDelivery({ delivery: operation, operation: { ...operation, state: 'uncertain' }, spec: f.spec });
+  assert.equal(checked.state, 'published');
+  assert.equal(checked.remoteRefs.postId, published.remoteRefs.postId);
+  assert.equal(checked.remoteRefs.photoId, published.remoteRefs.photoId);
+  assert.equal(f.provider.requests.filter(request => request.method === 'POST').length, previousCount);
+  assert.equal(f.provider.objects.get(checked.remoteRefs.postId).message, proposal.caption);
+  await assert.rejects(() => f.connector.executeStep({ operation, spec: f.spec, beforeSend: f.beforeSend }), /Meta/);
+  assert.equal(f.provider.requests.filter(request => request.method === 'POST').length, previousCount);
+});
+
+test('paid text changes creative on the same paused ad and reconciles creative creation by operation UUID', async t => {
+  const f = await fixture(t), prepared = await f.prepare();
+  const proposal = { ...f.spec, caption: 'Texto nuevo del mismo anuncio' }, operation = amendment(f, proposal, 'caption', 'creative');
+  f.provider.state.loseResponse = { path: 'act_400/adcreatives', times: 1 };
+  await assert.rejects(() => f.connector.executeStep({ operation, spec: f.spec, beforeSend: f.beforeSend }), error => error.uncertain);
+  const recovered = await f.connector.inspectDelivery({ delivery: operation, operation: { ...operation, state: 'uncertain' }, spec: f.spec });
+  assert.equal(recovered.operationComplete, false);
+  const result = await f.connector.executeStep({ operation: { ...operation, progress: recovered.progress }, spec: f.spec, beforeSend: f.beforeSend });
+  for (const key of ['campaignId', 'adSetId', 'adId']) assert.equal(result.remoteRefs[key], prepared.remoteRefs[key]);
+  assert.notEqual(result.remoteRefs.creativeId, prepared.remoteRefs.creativeId);
+  assert.equal(result.evidence.budget.budgetMinor, f.spec.budgetMinor);
+  assert.equal(f.provider.state.activationCount, 0);
+  assert.equal(f.provider.requests.filter(request => request.method === 'POST' && request.path === 'act_400/adcreatives').length, 2);
+  const inspected = await f.connector.inspectDelivery({ delivery: { ...operation, remoteRefs: result.remoteRefs, creativeName: `social:${operation.id}:change-creative` }, spec: proposal });
+  assert.equal(inspected.state, 'ready');
+});
+
+test('paused image change reconciles lost upload without resending and replaces only the creative attachment', async t => {
+  const f = await fixture(t), next = await fixture(t, { imageMarker: 2 }), prepared = await f.prepare();
+  const proposal = { ...f.spec, assetId: next.media.assetId, assetHash: next.media.sha256, assetType: 'image' }, operation = amendment(f, proposal, 'asset', 'upload');
+  f.provider.state.loseResponse = { path: 'act_400/adimages', times: 1 };
+  await assert.rejects(() => f.connector.executeStep({ operation, spec: f.spec, media: next.media, beforeSend: f.beforeSend }), error => error.uncertain === true);
+  const observed = await f.connector.inspectDelivery({ delivery: operation, operation: { ...operation, state: 'uncertain' }, spec: f.spec });
+  assert.equal(observed.progress.amendStage, 'creative');
+  assert.equal(f.provider.requests.filter(request => request.method === 'POST' && request.path === 'act_400/adimages').length, 2);
+  const staged = await f.connector.executeStep({ operation: { ...operation, progress: observed.progress }, spec: f.spec, media: next.media, beforeSend: f.beforeSend });
+  assert.equal(staged.progress.amendStage, 'attach');
+  const result = await f.connector.executeStep({ operation: { ...operation, progress: { ...observed.progress, ...staged.progress } }, spec: f.spec, media: next.media, beforeSend: f.beforeSend });
+  assert.equal(result.state, 'ready');
+  for (const key of ['campaignId', 'adSetId', 'adId']) assert.equal(result.remoteRefs[key], prepared.remoteRefs[key]);
+  assert.notEqual(result.remoteRefs.imageHash, prepared.remoteRefs.imageHash);
+  assert.equal(f.provider.objects.get(result.remoteRefs.creativeId).object_story_spec.link_data.image_hash, observed.progress.amendImageHash);
+  assert.equal(f.provider.state.activationCount, 0);
+});
+
+test('paused placement change narrows the existing set without changing budget or creative', async t => {
+  const f = await fixture(t), prepared = await f.prepare();
+  const { instagram_positions: _instagram, ...targeting } = f.spec.targeting;
+  const proposal = { ...f.spec, placements: ['facebook_feed'], targeting: { ...targeting, publisher_platforms: ['facebook'] } };
+  const result = await f.connector.executeStep({ operation: amendment(f, proposal, 'placement', 'update'), spec: f.spec, beforeSend: f.beforeSend });
+  assert.deepEqual(result.preparedRefs, prepared.preparedRefs);
+  assert.deepEqual(f.provider.objects.get(prepared.remoteRefs.adSetId).targeting, proposal.targeting);
+  assert.equal(result.evidence.budget.budgetMinor, f.spec.budgetMinor);
+  assert.equal(f.provider.state.activationCount, 0);
 });

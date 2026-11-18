@@ -33,7 +33,7 @@ export function improvementDelivery(spec, extra = {}) {
     finalizedAt: spec.endAt || END, activatedAt: spec.startAt, publishedAt: START, publicationTimeSource: 'remote_published_at',
     integrationMethod: spec.integrationMethod, remoteId: '600', remoteRefs: { campaignId: '600', adId: '601' }, ...extra };
 }
-export function improvementMeasurement(spec, delivery, { window = spec.mode === 'paid' ? 'cumulative' : 'horizon', dimension = 'aggregate', now = CUT, values = {}, rows = [], query = null, id = `measurement-${window}-${dimension}`, fetchedAt = now } = {}) {
+export function improvementMeasurement(spec, delivery, { window = spec.mode === 'paid' ? 'cumulative' : 'horizon', dimension = 'aggregate', now = CUT, values = {}, rows = [], query = null, id = `measurement-${window}-${dimension}`, fetchedAt = now, complete = true } = {}) {
   query ||= buildSocialMetricQueries(delivery, spec, { now }).find(q => q.window === window && q.dimension === dimension);
   if (!query) throw new Error(`Fixture needs a real ${window}/${dimension} query`);
   const defaults = { impressions: exactMetric(10000, 'fixture_impressions'), reach: exactMetric(2000, 'fixture_reach'), linkClicks: exactMetric(100),
@@ -43,7 +43,7 @@ export function improvementMeasurement(spec, delivery, { window = spec.mode === 
     apiVersion: spec.integrationMethod === 'api' ? 'v26.0' : null, definitionVersion: 'fixture-improvements-v1', query, periodStart: query.windowStart, periodEnd: query.windowEnd,
     timeZone: spec.timeZone || 'UTC', scope: spec.mode, dimension, currency: spec.currency, attributionSetting: spec.mode === 'paid' ? [{ event_type: 'CLICK_THROUGH', window_days: 7 }] : null,
     actionReportTime: spec.mode === 'paid' ? 'impression' : null, entity: { type: spec.mode === 'paid' ? 'ad' : 'post', id: spec.mode === 'paid' ? delivery.remoteRefs.adId : delivery.remoteId },
-    values: dimension === 'aggregate' ? { ...defaults, ...values } : {}, rows, coverage: { complete: true, rowCount: dimension === 'aggregate' ? 1 : rows.length, reason: null }, evidence: {} }, { delivery, spec, query });
+    values: dimension === 'aggregate' ? { ...defaults, ...values } : {}, rows, coverage: { complete, rowCount: dimension === 'aggregate' ? 1 : rows.length, reason: complete ? null : 'partial_fixture_capture' }, evidence: {} }, { delivery, spec, query });
   return { id, deliveryId: delivery.id, fetchedAt, payloadHash: hash(data), ...data };
 }
 export function improvementCandidates(spec, { clicks = [150, 150, 200, 250, 300], reaches = [1000, 1000, 1000, 1000, 1000], publishedAt = '2026-10-01T05:00:00.000Z', suffix = '' } = {}) {

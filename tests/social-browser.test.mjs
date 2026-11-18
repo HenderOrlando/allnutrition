@@ -395,6 +395,36 @@ test('publicación aplicada con respuesta perdida queda incierta y lectura no re
   assert.equal(env.provider.state.publishCount, 1);
 });
 
+test('dedicated browser caption editor is gated and a lost acknowledgement only reopens the same post', async t => {
+  const env = await environment(t), control = session(), { bound } = await login(env.client, control), spec = { ...paidSpec(env.media), mode: 'organic', platforms: ['facebook'], placements: ['facebook_feed'], budgetMinor: null };
+  const published = await bound.execute({ payload: { operation: operation('publish', spec, { channel: 'facebook' }), spec, media: env.media, expectedIdentities: identities } });
+  const remoteId = published.data.remoteRefs.remoteId, mediaEvidence = published.data.evidence.mediaEvidence, delivery = { remoteId, channel: 'facebook', mediaEvidence };
+  assert.equal(published.data.evidence.editCaptionAvailable, false);
+  const revised = { ...spec, caption: 'Nueva llamada a la acción revisada' }, id = randomUUID();
+  const change = { remoteId, variable: 'caption', baseHash: hash(spec), proposedHash: hash(revised), spec: revised };
+  const edit = operation(`amend:${id}`, spec, { id, channel: 'facebook', remoteId, mediaEvidence, change });
+  const payload = { operation: edit, delivery, spec, expectedIdentities: identities };
+  await assert.rejects(bound.execute({ payload }), hasCode('PERMISSION_REQUIRED'));
+  assert.equal(env.provider.state.captionEditCount || 0, 0);
+  env.provider.state.allowCaptionEdit = true;
+  const current = await bound.inspect({ payload: { kind: 'delivery', delivery, spec, expectedIdentities: identities } });
+  assert.equal(current.data.evidence.editCaptionAvailable, true, JSON.stringify(current.data));
+  const remote = env.provider.objects.get(remoteId), attachment = remote.config.media.id;
+  const storageState = (await bound.exportState()).data.storageState;
+  env.provider.state.loseCaptionEdit = true;
+  await assert.rejects(bound.execute({ payload }), hasCode('OPERATION_UNCERTAIN'));
+  assert.equal(env.provider.state.captionEditCount, 1);
+  const inspector = (await env.restart()).forSession(control);
+  await inspector.open({ payload: { purpose: 'worker', storageState, expectedIdentities: identities } });
+  const checked = await inspector.inspect({ payload: { ...payload, kind: 'delivery', operation: { ...edit, state: 'uncertain' } } });
+  assert.equal(checked.data.evidence.specVerified, true);
+  assert.equal(checked.data.remoteRefs.remoteId, remoteId);
+  assert.equal(remote.config.media.id, attachment);
+  assert.equal(remote.config.caption, revised.caption);
+  assert.equal(env.provider.state.publishCount, 1);
+  assert.equal(env.provider.state.captionEditCount, 1);
+});
+
 test('popup fuera del origen aislado se bloquea sin visitar el destino', async t => {
   let visits = 0;
   const outside = createServer((req, res) => { visits++; res.end('forbidden'); });

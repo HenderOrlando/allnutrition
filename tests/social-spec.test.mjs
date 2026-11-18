@@ -290,3 +290,20 @@ test('una pieza generada no permite ocultar su divulgación IA aunque se cambie 
   const organic = config({ mode: 'organic', budgetMinor: 0, targetCostMinor: null, startAt: null, endAt: null, platforms: ['instagram'], placements: ['instagram_feed'], aiDisclosure: true });
   assert.equal(build(organic, connection, generated).spec.aiDisclosure, true);
 });
+
+test('la oferta no altera el contrato histórico sin selección y vincula la pieza contextual', () => {
+  const legacy = config({ mode: 'organic', objective: 'traffic', budgetMinor: 0, targetCostMinor: null, startAt: null, endAt: null, platforms: ['instagram'], placements: ['instagram_feed'], aiDisclosure: true });
+  const { spec, specHash } = build(legacy);
+  assert.equal(Object.hasOwn(spec, 'offerHash'), false);
+  assert.equal(Object.hasOwn(spec, 'offerRef'), false);
+  assert.equal(build({ ...legacy, offerRef: null, offerHash: null }).specHash, specHash);
+  const offerHash = 'b'.repeat(64);
+  const contextual = { ...asset, aiDisclosure: true, generation: { alignment: { mode: 'organic', objective: 'traffic', offerHash } } };
+  const selected = { ...legacy, offerHash, offerSnapshot: { primary: { title: 'Dúo' }, gift: null } };
+  const reviewed = build(selected, connection, contextual);
+  assert.notEqual(reviewed.specHash, specHash);
+  assert.deepEqual(reviewed.spec, { ...spec, offerHash });
+  for (const changes of [{ objective: 'whatsapp' }, { mode: 'paid' }, { offerHash: 'c'.repeat(64) }, { offerHash: null }]) {
+    assert.throws(() => build({ ...selected, ...changes }, connection, contextual), /otra modalidad, oferta u objetivo/);
+  }
+});

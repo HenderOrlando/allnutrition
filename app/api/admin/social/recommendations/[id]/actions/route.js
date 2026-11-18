@@ -10,5 +10,5 @@ export async function POST(request, { params }) { try {
   const action = text(input.action, 'Acción', 80, true);
   delete input.action;
   const result = await socialRecommendationAction(await db(), (await params).id, action, input, session.user.id);
-  return json(result, action === 'duplicate-from-recommendation' ? 201 : 200);
+  return json(result, action === 'confirm-in-place' ? 202 : ['duplicate-from-recommendation','prepare-in-place'].includes(action) ? 201 : 200);
 } catch (error) { return errorResponse(error); } }

@@ -243,12 +243,15 @@ try {
   result.reports = { artifacts, playwright: join(artifacts, 'playwright-report'), screenshots: join(artifacts, 'test-results') };
   secrets.push(values.POSTGRES_PASSWORD, values.DB_APP_PASSWORD, values.ADMIN_PASSWORD);
   console.log(`Entorno privado: ${generated.envFile}`);
-  const httpsPort = await availablePort(9443), fixturePort = await availablePort(13339);
+  const httpsPort = await availablePort(9443), fixturePort = await availablePort(13339), dbFixturePort = await availablePort(15432);
   values.APP_URL = `https://localhost:${httpsPort}`;
   values.HTTPS_PORT = String(httpsPort);
   writeFileSync(generated.envFile, readFileSync(generated.envFile, 'utf8').replace(/^APP_URL=.*$/m, `APP_URL=${values.APP_URL}`).replace(/^HTTPS_PORT=.*$/m, `HTTPS_PORT=${httpsPort}`), { mode: 0o600 });
   const fixtureOverride = join(artifacts, 'assistant-fixture.compose.yaml');
-  writeFileSync(fixtureOverride, `services:\n  web:\n    ports:\n      - "127.0.0.1:${fixturePort}:3339"\n`, { mode: 0o600 });
+  // The DB stays on its internal network. This test-only relay forwards raw
+  // PostgreSQL TLS to the loopback Playwright runner without terminating it.
+  const dbRelay = "const net=require('node:net');net.createServer(client=>{const db=net.connect(5432,'db');db.on('error',()=>client.destroy());client.on('error',()=>db.destroy());db.pipe(client).pipe(db)}).listen(5432,'0.0.0.0')";
+  writeFileSync(fixtureOverride, `services:\n  web:\n    ports:\n      - "127.0.0.1:${fixturePort}:3339"\n  db-relay:\n    image: ${values.APP_IMAGE}\n    networks: [backend, frontend]\n    ports:\n      - "127.0.0.1:${dbFixturePort}:5432"\n    command: ${JSON.stringify(['node', '-e', dbRelay])}\n`, { mode: 0o600 });
   result.assistantFixture = { control: `http://127.0.0.1:${fixturePort}`, baseUrl: 'http://127.0.0.1:3339/v1' };
   dockerEnv = { ...process.env };
   // Compose shell precedence must never borrow credentials/paths from a user's deployment.
@@ -279,7 +282,7 @@ try {
 
   stopWorker();
   compose(['run', '--rm', 'checks', 'node', 'tests/e2e/setup.mjs'], 'Fixture PostgreSQL con doble guarda');
-  compose(['up', '-d', '--wait', '--wait-timeout', '120', 'web', 'proxy'], 'Arranque del contenedor compilado y HTTPS');
+  compose(['up', '-d', '--wait', '--wait-timeout', '120', 'web', 'proxy', 'db-relay'], 'Arranque del contenedor compilado, HTTPS y réplica de acceso PostgreSQL local');
   compose(['exec', '-d', 'web', 'node', 'tests/assistant-provider-fixture.mjs', '--port', '3339', '--host', '0.0.0.0'], 'Proveedor sintético Ali privado y autenticado');
   const root = JSON.parse(compose(['exec', '-T', 'proxy', 'wget', '-qO-', 'http://127.0.0.1:2019/pki/ca/local'], 'Exportación de CA HTTPS pública', { quiet: true, logOutput: false }).stdout).root_certificate;
   ensure(typeof root === 'string' && root.includes('BEGIN CERTIFICATE'), 'Caddy no devolvió su certificado raíz público.');
@@ -295,7 +298,9 @@ try {
   // Full serial recovery scenarios wait for the real worker; the verified workbook/dialog subset alone exceeded one hour.
   run('npm', ['run', 'test:e2e'], 'E2E escritorio/móvil y fronteras HTTP', {
     timeout: 10800000,
-    env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', ALI_FIXTURE_CONTROL_URL: result.assistantFixture.control, ALI_FIXTURE_BASE_URL: result.assistantFixture.baseUrl, PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright, PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json') },
+    env: { ...process.env, E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', ALI_FIXTURE_CONTROL_URL: result.assistantFixture.control, ALI_FIXTURE_BASE_URL: result.assistantFixture.baseUrl, PLAYWRIGHT_OUTPUT_DIR: result.reports.screenshots, PLAYWRIGHT_HTML_OUTPUT_DIR: result.reports.playwright, PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json'),
+      TEST_DATABASE_URL: `postgresql://postgres:${values.POSTGRES_PASSWORD}@localhost:${dbFixturePort}/allnutrition_test`,
+      TEST_ALLOW_DATABASE_RESET: 'allnutrition_test', TEST_DB_SSL: 'verify', TEST_DB_CA_CERT: '', TEST_DB_CA_CERT_FILE: join(values.DEPLOY_TLS_DIR, 'ca.crt') },
   });
   passed('Playwright desktop/mobile: upload local, render público, límites HTTP, autenticación y CSRF');
 

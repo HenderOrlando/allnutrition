@@ -1,6 +1,6 @@
 import { authorize, db, json, errorResponse } from '@/lib/server.mjs';
 import { getSocialResults } from '@/lib/business/social-metrics.mjs';
-import { getSocialAnalysis } from '@/lib/business/social-analysis.mjs';
+import { readSocialAnalysis } from '@/lib/business/social-analysis.mjs';
 import { getSocialBusinessResult } from '@/lib/business/social-links.mjs';
 import { fail } from '@/lib/validation-core.mjs';
 
@@ -14,7 +14,7 @@ export async function GET(request) { try {
   const campaignId = params.get('campaignId');
   if (!campaignId) return json({ ...metrics, analysis: null, business: null });
   const [analysis, business] = await Promise.all([
-    getSocialAnalysis(store, campaignId, { asOf: metrics.asOf }),
+    readSocialAnalysis(store, campaignId, { asOf: metrics.asOf }),
     getSocialBusinessResult(store, campaignId, { asOf: metrics.asOf })
   ]);
   const commercialStale = analysis.commercialStale || analysis.businessRevision != null && analysis.businessRevision !== business.businessRevision;

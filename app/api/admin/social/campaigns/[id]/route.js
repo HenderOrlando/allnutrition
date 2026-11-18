@@ -1,6 +1,6 @@
 import { authorize, db, json, jsonBody, errorResponse } from '@/lib/server.mjs';
 import { getSocialCampaign, saveSocialCampaign } from '@/lib/business/social.mjs';
-import { getSocialAnalysis } from '@/lib/business/social-analysis.mjs';
+import { readSocialAnalysis } from '@/lib/business/social-analysis.mjs';
 import { fail } from '@/lib/validation-core.mjs';
 
 export const runtime = 'nodejs';
@@ -8,7 +8,7 @@ export async function GET(request, { params }) { try {
   await authorize(request);
   const store = await db(), id = (await params).id;
   const campaign = await getSocialCampaign(store, id);
-  return json({ ...campaign, analysis: await getSocialAnalysis(store, id) });
+  return json({ ...campaign, analysis: await readSocialAnalysis(store, id) });
 } catch (error) { return errorResponse(error); } }
 
 export async function PATCH(request, { params }) { try {

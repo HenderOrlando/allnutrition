@@ -44,6 +44,15 @@ small.help { display: block; margin-top: 4px; font-weight: 400; overflow-wrap: a
 .choiceList { display: grid; gap: 12px; padding: 0; list-style: none; }
 .choiceList > label, .choiceList > li, .choiceList > button { border: 1px solid var(--admin-control-border); border-radius: 12px; padding: 12px; min-width: 0; text-align: start; }
 .badge { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--admin-line); border-radius: 999px; padding: 4px 9px; font-size: 12px; max-width: 100%; overflow-wrap: anywhere; }
+.offerList { list-style: none; display: grid; gap: 8px; padding: 0; margin: 0; }
+.offerCard, .offerChoice { min-width: 0; display: flex; gap: 12px; align-items: flex-start; padding: 12px; border: 1px solid var(--admin-line); border-radius: 12px; }
+.offerChoice { width: 100%; text-align: start; background: var(--admin-surface); color: inherit; cursor: pointer; }
+.offerChoice:disabled { opacity: .65; cursor: not-allowed; }
+.offerChoice small { display: block; margin-top: 4px; }
+.offerCard > div, .offerChoice > span { min-width: 0; overflow-wrap: anywhere; }
+.offerCard p { margin: 0 0 4px; }
+.offerCard ul { margin-block: 4px; padding-inline-start: 22px; }
+.offerCard img, .offerChoice img, .cardThumb { object-fit: contain; flex: 0 0 auto; max-width: 100%; border-radius: 8px; }
 .steps { display: flex; gap: 8px; flex-wrap: wrap; padding: 0; list-style: none; }
 .stepButton { display: flex; gap: 8px; align-items: center; min-height: 44px; text-align: start; border: 1px solid var(--admin-control-border); border-radius: 12px; background: var(--admin-surface); color: inherit; padding: 10px 12px; cursor: pointer; }
 .stepActive { outline: 2px solid currentColor; outline-offset: 2px; font-weight: 700; }
@@ -72,6 +81,7 @@ small.help { display: block; margin-top: 4px; font-weight: 400; overflow-wrap: a
   .workspace { gap: 16px; }
   .card, .panel, .detail, .dialogHeader, .dialogBody, .guide, .queryPanel { padding: 16px; }
   .fieldGrid, .filterBar { grid-template-columns: minmax(0, 1fr); }
+  .workspace .summaryGrid { grid-template-columns: minmax(0, 1fr); }
   .steps { display: grid; grid-template-columns: minmax(0, 1fr); }
   .stepButton { width: 100%; }
   .actions { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; width: 100%; }

@@ -8,6 +8,7 @@ import { getBusinessSettings } from '../lib/business/settings.mjs';
 import { recordExpense } from '../lib/business/expenses.mjs';
 import { preparePayroll } from '../lib/business/payroll.mjs';
 import { saveSocialCampaign, getSocialCampaign } from '../lib/business/social.mjs';
+import { getSocialOffer } from '../lib/business/social-offers.mjs';
 import { getShipment, saveShipment } from '../lib/business/shipments.mjs';
 import { formatMoneyMinor } from '../lib/business/money.mjs';
 import { serializeAssistantForm, serializeAssistantHumanAcknowledgements, assistantEconomicFieldKind } from '../lib/assistant/forms.mjs';
@@ -740,8 +741,12 @@ export async function runAssistantActionsContracts(t, factory) {
   await t.test('human campaign disclosure survives canonical revision, diff, payload hash and the original draft handler', async t => {
     const f = await fixture(t, factory);
     const draft = await saveSocialCampaign(f.store, { requestId: randomUUID(), name: 'Declaración humana QA', mode: 'organic', objective: 'reach', platforms: [], caption: 'Texto anterior', headline: '', aiDisclosure: false }, f.session.user.id);
+    const selected = await product(f, { orderable: true, flavor: 'Cacao' });
+    const offer = await getSocialOffer(f.store, 'product', selected.id);
+    const offerRef = { primary: { id: selected.id, kind: 'product', factsHash: offer.factsHash }, gift: null };
+    await assert.rejects(() => proposal(f, { target: 'campaign-draft', entityId: draft.id, patch: { offerRef } }), /offerRef/);
     const prepared = await proposal(f, { target: 'campaign-draft', entityId: draft.id, patch: { caption: 'Texto corregido visible' } });
-    const payload = { id: draft.id, version: draft.version, caption: 'Texto corregido visible', aiDisclosure: true };
+    const payload = { id: draft.id, version: draft.version, caption: 'Texto corregido visible', aiDisclosure: true, offerRef };
     const reviewed = await reviseAssistantProposal(f.store, f.session, { proposalId: prepared.proposal.id, version: prepared.proposal.version, requestId: randomUUID(), formBinding: prepared.binding, payload, humanAcknowledgements: serializeAssistantHumanAcknowledgements('campaign-draft', payload) });
     assert.notEqual(reviewed.proposal.payloadHash, prepared.proposal.payloadHash);
     assert.ok(reviewed.proposal.humanDiff.some(change => change.field === 'aiDisclosure' && change.before === false && change.after === true));
@@ -749,6 +754,8 @@ export async function runAssistantActionsContracts(t, factory) {
     assert.equal(committed.result.state, 'draft');
     const row = await f.store.db.get(`SELECT data FROM ${f.store.t('social_campaigns')} WHERE id=?`, [draft.id]);
     assert.equal(JSON.parse(row.data).aiDisclosure, true);
+    assert.deepEqual(JSON.parse(row.data).offerRef, offerRef);
+    assert.equal((await getSocialCampaign(f.store, draft.id)).offerSnapshot.primary.flavor, 'Cacao');
   });
   await t.test('human-only onboarding never prefills invented money or opening dates, but accepts exact COP inputs without executing', async t => {
     const f = await fixture(t, factory, { basics: true }), { account, year } = f.business, date = `${year}-09-10`;

@@ -147,7 +147,7 @@ export function createMetaPublishingProvider({ now = Date.now(), appId = '42', u
       return finish({ success: true });
     }
     if (method === 'POST' && owner === adAccountId && edge === 'adimages') {
-      if (!file || file.key !== 'filename' || !/^social:[\da-f-]{36}:image$/.test(body.name || '')) return invalid();
+      if (!file || file.key !== 'filename' || !/^social:[\da-f-]{36}:(?:change-)?image$/.test(body.name || '')) return invalid();
       const bytes = Buffer.from(await file.value.arrayBuffer()), imageHash = createHash('md5').update(bytes).digest('hex');
       objects.set(imageHash, { id: imageHash, hash: imageHash, name: body.name, type: 'image', account_id: adAccountNumeric });
       return finish({ images: { 'derivative.jpg': { hash: imageHash, name: body.name } } });
@@ -177,7 +177,7 @@ export function createMetaPublishingProvider({ now = Date.now(), appId = '42', u
       return finish({ id });
     }
     if (method === 'POST' && owner === adAccountId && ['campaigns', 'adsets', 'adcreatives', 'ads'].includes(edge)) {
-      if (!/^social:[\da-f-]{36}:(?:campaign|adset|creative|ad)$/.test(body.name || '') || [...objects.values()].some(object => object.name === body.name)) return invalid();
+      if (!/^social:[\da-f-]{36}:(?:campaign|adset|creative|ad|change-creative)$/.test(body.name || '') || [...objects.values()].some(object => object.name === body.name)) return invalid();
       const id = nextId();
       if (edge === 'campaigns') {
         if (body.status !== 'PAUSED' || !['OUTCOME_ENGAGEMENT', 'OUTCOME_TRAFFIC', 'OUTCOME_AWARENESS'].includes(body.objective) || body.special_ad_categories?.length !== 0) return invalid();
@@ -204,6 +204,11 @@ export function createMetaPublishingProvider({ now = Date.now(), appId = '42', u
     }
     if (method === 'POST' && !edge && objects.has(owner)) {
       const object = objects.get(owner);
+      if (Object.keys(body).length === 1 && object.type === 'post' && typeof body.message === 'string' && object.from?.id === pageId) { object.message = body.message; return finish({ success: true }); }
+      if (Object.keys(body).length === 1 && objects.get(object.campaign_id)?.status === 'PAUSED') {
+        if (object.type === 'ad' && objects.get(body.creative?.creative_id)?.type === 'creative') { object.creative = { id: body.creative.creative_id }; return finish({ success: true }); }
+        if (object.type === 'adset' && body.targeting?.publisher_platforms?.length) { object.targeting = clone(body.targeting); return finish({ success: true }); }
+      }
       if (!['campaign', 'adset', 'ad'].includes(object.type) || !['ACTIVE', 'PAUSED'].includes(body.status) || Object.keys(body).length !== 1) return invalid();
       if (object.type === 'campaign' && body.status === 'ACTIVE') {
         const children = [...objects.values()].filter(item => item.campaign_id === object.id);

@@ -5,26 +5,26 @@ const topics = [
   {
     id: 'start', title: 'Empezar y guardar una idea',
     steps: [
-      'Elige Crear publicación; puedes empezar sin cuenta conectada ni archivo.',
-      'Pon un nombre reconocible para encontrar la idea después.',
-      'Usa Guardar borrador y retómalo cuando quieras; la cuenta y la imagen o video pueden añadirse después.',
+      'Elige Crear publicidad y decide entre post sin inversión y campaña pagada.',
+      'Busca la referencia exacta por presentación, sabor o SKU. Puedes anunciar solo la marca. Si añades un obsequio a un producto o combo, escribe para qué compra aplica.',
+      'Guardar borrador solo requiere un nombre; puedes añadir cuenta, redes y pieza después.',
     ],
-    example: 'Creatina · noviembre · Instagram',
+    example: 'Conseguir consultas por WhatsApp sobre Dúo Cacao con muestra de vainilla, «Solo con Dúo». La muestra no forma parte del contenido normal del combo.',
   },
   {
     id: 'prepare', title: 'Preparar y aprobar',
     steps: [
-      'Recorre los cinco pasos para elegir cuenta, objetivo, imagen o video, texto y destinos; Continuar no guarda.',
-      'Revisa la configuración y consulta una estimación: sus fuentes están separadas y los datos faltantes no son promesas.',
-      'Guardar borrador no publica: aprobar una publicación sin inversión sí autoriza publicarla; aprobar un anuncio pagado solo lo prepara, sin activar gasto.',
+      'El recorrido es Qué anunciar → Preparar contenido → Revisar y publicar. Continuar y Anterior no guardan, publican ni solicitan imágenes.',
+      'Sube o elige una foto, úsala tal cual si está lista, o prepara una variante con indicaciones. Por ejemplo: «Aclara el fondo, conserva la etiqueta y la condición Solo con Dúo». El original nunca se sustituye automáticamente.',
+      'Revisa la oferta exacta, los destinos y la estimación. En orgánico, aprobar autoriza publicar o programar. En pauta, primero se prepara sin activar; autorizar inversión es otra decisión.',
     ],
   },
   {
     id: 'organize', title: 'Encontrar y organizar',
     steps: [
-      'En Publicaciones, busca por nombre y combina tipo y estado; Más filtros ofrece Red y Objetivo.',
-      'Los chips muestran los criterios aplicados: quita uno sin perder los demás o usa Limpiar filtros; busca imágenes y videos por nombre y estado en su biblioteca.',
-      'Espera Lista para usar y revisa Ver archivo antes de elegirlo; archivar conserva historia y archivos, no borra ni libera espacio.',
+      'En Publicaciones y campañas, busca por nombre; Más filtros ofrece Red y Objetivo.',
+      'Desde la tarjeta puedes retomar un borrador, comprobar la publicación o ver el rendimiento de esa pieza.',
+      'En Biblioteca, espera Lista para revisar y abre la vista previa. Archivar conserva historia y archivos: no borra ni libera espacio.',
     ],
   },
   {
@@ -47,9 +47,9 @@ const topics = [
   {
     id: 'results', title: 'Entender resultados y mejorar',
     steps: [
-      'En Resultados revisa fuente, período, moneda y cobertura; no disponible o desactualizado no equivale a cero ni las personas se suman entre redes.',
-      'Presupuesto autorizado, gasto reportado por Meta, gastos vinculados y pagos son magnitudes distintas; los vínculos con pedidos no prueban que la publicidad causó las ventas.',
-      'Actualizar vista solo lee datos locales; Pedir actualización a Meta solicita datos al proveedor y Crear borrador con esta idea prepara una revisión nueva, sin publicar ni autorizar inversión.',
+      'Ver rendimiento abre esa pieza. Para el ejemplo de WhatsApp, revisa conversaciones y costo por conversación solo si se reportaron. Cero, sin dato y aún es pronto no significan lo mismo.',
+      'Cambiar esta pieza afecta solo el destino comprobable que revisaste; una nueva variante no hereda los comentarios ni resultados. Ambas alternativas requieren aprobación humana y en pauta nunca reactivan gasto.',
+      'En Qué aprendimos, compara la misma métrica y período según el criterio de la prueba. Si no hay datos comparables, no se puede aislar la mejora ni atribuir ventas. Actualizar vista solo lee los datos locales.',
     ],
   },
 ];
@@ -61,7 +61,7 @@ export default function AdvertisingGuide({ tab = 'campaigns' }) {
   const ordered = first ? [topics.find(topic => topic.id === first), ...topics.filter(topic => topic.id !== first)] : topics;
   return <details className={styles.guide}>
     <summary>Cómo usar Publicidad</summary>
-    <p className={finance.guideRoutine}>Guarda una idea, prepárala cuando quieras y revisa antes de autorizar. Abre solo el tema que necesites.</p>
+    <p className={finance.guideRoutine}>Crea la pieza, revisa dónde saldrá, mide su objetivo y prueba una mejora cuando los datos la sustenten.</p>
     <p>Leer esta guía no guarda, publica ni autoriza inversión.</p>
     {ordered.map(topic => <details className={finance.guideTopic} key={topic.id}>
       <summary>{topic.title}</summary>

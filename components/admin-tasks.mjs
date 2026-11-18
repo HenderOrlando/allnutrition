@@ -30,7 +30,7 @@ export const adminTaskGroups = [
     { id: 'cash-report', label: 'Informe de caja', description: 'Saldos y movimientos al corte del informe.', view: { section: 'reports', tab: 'cash' } },
   ] },
   { id: 'advertising', label: 'Publicidad', icon: 'chart', description: 'Prepara publicaciones, organiza imágenes y videos y revisa sus resultados.', tasks: [
-    { id: 'prepare-publication', label: 'Crear publicación', description: 'Basta un nombre para guardar un borrador y retomarlo; guardar no publica ni autoriza gasto.', view: { section: 'advertising', tab: 'campaigns', record: 'new' } },
+    { id: 'prepare-publication', label: 'Crear publicidad', description: 'Basta un nombre para guardar un borrador y retomarlo; guardar no publica ni autoriza gasto.', view: { section: 'advertising', tab: 'campaigns', record: 'new' } },
     { id: 'advertising-campaigns', label: 'Revisar publicaciones', description: 'Buscar borradores y revisar estados por red, fechas y solicitudes pendientes.', view: { section: 'advertising', tab: 'campaigns' } },
     { id: 'advertising-assets', label: 'Subir imágenes y videos', description: 'Cargar archivos propios, esperar su preparación y revisar la vista previa privada.', view: { section: 'advertising', tab: 'assets' } },
     { id: 'advertising-results', label: 'Revisar resultados', description: 'Revisar lo informado por cada red, datos faltantes y registros del negocio por separado.', view: { section: 'advertising', tab: 'results' } },

@@ -1,5 +1,12 @@
 # Verificación v3 — administración de negocio
 
+## Ali · continuidad entre fases · verificación de publicación posterior
+
+- El candidato `2f2ad2647ef32cb2ad6c37f59b4622ce768f8d2c` aprobó CI [43571467779](https://github.com/HenderOrlando/allnutrition/actions/runs/43571467779) y una aceptación nativa nueva Linux/amd64 con **17 compuertas**, sin reutilización de contratos. El runner social y la restauración de respaldo real con el candidato también aprobaron.
+- Ese candidato no se promovió: el preflight encontró falta de espacio y reinicios de workers. Posteriormente se retiraron los clones propios y la caché de build con autorización; las imágenes y respaldos se conservaron.
+- La publicación posterior de Publicidad v14 incluye el commit de Ali. El 17 de noviembre se compararon los SHA-256 de `lib/assistant/engine.mjs` y `lib/assistant/repository.mjs` dentro de los contenedores activos de web y scheduler: ambos coincidían con el código de Ali del candidato. La web ejecutaba `sha256:2ccdf408e6ea325300ec7e2d0820ad5e2550593ab64a362ba548ec6fb644f7b8`; scheduler y consumidor navegador, `sha256:1edf00d36941a065cd51255ea929749da92be45bfa4dc26f78a4af604fd6b05f`. Esta comparación verifica esos dos archivos, no una nueva prueba funcional de un proveedor real.
+- Evidencia privada del candidato no promovido: `.test-data/ali-release-20261114T074424Z-2f2ad26/` y `/home/allnutrition/ali-recoverable-20261114T074424Z-2f2ad26/`. El ensayo y respaldo final de la publicación v14 son los documentados en la sección siguiente, no los del candidato anterior.
+
 ## Publicidad · producción v14 · 17 de noviembre de 2026 (UTC)
 
 - Aplicación `7af05b7303c38471554e33db2c39d5c5be3043c2`: [CI completa aprobada, 72/72 E2E](https://github.com/HenderOrlando/allnutrition/actions/runs/43946256398). La ejecución nativa independiente aprobó los contratos completos SQLite/PostgreSQL y 71/72 E2E; el fallo restante fue la espera de cinco segundos de `load` tras iniciar sesión, con respuesta 200 y navegación a `/admin` confirmadas en la traza.
@@ -35,7 +42,7 @@
 
 - Node **24.14.1**, SQLite en memoria y proveedor sintético. Reejecución final de `node --test tests/assistant-engine.test.mjs tests/assistant-work.test.mjs`: **31/31 aprobadas**, cero fallos, cancelaciones u omisiones.
 - La primera ejecución detectó aserciones obsoletas sobre contexto histórico y el presupuesto rápido; se ajustaron para exigir síntesis previa como contexto, relectura actual antes de citar y parcialidad cuando quedan páginas. La ejecución final cubrió esos contratos, invalidación al cambiar la fuente y el recorrido de 65 productos Unicode en varias ampliaciones.
-- PostgreSQL, build, E2E y aceptación nativa `amd64` no se ejecutaron para esta corrección. Docker local es `linux/aarch64`, distinto de producción; la verificación de este cambio es local y no está desplegado. El proveedor sintético valida protocolo/recuperación, no calidad de redacción de un proveedor real.
+- En esta comprobación local no se ejecutaron PostgreSQL, build, E2E ni aceptación nativa `amd64`. La aceptación y publicación posteriores constan al principio de este documento. El proveedor sintético valida protocolo/recuperación, no calidad de redacción de un proveedor real.
 - El recorrido de **65 productos Unicode** atravesó más de un presupuesto aceptado y terminó conservando el objetivo, el alcance y los hallazgos del primer y último registro, sin reenviar fragmentos ya analizados. Cada fase recibió su síntesis fundamentada previa; el cierre por presupuesto conservó esa síntesis.
 - Sustitución de fuente durante la lectura y antes de aceptar otra ampliación: resultados actuales sin mezcla de versiones, progreso sin doble conteo y síntesis antigua no reutilizada. Los nueve contratos de persistencia también aprobaron, incluidos leases, aislamiento por propietario, detención y revocación.
 

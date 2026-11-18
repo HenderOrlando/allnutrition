@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { hash, insertRow } from '../lib/business/commands.mjs';
-import { analyzeSocialCampaign, prepareSocialAnalysisRequest, getSocialAnalysis, buildSocialHistoricalForecast, readSocialComparableSamplesTx } from '../lib/business/social-analysis.mjs';
+import { analyzeSocialCampaign, prepareSocialAnalysisRequest, getSocialAnalysis, readSocialAnalysis, buildSocialHistoricalForecast, readSocialComparableSamplesTx } from '../lib/business/social-analysis.mjs';
 import { processSocialAnalysisTurn } from '../lib/business/social-analysis-jobs.mjs';
 import { queueSocialAnalysisTx } from '../lib/business/social-analysis-queue.mjs';
 import { claimJob, finishJob } from '../lib/business/job-leases.mjs';
 import { socialCampaignAction, socialRecommendationAction, saveSocialCampaign } from '../lib/business/social.mjs';
 import { saveSocialLink, getSocialBusinessResult } from '../lib/business/social-links.mjs';
+import { getSocialLearnings } from '../lib/business/social-learnings.mjs';
 import { createShipment, recordShipmentEvent } from '../lib/business/shipments.mjs';
 import { recordCollection } from '../lib/business/collections.mjs';
 import { recordExpense } from '../lib/business/expenses.mjs';
@@ -47,6 +48,17 @@ async function createRecognizedOrder(f, basics) {
 }
 
 const cases = [
+  ['local reads are side-effect free; a new incomplete capture at the same cut makes the proposal non-applicable', async store => {
+    const f = await createImprovementStoreFixture(store), analysis = await analyze(f), rec = analysis.recommendations.find(item => item.ruleKey === 'weak_link_ctr');
+    assert.equal((await readSocialAnalysis(store, f.campaignId, { asOf: CUT })).status, 'current');
+    await f.addMeasurement({ fetchedAt: CUT, now: CUT, complete: false });
+    assert.equal((await readSocialAnalysis(store, f.campaignId, { asOf: CUT })).stale, true);
+    assert.equal(await jobRow(store, f.campaignId), null);
+    const history = await getSocialLearnings(store, { campaignId: f.campaignId, limit: '1' });
+    assert.ok(history.learnings.length);
+    assert.equal(await jobRow(store, f.campaignId), null);
+    await assert.rejects(() => socialRecommendationAction(store, rec.id, 'duplicate-from-recommendation', { requestId: id(), version: rec.version, evidenceHash: rec.evidenceHash }, f.actorId, { now: CUT }), { status: 409 });
+  }],
   ['identity is deterministic per coherent evidence and cutoff; replay does not duplicate evaluation or affect commerce', async store => {
     const f = await createImprovementStoreFixture(store), firstRequest = await prepare(f), before = await commercialFingerprint(store);
     assert.deepEqual(await prepare(f), firstRequest);
@@ -189,9 +201,13 @@ const cases = [
         await f.addMeasurement({ window: 'previous_3d', values: { impressions: exactMetric(2000, 'fixture_impressions'), reach: exactMetric(1000, 'fixture_reach'), linkClicks: exactMetric(20) } });
         await f.addMeasurement({ window: 'recent_3d', values: { impressions: exactMetric(2000, 'fixture_impressions'), reach: exactMetric(500, 'fixture_reach'), linkClicks: exactMetric(16) } });
       }
-      const rec = await recommendation(f, ruleKey), input = { version: rec.version, requestId: id() };
+      const rec = await recommendation(f, ruleKey), input = { version: rec.version, evidenceHash: rec.evidenceHash, requestId: id() };
       assert.equal(rec.proposedChange.type, changeType);
       await patchData(store, 'social_campaigns', f.campaignId, { forecastId: f.forecastId, remoteRefs: { campaignId: '600' }, preparedRefs: { adId: '601' }, preflight: { remoteDraftRef: '900' }, acceptance: { investmentAccepted: true }, rightsAccepted: true });
+      // The link commands queued analysis. Finish that generation before acting
+      // on its persisted evidence, just as the application requires.
+      await queue(store, f.campaignId, { now: CLOCK, asOf: CUT, requestedBy: f.actorId });
+      await processSocialAnalysisTurn(store, { now: CLOCK, maxCampaigns: 1 });
       const before = await commercialFingerprint(store);
       const originalLinks = await store.db.all(`SELECT * FROM ${store.t('social_order_links')} WHERE campaign_id=? ORDER BY order_id`, [f.campaignId]);
       const originalExpenses = await store.db.all(`SELECT * FROM ${store.t('social_expense_links')} WHERE campaign_id=? ORDER BY expense_id`, [f.campaignId]);
@@ -205,7 +221,8 @@ const cases = [
       assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t('social_expense_links')} WHERE campaign_id=? ORDER BY expense_id`, [f.campaignId]), originalExpenses);
       for (const key of ['publishAt', 'startAt', 'endAt']) assert.equal(child[key], null);
       for (const key of ['forecastId', 'forecast', 'remoteRefs', 'preparedRefs', 'preflight', 'acceptance', 'rightsAccepted']) assert.equal(child[key], undefined, key);
-      if (changeType === 'copy') assert.equal(child.caption, ''); else assert.equal(child.assetId, null);
+      assert.equal(child.caption, f.spec.caption);
+      assert.equal(child.assetId, f.spec.assetId);
       assert.equal(child.recommendationInstructions.needsConfirmation, true);
       assert.equal(child.recommendationInstructions.ruleKey, ruleKey);
       assert.equal(child.recommendationInstructions.changeType, changeType);
@@ -244,7 +261,7 @@ const cases = [
   }],
   ['a confirmed child completes its stored evaluation without calling greater spend and raw volume an improvement', async store => {
     const f = await createImprovementStoreFixture(store), rec = await recommendation(f);
-    const child = await socialRecommendationAction(store, rec.id, 'duplicate-from-recommendation', { version: rec.version, requestId: id() }, f.actorId, { now: CUT });
+    const child = await socialRecommendationAction(store, rec.id, 'duplicate-from-recommendation', { version: rec.version, evidenceHash: rec.evidenceHash, requestId: id() }, f.actorId, { now: CUT });
     await saveSocialCampaign(store, { id: child.id, version: child.version, requestId: id(), caption: 'Texto diferente aportado para esta observación',
       budgetMinor: f.spec.budgetMinor * 2, startAt: '2026-11-03T05:00:00.000Z', endAt: '2026-11-10T05:00:00.000Z' }, f.actorId, { now: CUT });
     const cut = '2026-11-10T12:00:00.000Z', current = await row(store, 'social_campaigns', child.id);

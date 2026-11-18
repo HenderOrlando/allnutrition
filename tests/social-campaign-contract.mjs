@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import { entity, hash, insertRow } from '../lib/business/commands.mjs';
 import { saveSocialCampaign, socialCampaignAction, getSocialCampaign, getSocialOperation, queueSocialBrowserPreflight } from '../lib/business/social.mjs';
 import { buildSocialSpec, buildSocialDraftSpec } from '../lib/business/social-spec.mjs';
+import { getSocialOffer, listSocialOffers, resolveSocialOffer } from '../lib/business/social-offers.mjs';
 import { saveCredentials } from '../lib/social/credentials.mjs';
 import { META_PERMISSIONS } from '../lib/social/config.mjs';
 import { claimJob } from '../lib/business/job-leases.mjs';
@@ -93,6 +94,71 @@ async function validatedPreflight(f, campaign) {
   return { campaign: await get(f.store, 'social_campaigns', campaign.id), operationId: id, ref, mediaEvidence };
 }
 const cases = [
+  ['la oferta revisada conserva variante, composición y condición y congela la aprobación', async (store, t) => {
+    const f = await setup(store, t);
+    const product = (slug, flavor) => store.save('products', { slug, title: 'Proteína', status: 'draft', orderable: true, flavor, presentation: '500 g', stockQuantity: 10, price: 45000, sku: slug });
+    const cacao = await product('qa-cacao', 'Cacao'), vainilla = await product('qa-vainilla', 'Vainilla');
+    const combo = await store.save('combos', { slug: 'duo-qa', title: 'Dúo', status: 'draft', orderable: true, price: 73000, conditions: 'Presentación individual', items: [{ productId: cacao.id, quantity: 2 }] });
+    const gift = await store.save('products', { slug: 'muestra-qa', title: 'Muestra', status: 'draft', productType: 'gift', price: 0, items: [{ productId: cacao.id, quantity: 1 }] });
+    const page = await listSocialOffers(store, { query: 'proteína', kind: 'product', limit: 1 });
+    assert.equal(page.nextOffset, 1);
+    const second = await listSocialOffers(store, { query: 'proteína', kind: 'product', offset: page.nextOffset, limit: 1 });
+    assert.deepEqual([...page.offers, ...second.offers].map(item => item.id), [cacao.id, vainilla.id].sort());
+    assert.equal(second.nextOffset, null);
+    assert.deepEqual((await listSocialOffers(store, { query: 'vAiNiLlA', kind: 'product' })).offers.map(item => item.id), [vainilla.id]);
+    assert.deepEqual((await listSocialOffers(store, { query: 'DÚO', kind: 'combo' })).offers.map(item => item.id), [combo.id]);
+    assert.deepEqual((await listSocialOffers(store, { query: '%_' })).offers, []);
+    const [primary, extra] = await Promise.all([getSocialOffer(store, 'combo', combo.id), getSocialOffer(store, 'gift', gift.id)]);
+    const offerRef = { primary: { id: combo.id, kind: 'combo', factsHash: primary.factsHash }, gift: { id: gift.id, factsHash: extra.factsHash, condition: 'Solo con Dúo' } };
+    await patchData(store, 'records', cacao.id, { stockQuantity: 2, stockReserved: 0 }, { bump: true });
+    assert.equal((await getSocialOffer(store, 'combo', combo.id)).selectable, true);
+    assert.equal((await getSocialOffer(store, 'gift', gift.id)).selectable, true);
+    await assert.rejects(() => resolveSocialOffer(store, offerRef), /compra y el obsequio juntos/);
+    await patchData(store, 'records', cacao.id, { stockQuantity: 7, sku: 'SKU-OPERATIVO-NUEVO', unitCostMinor: 999 }, { bump: true });
+    assert.equal((await getSocialOffer(store, 'combo', combo.id)).factsHash, primary.factsHash);
+    assert.equal((await getSocialOffer(store, 'gift', gift.id)).factsHash, extra.factsHash);
+    const incomplete = await f.create({ offerRef: { ...offerRef, gift: { ...offerRef.gift, condition: '' } } });
+    const invalidDetail = await getSocialCampaign(store, incomplete.id, f.options);
+    assert.match(invalidDetail.validation.offerError, /condición/i);
+    const incompleteForecast = await f.forecast(incomplete.id);
+    await assert.rejects(() => f.action(incomplete, 'approve-organic', f.approvalInput(incompleteForecast)), /condición/i);
+    const campaign = await f.create({ offerRef });
+    const edit = (record, changes) => saveSocialCampaign(store, { id: record.id, version: record.version, requestId: randomUUID(), ...changes }, f.actorId, f.options);
+    const edited = await edit(campaign, { caption: 'Texto conservando la oferta' });
+    const detail = await getSocialCampaign(store, edited.id, f.options);
+    const snapshot = detail.offerSnapshot;
+    assert.deepEqual(detail.offerRef, offerRef);
+    assert.deepEqual(snapshot.primary.components, [{ id: cacao.id, title: 'Proteína', flavor: 'Cacao', presentation: '500 g', image: null, quantity: 2 }]);
+    assert.deepEqual([snapshot.primary.price, snapshot.gift.price, snapshot.gift.condition], [73000, 0, 'Solo con Dúo']);
+    assert.equal(detail.offerHash, hash(snapshot));
+    const removed = await edit(await f.create({ offerRef }), { offerRef: null });
+    assert.equal((await f.build(removed.id)).spec.offerHash, undefined);
+    const reviewed = await f.forecast(edited.id);
+    const changed = await edit(edited, { offerRef: { ...offerRef, gift: { ...offerRef.gift, condition: 'Solo este fin de semana con Dúo' } } });
+    await assert.rejects(() => f.action(changed, 'approve-organic', f.approvalInput(reviewed)), { status: 409 });
+    const pristine = await f.create({ offerRef }), forecast = await f.forecast(pristine.id);
+    const approved = await f.action(pristine, 'approve-organic', f.approvalInput(forecast));
+    const frozen = (await rows(store, 'social_revisions', approved.id))[0];
+    assert.deepEqual(JSON.parse(frozen.data).offerSnapshot, snapshot);
+    for (const patch of [{ price: 75000 }, { price: 73000, items: [{ productId: vainilla.id, quantity: 3 }] }]) {
+      await patchData(store, 'records', combo.id, patch, { bump: true });
+      await assert.rejects(() => f.action(changed, 'approve-organic', f.approvalInput(reviewed)), /ficha comercial/i);
+      await assert.rejects(() => f.create({ offerRef }), { status: 409 });
+    }
+    assert.deepEqual(await rows(store, 'social_deliveries', changed.id), []);
+    const inventory = await get(store, 'records', cacao.id);
+    assert.equal(inventory.stockQuantity, 7);
+    assert.equal(inventory.stockReserved, 0);
+    const historical = await getSocialCampaign(store, approved.id);
+    assert.equal(historical.validation.offerError, undefined);
+    assert.deepEqual(historical.revisions[0].offerSnapshot, snapshot);
+    const duplicate = await f.action(await f.action(approved, 'cancel'), 'duplicate');
+    const copied = await getSocialCampaign(store, duplicate.id, f.options);
+    assert.deepEqual(copied.offerSnapshot, snapshot);
+    assert.match(copied.validation.offerError, /ficha comercial/i);
+    assert.deepEqual(await rows(store, 'social_revisions', duplicate.id), []);
+    assert.deepEqual((await rows(store, 'social_revisions', approved.id))[0], frozen);
+  }],
   ['una preparación privada de otra app/secreto/callback exige verificar de nuevo aunque la cuenta se revalide', async (store, t) => {
     const f = await setup(store, t, { method: 'browser', mode: 'paid', objective: 'traffic' });
     const campaign = await f.create(), prepared = await validatedPreflight(f, campaign), forecast = await f.forecast(campaign.id);
