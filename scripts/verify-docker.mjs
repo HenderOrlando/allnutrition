@@ -306,7 +306,15 @@ function prepareChecks(web) {
     mkdirSync(compiled, { mode: 0o700 });
     const containerId = run('docker', ['create', '--name', `${project}-build-context`, '--label', `com.docker.compose.project=${project}`, '--network', 'none', web.imageId], 'Derivación de checks desde la web aceptada', { quiet: true }).stdout.trim();
     ensure(/^[a-f0-9]{64}$/.test(containerId), 'Identidad inesperada de contenedor de build');
-    try { run('docker', ['cp', `${containerId}:/app/.next/.`, compiled], 'Copiar .next sin recompilar'); }
+    try {
+      // The checks image never runs Next; browser requests use the sealed web
+      // container. Copy compiled assets, not the generated dependency links
+      // that resolve outside .next, nor standalone/cache/build tools.
+      for (const entry of ['BUILD_ID', 'app-path-routes-manifest.json', 'build-manifest.json', 'images-manifest.json',
+        'prerender-manifest.json', 'required-server-files.json', 'routes-manifest.json', 'server', 'static']) {
+        run('docker', ['cp', `${containerId}:/app/.next/${entry}`, compiled], `Copiar salida compilada: ${entry}`, { quiet: true });
+      }
+    }
     finally { run('docker', ['container', 'rm', containerId], 'Retiro del contexto compilado', { cleanup: true, quiet: true }); }
     options.push('--build-context', `accepted_web=${compiled}`);
   }
