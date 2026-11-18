@@ -1,5 +1,4 @@
-// Invoked over stdin inside the compiled web container of the isolated test
-// project. The regular scheduler stays off; provider traffic stays in memory.
+// Run this stored fixture from /app inside the compiled web container.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';

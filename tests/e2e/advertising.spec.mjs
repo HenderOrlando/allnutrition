@@ -640,7 +640,30 @@ async function seedResults(f) {
       data: JSON.stringify({ proposedChange: { type: 'copy', text: 'Texto claro en la prueba anterior' }, primaryEvidence: { channel: 'facebook' }, observation: 'Prueba anterior para esta oferta.',
         successCriterion: { text: 'Aumentar interacciones al mismo horizonte.', metric: 'organicResponse', operator: 'gt', target: 0.1 }, conclusion: 'improved',
         evaluation: { complete: true, conclusion: 'improved', metric: 'organicResponse', parentValue: 0.08, childValue: 0.14, asOf: at } }), ...common });
-    return { id: draft.id, name, recommendationId };
+    return { id: draft.id, name, recommendationId, campaignIds: [draft.id], connectionId, assetId, forecastId, deliveryId, captureId, productId: product.id };
+  } finally { await store.close(); }
+}
+
+async function cleanupResults(record) {
+  const env = testDatabaseEnv(), store = new Store(await openPostgres(databaseConfig(env)));
+  try {
+    await store.transaction(async tx => {
+      const campaigns = record.campaignIds;
+      const campaignMarks = campaigns.map(() => '?').join(',');
+      const deliveryMarks = [record.deliveryId].map(() => '?').join(',');
+      const campaignParams = campaigns, deliveryParams = [record.deliveryId];
+      await tx.db.run(`DELETE FROM ${tx.t('social_operations')} WHERE campaign_id IN (${campaignMarks})`, campaignParams);
+      await tx.db.run(`DELETE FROM ${tx.t('social_measurements')} WHERE delivery_id IN (${deliveryMarks})`, deliveryParams);
+      for (const table of ['social_recommendations','social_forecasts']) {
+        await tx.db.run(`DELETE FROM ${tx.t(table)} WHERE campaign_id IN (${campaignMarks})`, campaignParams);
+      }
+      await tx.db.run(`DELETE FROM ${tx.t('social_deliveries')} WHERE id=?`, [record.deliveryId]);
+      await tx.db.run(`DELETE FROM ${tx.t('social_revisions')} WHERE campaign_id IN (${campaignMarks})`, campaignParams);
+      await tx.db.run(`DELETE FROM ${tx.t('social_campaigns')} WHERE id IN (${campaignMarks})`, campaignParams);
+      await tx.db.run(`DELETE FROM ${tx.t('social_assets')} WHERE id=?`, [record.assetId]);
+      await tx.db.run(`DELETE FROM ${tx.t('social_connections')} WHERE id=?`, [record.connectionId]);
+      await tx.db.run(`DELETE FROM ${tx.t('records')} WHERE kind='products' AND id=?`, [record.productId]);
+    });
   } finally { await store.close(); }
 }
 
@@ -649,7 +672,8 @@ test('publicidad guiada: preparar un cambio aquí o una variante sin enviar', as
   const base = new URL(info.project.use.baseURL);
   if (base.protocol !== 'https:' || !['localhost', '127.0.0.1'].includes(base.hostname)) throw new Error('La prueba de cambios requiere la aplicación HTTPS descartable local.');
   const f = await advertisingFixture(page, info), record = await seedResults(f);
-  await page.goto(`/admin?section=advertising&tab=results&record=${record.id}&resultsFocus=recommendations`);
+  try {
+    await page.goto(`/admin?section=advertising&tab=results&record=${record.id}&resultsFocus=recommendations`);
   await expect(page.getByRole('heading', { name: record.name, exact: true })).toBeVisible();
   await expect(page.getByText('0 reportado', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Cambiar solo Facebook · Probar aquí' }).click();
@@ -660,6 +684,7 @@ test('publicidad guiada: preparar un cambio aquí o una variante sin enviar', as
   const same = await prepared;
   expect(same.status(), await same.text()).toBe(201);
   const change = await same.json();
+  record.campaignIds.push(change.id);
   await expectView(page, { tab: 'campaigns', record: change.id });
   const local = await f.campaign(change.id);
   expect(local.applicationMode).toBe('same');
@@ -676,6 +701,7 @@ test('publicidad guiada: preparar un cambio aquí o una variante sin enviar', as
   const response = await created;
   expect(response.status(), await response.text()).toBe(201);
   const newDraft = await response.json();
+  record.campaignIds.push(newDraft.id);
   await expectView(page, { tab: 'campaigns', record: newDraft.id });
   const child = await f.campaign(newDraft.id);
   expect(child.caption).toBe('Texto actual de la publicación');
@@ -695,4 +721,5 @@ test('publicidad guiada: preparar un cambio aquí o una variante sin enviar', as
     await expect(page.locator('textarea[name="caption"]')).toHaveValue(child.caption);
     expect(reads.writes).toEqual([]);
   } finally { reads.stop(); }
+  } finally { await cleanupResults(record); }
 });
