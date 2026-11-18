@@ -34,6 +34,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Preflight de herramientas de aceptación
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -r "$HARNESS/tests/native/prepare-acceptance.mjs"
+          test -r "$HARNESS/tests/native/browser-acceptance.mjs"
+          node --check "$HARNESS/tests/native/prepare-acceptance.mjs"
+          node --check "$HARNESS/tests/native/browser-acceptance.mjs"
+
       - name: Checkout del código sellado
         uses: actions/checkout@v4
         with:
@@ -70,8 +79,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sudo chmod 0755 "$NATIVE_ROOT"
           sudo install -d -m 0700 -o 1000 -g 1000 \
-            "$NATIVE_ROOT/home" "$ACCEPTED_OUTPUT"
+            "$NATIVE_ROOT/home" "$NATIVE_ROOT/tools" "$ACCEPTED_OUTPUT"
+          sudo install -m 0600 -o 1000 -g 1000 \
+            "$HARNESS/tests/native/prepare-acceptance.mjs" \
+            "$NATIVE_ROOT/tools/prepare-acceptance.mjs"
+          sudo install -m 0600 -o 1000 -g 1000 \
+            "$HARNESS/tests/native/browser-acceptance.mjs" \
+            "$NATIVE_ROOT/tools/browser-acceptance.mjs"
+          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
+            setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+            node --check "$NATIVE_ROOT/tools/prepare-acceptance.mjs"
+          sudo env PATH="$PATH" HOME="$NATIVE_ROOT/home" \
+            setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+            node --check "$NATIVE_ROOT/tools/browser-acceptance.mjs"
 
       - name: Instalar dependencias y sellar fuente exacta
         shell: bash
@@ -93,7 +115,7 @@ jobs:
             WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
             setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$GITHUB_WORKSPACE/harness/tests/native/prepare-acceptance.mjs" prepare
+            node "$NATIVE_ROOT/tools/prepare-acceptance.mjs" prepare
 
       - name: Ejecutar el verificador Docker completo sin wrappers
         shell: bash
@@ -117,7 +139,7 @@ jobs:
             ACCEPTED_OUTPUT="$ACCEPTED_OUTPUT" SOURCE_COMMIT="$SOURCE_COMMIT" \
             WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            node "$GITHUB_WORKSPACE/harness/tests/native/prepare-acceptance.mjs" core
+            node "$NATIVE_ROOT/tools/prepare-acceptance.mjs" core
 
       - name: Construir el runner Linux amd64
         shell: bash
@@ -156,7 +178,7 @@ jobs:
             WORKFLOW_COMMIT="$WORKFLOW_COMMIT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
             setpriv --reuid=1000 --regid=1000 --groups="$docker_gid" -- \
-            node "$GITHUB_WORKSPACE/harness/tests/native/prepare-acceptance.mjs" bundle
+            node "$NATIVE_ROOT/tools/prepare-acceptance.mjs" bundle
 
       - name: Publicar artefacto aceptado (solo éxito)
         if: success()
