@@ -202,10 +202,10 @@ jobs:
           fi
           evidence="$run_root/evidence.json"
           status=0
-          "${clean[@]}" "${buildkit[@]}" CI=true NEXT_TELEMETRY_DISABLED=1 \
+          cat -- "$cache_input" | "${clean[@]}" "${buildkit[@]}" CI=true NEXT_TELEMETRY_DISABLED=1 \
             PLAYWRIGHT_BROWSERS_PATH="$run_root/browsers" NATIVE_ROOT="$run_root/native" \
             RELEASE_CANDIDATE="$run_root/candidate" RELEASE_EVIDENCE_FILE="$evidence" RELEASE_MODE="$RELEASE_MODE" \
-            "${identity[@]}" node scripts/verify-docker.mjs --plan "$RELEASE_ROOT/plan.json" < "$cache_input" || status=$?
+            "${identity[@]}" node scripts/verify-docker.mjs --plan "$RELEASE_ROOT/plan.json" || status=$?
           if "${clean[@]}" "${identity[@]}" test -f "$evidence"; then
             umask 077
             "${clean[@]}" "${identity[@]}" cat -- "$evidence" > "$RELEASE_ROOT/private/evidence.json"

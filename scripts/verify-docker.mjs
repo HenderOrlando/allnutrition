@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import https from 'node:https';
-import { closeSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDeploymentEnv } from './deploy-env.mjs';
@@ -48,7 +48,7 @@ function sanitize(text) {
 }
 function run(binary, args, label, { env = cleanEnv, cwd = candidate, timeout = 120000, allowFailure = false, quiet = false, cleanup = false, logOutput = true, maxBuffer = 64 * 1024 * 1024 } = {}) {
   if (interrupted && !cleanup) throw new Error('Verificación interrumpida.');
-  const executed = spawnSync(binary, args, { cwd, env, encoding: 'utf8', timeout, maxBuffer });
+  const executed = spawnSync(binary, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout, maxBuffer });
   const output = sanitize(`${executed.stdout || ''}${executed.stderr || ''}`);
   if (artifacts) appendFileSync(join(artifacts, 'commands.log'), `\n## ${label}\n${logOutput ? output : ''}`, { mode: 0o600 });
   if (!quiet) { console.log(`\n${label}`); if (logOutput && output.trim()) console.log(output.trim()); }
@@ -283,12 +283,9 @@ function buildImage(tag, scope, options) {
   const env = { ...cleanEnv };
   if (cache === 'read' || cache === 'write') {
     if (!buildKitCredentials) {
-      // CI redirects the private credential file to stdin. No candidate process
-      // inherits the verifier's stdin or receives either credential in its env.
-      let credentials;
-      try { credentials = JSON.parse(readFileSync(0, 'utf8')); }
-      finally { closeSync(0); }
-      const { ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token } = credentials;
+      // Drain the one-way credential pipe. fd 0 must stay occupied for libuv.
+      // Candidate subprocesses use ignored stdin and the stripped environment.
+      const { ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token } = JSON.parse(readFileSync(0, 'utf8'));
       ensure(typeof url === 'string' && url && typeof token === 'string' && token, 'Credenciales efímeras de BuildKit ausentes');
       secrets.push(token);
       buildKitCredentials = { ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token, ACTIONS_CACHE_SERVICE_V2: 'true' };
