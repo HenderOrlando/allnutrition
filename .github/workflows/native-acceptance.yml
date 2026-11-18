@@ -83,6 +83,7 @@ jobs:
             npx playwright install --with-deps chromium
           )
           sudo chown -R 1000:1000 "$NATIVE_ROOT"
+          sudo chown -R 1000:1000 "$PLAYWRIGHT_BROWSERS_PATH"
           sudo chmod 0700 "$NATIVE_ROOT"
           sudo chmod 0755 "$CANDIDATE"
           docker_gid="$(getent group docker | cut -d: -f3)"
