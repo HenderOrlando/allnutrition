@@ -250,6 +250,10 @@ Para el corte comercial v3 ejecutar `npm run verify:docker -- --interactive`. Ma
 
 `artifacts/result.json` registra ID, plataforma, release, pruebas y exit code. Los reportes Playwright quedan en las rutas indicadas allí. `operational.json`, dumps, env y claves son privados: contienen datos/sesiones o secretos; no adjuntarlos a CI, incidencias ni soporte. El workflow utiliza el mismo verificador; una ejecución local no demuestra que CI remoto haya pasado.
 
+### Aceptación transferible por GitHub Actions
+
+El workflow manual `.github/workflows/native-acceptance.yml` acepta un commit explícito de `main`, ejecuta el `verify:docker` completo sin wrappers en Ubuntu Linux/amd64 con Node 24 y luego construye/verifica el runner aislado sobre la misma fuente e IDs. Solo tras aprobar ambas etapas publica por un día un archivo Docker inmutable de ambas imágenes, manifiesto de hashes y comprobantes JSON allowlisted; no incluye entornos, dumps, capturas, logs ni claves. No despliega ni reemplaza la aceptación del ensayo de recuperación productivo en clon, la copia congelada ni las verificaciones del corte. Transferir sin rebuild y comprobar ambos IDs en destino antes de continuar.
+
 ## 2. Configuración privada e idempotencia
 
 ```sh
