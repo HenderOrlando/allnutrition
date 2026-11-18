@@ -78,7 +78,7 @@ async function guestProof(uuid, mode) {
     if (!ready) await delay(2000);
   }
   requireThat(ready, 'El agente del invitado de auditoría no inició.');
-  const launch = 'set -eu; at=$(mktemp -d /run/allnutrition-driver-XXXXXX); trap \'umount "$at"; rmdir "$at"\' EXIT; test "$(blockdev --getro /dev/vdb)" = 1; mount -t iso9660 -o ro,nodev,noexec,nosuid /dev/vdb "$at"; /usr/local/bin/node "$at/driver.mjs"';
+  const launch = 'set -eu; at=$(mktemp -d /run/allnutrition-driver-XXXXXX); trap \'umount "$at"; rmdir "$at"\' EXIT; test "$(/usr/sbin/blockdev --getro /dev/vdb)" = 1; mount -t iso9660 -o ro,nodev,noexec,nosuid /dev/vdb "$at"; /usr/local/bin/node "$at/driver.mjs"';
   const pid = agent('guest-exec', { path: '/bin/bash', arg: ['-c', launch], 'capture-output': true })?.return?.pid;
   requireThat(Number.isSafeInteger(pid) && pid > 0, 'No se pudo iniciar el arnés de auditoría en el invitado.');
   const deadline = Date.now() + (mode === 'pair' ? 30 * 60_000 : 5 * 60 * 60_000);
@@ -86,9 +86,10 @@ async function guestProof(uuid, mode) {
     const status = agent('guest-exec-status', { pid })?.return;
     if (status?.exited) {
       const detail = Buffer.from(status['err-data'] || '', 'base64').toString('utf8').trim();
-      const failureStage = /^audit-guest:[a-z-]+$/.test(detail) ? ` ${detail}` : '';
+      const code = /^audit-guest:(?:isolation|media|images|sources|pair|npm|chromium|builder|verification|evidence):(?:exec-missing|exec-timeout|exec-error|command-failed|invalid-evidence|guard-rejected|pair-timeout|pair-compose|pair-docker|pair-identity|pair-sandbox|pair-service|pair-cleanup|pair-rejected|(?:bundle|db|image)-load(?:-space|-archive|-unpack)?|image-inspect|image-identity)$/;
+      const failure = !status['err-truncated'] && code.test(detail) ? detail : 'audit-guest:launcher:failed';
       requireThat(status.exitcode === 0 && !status['out-truncated'] && typeof status['out-data'] === 'string' && status['out-data'].length < 170_000,
-        `La suite del invitado falló (${status.exitcode ?? status.signal ?? 'sin evidencia'}).${failureStage}`);
+        `La suite del invitado falló (${status.exitcode ?? status.signal ?? 'sin evidencia'}). ${failure}`);
       return JSON.parse(Buffer.from(status['out-data'], 'base64').toString('utf8'));
     }
     await delay(5000);

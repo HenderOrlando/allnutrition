@@ -10,10 +10,57 @@ const services = ['web', 'scheduler', 'social-browser-worker', 'social-browser',
 const files = ['compose.yaml', 'compose.nginx.yaml', 'deploy/pg_hba.conf', 'deploy/postgres-entrypoint.sh', 'deploy/social-browser-seccomp.json'];
 const env = { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8', DOCKER_HOST: 'unix:///var/run/docker.sock' };
 let stage = 'isolation';
-function command(bin, argv, { timeout = 120_000, capture = false, cwd, environment = env } = {}) {
-  const result = spawnSync(bin, argv, { cwd, env: environment, encoding: 'utf8', maxBuffer: 512 * 1024, stdio: ['ignore', capture ? 'pipe' : 'ignore', 'ignore'], timeout });
-  if (result.error || result.status !== 0) throw Error(`${stage}:${bin}:${result.error?.code ?? result.status ?? result.signal}`);
+class GuestFailure extends Error {}
+function command(bin, argv, { timeout = 120_000, capture = false, cwd, environment = env, reportFailure = false, captureError = false } = {}) {
+  const result = spawnSync(bin, argv, { cwd, env: environment, encoding: 'utf8', maxBuffer: 512 * 1024, stdio: ['ignore', capture ? 'pipe' : 'ignore', captureError ? 'pipe' : 'ignore'], timeout });
+  if (result.error) throw new GuestFailure(result.error.code === 'ENOENT' ? 'exec-missing' : result.error.code === 'ETIMEDOUT' ? 'exec-timeout' : 'exec-error');
+  if (reportFailure) return result;
+  if (result.status !== 0) throw new GuestFailure('command-failed');
   return result.stdout;
+}
+
+function mountInput(mount) {
+  assert.equal(command('/usr/sbin/blockdev', ['--getro', '/dev/vdb'], { capture: true }).trim(), '1');
+  assert.equal(command('/usr/sbin/blkid', ['-s', 'LABEL', '-o', 'value', '/dev/vdb'], { capture: true }).trim(), 'ALLNUTRITION_AUDIT');
+  command('mount', ['-t', 'iso9660', '-o', 'ro,nosuid,nodev,noexec', '/dev/vdb', mount]);
+}
+
+function pairProof({ status, stdout }) {
+  let proof;
+  try { proof = JSON.parse(stdout); }
+  catch { throw new GuestFailure('invalid-evidence'); }
+  if (status === 0 && proof?.accepted === true && proof.zeroOwnedLeftovers === true) {
+    return { accepted: true, zeroOwnedLeftovers: true, images: proof.images };
+  }
+  const message = proof?.failure?.message;
+  // Only classifications derived from known native failure messages cross QGA.
+  if (typeof message === 'string') {
+    if (/^Command failed: .+ \(ETIMEDOUT\); see private diagnostics$/.test(message)) throw new GuestFailure('pair-timeout');
+    if (/^Command failed: docker compose \([0-9]+\); see private diagnostics$/.test(message)) throw new GuestFailure('pair-compose');
+    if (/^Command failed: docker [a-z-]+ \([0-9]+\); see private diagnostics$/.test(message)) throw new GuestFailure('pair-docker');
+    if (/^(?:Missing image identity: |Running image identity mismatch: )/.test(message) || ['Immutable Linux/amd64 node image required', 'PostgreSQL image identity mismatch', 'Loaded image identity changed during pair acceptance'].includes(message)) throw new GuestFailure('pair-identity');
+    if (/^Runner (?:sandbox isolation weakened|seccomp differs from product|tmpfs\/shm isolation mismatch|egress must be internal)$/.test(message)) throw new GuestFailure('pair-sandbox');
+    if (/^(?:Worker heartbeats|Continued worker heartbeats|Runner key readiness) did not reach required state$/.test(message)) throw new GuestFailure('pair-timeout');
+    if (/^Private probe failed in (?:web|scheduler|social-browser(?:-worker)?); see failed-probe diagnostics$/.test(message)) throw new GuestFailure('pair-service');
+  }
+  throw new GuestFailure(proof?.zeroOwnedLeftovers === false ? 'pair-cleanup' : 'pair-rejected');
+}
+
+function loadImage(archive, failure) {
+  const result = command('docker', ['image', 'load', '--quiet', '--input', archive],
+    { timeout: 30 * 60_000, captureError: true, reportFailure: true });
+  if (result.status === 0) return;
+  const error = result.stderr;
+  if (/no space left on device|disk quota exceeded/i.test(error)) throw new GuestFailure(`${failure}-space`);
+  if (/unexpected eof|invalid tar|invalid checksum|failed to decompress|archive\/tar/i.test(error)) throw new GuestFailure(`${failure}-archive`);
+  if (/failed to (?:extract|unpack)|snapshotter/i.test(error)) throw new GuestFailure(`${failure}-unpack`);
+  throw new GuestFailure(failure);
+}
+
+function verifyImage(id) {
+  const result = command('docker', ['image', 'inspect', '--format', '{{.Id}} {{.Os}} {{.Architecture}}', id], { capture: true, reportFailure: true });
+  if (result.status !== 0) throw new GuestFailure('image-inspect');
+  if (result.stdout.trim() !== `${id} linux amd64`) throw new GuestFailure('image-identity');
 }
 async function hash(path) {
   const digest = createHash('sha256');
@@ -43,9 +90,7 @@ async function auditGuest() {
     mkdirSync(mount, { mode: 0o700 });
     mkdirSync(writable, { mode: 0o700 });
     // The transient domain defines vdb as the only input, readonly and without a share.
-    assert.equal(command('blockdev', ['--getro', '/dev/vdb'], { capture: true }).trim(), '1');
-    assert.equal(command('blkid', ['-s', 'LABEL', '-o', 'value', '/dev/vdb'], { capture: true }).trim(), 'ALLNUTRITION_AUDIT');
-    command('mount', ['-t', 'iso9660', '-o', 'ro,nosuid,nodev,noexec', '/dev/vdb', mount]);
+    mountInput(mount);
     mounted = true;
     const snapshotPath = join(mount, 'snapshot.json');
     assert(lstatSync(snapshotPath).isFile() && lstatSync(snapshotPath).size < 65_536);
@@ -65,10 +110,10 @@ async function auditGuest() {
     }
 
     stage = 'images';
-    if (bundleIds.length) command('docker', ['image', 'load', '--input', join(mount, 'bundle.tar.gz')], { timeout: 30 * 60_000 });
+    if (bundleIds.length) loadImage(join(mount, 'bundle.tar.gz'), 'bundle-load');
     for (const id of ids) {
-      if (!bundleIds.includes(id)) command('docker', ['image', 'load', '--input', join(mount, `image-${id.slice(7)}.tar.gz`)], { timeout: 30 * 60_000 });
-      assert.equal(command('docker', ['image', 'inspect', '--format', '{{.Id}} {{.Os}} {{.Architecture}}', id], { capture: true }).trim(), `${id} linux amd64`);
+      if (!bundleIds.includes(id)) loadImage(join(mount, `image-${id.slice(7)}.tar.gz`), id === manifest.services.db.imageId ? 'db-load' : 'image-load');
+      verifyImage(id);
     }
     stage = 'sources';
     const paths = new Map();
@@ -90,12 +135,11 @@ async function auditGuest() {
     const builder = 'allnutrition-audit';
     const testEnv = { ...env, HOME: home, CI: 'true', NATIVE_ROOT: writable, BUILDX_BUILDER: builder, RELEASE_CONFIG_ROOT: config, RELEASE_EVIDENCE_FILE: evidence,
       RELEASE_SERVICE_ROOTS: JSON.stringify(serviceSources), PLAYWRIGHT_BROWSERS_PATH: join(writable, 'chromium'), NEXT_TELEMETRY_DISABLED: '1' };
-    const execute = (program, argv, timeout, capture = false) => command('setpriv', ['--reuid=1000', '--regid=1000', `--groups=${dockerGid}`, '--no-new-privs', '--', program, ...argv],
-      { timeout, cwd: candidate, environment: testEnv, capture });
+    const execute = (program, argv, timeout, options = {}) => command('setpriv', ['--reuid=1000', '--regid=1000', `--groups=${dockerGid}`, '--no-new-privs', '--', program, ...argv],
+      { timeout, cwd: candidate, environment: testEnv, ...options });
     if (mode === 'pair') {
       stage = 'pair';
-      const output = execute('node', ['tests/native/browser-acceptance.mjs', 'pair', manifestPath], 900_000, true);
-      return JSON.parse(output.trim());
+      return pairProof(execute('node', ['tests/native/browser-acceptance.mjs', 'pair', manifestPath], 900_000, { capture: true, reportFailure: true }));
     }
     stage = 'npm';
     execute('npm', ['ci'], 600_000);
@@ -117,7 +161,8 @@ async function auditGuest() {
 try {
   process.umask(0o077);
   console.log(JSON.stringify(await auditGuest()));
-} catch {
-  console.error(`audit-guest:${stage}`);
+} catch (error) {
+  const code = error instanceof GuestFailure ? error.message : error instanceof SyntaxError ? 'invalid-evidence' : 'guard-rejected';
+  console.error(`audit-guest:${stage}:${code}`);
   process.exitCode = 1;
 }
