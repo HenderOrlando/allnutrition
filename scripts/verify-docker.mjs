@@ -9,7 +9,7 @@ import { createDeploymentEnv } from './deploy-env.mjs';
 import { createInterface } from 'node:readline';
 import { imageTag, requiredChecks, sha40 } from './release-impact.mjs';
 import { pgGroups, units, configFiles, isNodeTest } from './release-impact-matrix.mjs';
-import { browserFilters, organicCase, readPlan } from './release-test-plan.mjs';
+import { browserFilters, nodeSandboxed, organicCase, playwrightFailures, readPlan } from './release-test-plan.mjs';
 import { setupGuidedImageFixture, setupOrganicApprovalFixture } from '../tests/e2e/acceptance-fixtures.mjs';
 
 const harness = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -300,9 +300,11 @@ function buildImage(tag, scope, options) {
   run('docker', ['buildx', 'build', '--load', '--provenance=false', '--tag', tag, ...flags, ...options, candidate], `Build Docker: ${scope}`, { timeout: 5400000, env, logOutput: !cache });
   return tagged(tag);
 }
-function prepareChecks(web) {
+function prepareChecks(web, sandboxed) {
   const target = web ? 'checks-with-web' : 'checks';
   const options = ['--file', join(harness, 'Dockerfile.checks'), '--target', target, '--build-context', `heka_contract=${join(candidate, 'desktop/providers')}`];
+  if (sandboxed.length) options.push('--build-arg', 'CHECKS_CHROMIUM=1');
+  if (sandboxed.includes('tests/social-browser.test.mjs')) options.push('--build-arg', 'CHECKS_FFMPEG=1');
   if (web) {
     const compiled = join(artifacts, 'compiled-web');
     mkdirSync(compiled, { mode: 0o700 });
@@ -327,7 +329,10 @@ function nodeChecks(files, idFor) {
   for (const file of files) {
     const start = performance.now();
     const special = file === 'tests/heka-browser.mjs';
-    const output = run('node', special ? [file] : ['--test', '--test-reporter=tap', file], file, { timeout: 7200000 });
+    const command = special ? [file] : ['--test', '--test-reporter=tap', file];
+    const output = nodeSandboxed(file)
+      ? compose(['run', '--rm', '--no-deps', '--pull', 'never', 'checks', 'node', ...command], file, { timeout: 7200000 })
+      : run('node', command, file, { timeout: 7200000 });
     const count = special ? 1 : tapCount(output.stdout, file);
     total += count;
     if (idFor) record(idFor(file), start, count);
@@ -363,11 +368,19 @@ function pgChecks(groups, separate) {
 function testOptions(tag, extraEnv, args) {
   const outputFile = join(artifacts, `playwright-${tag}.json`);
   const output = run('node', ['node_modules/@playwright/test/cli.js', 'test', ...args, '--reporter=json'], `Playwright: ${tag}`, {
-    timeout: 10800000, logOutput: false,
+    timeout: 10800000, allowFailure: true, logOutput: false,
     env: { ...cleanEnv, ...extraEnv, PLAYWRIGHT_JSON_OUTPUT_FILE: outputFile, PLAYWRIGHT_OUTPUT_DIR: join(artifacts, `playwright-${tag}-results`) },
   });
-  const { stats } = JSON.parse(readFileSync(outputFile, 'utf8') || output.stdout);
-  ensure(stats.expected > 0 && stats.unexpected === 0 && stats.flaky === 0 && stats.skipped === 0, `Playwright sin casos aceptados o con fallos/omisiones: ${tag}`);
+  let stats, failures;
+  try {
+    const report = JSON.parse(readFileSync(outputFile, 'utf8'));
+    stats = report.stats;
+    failures = playwrightFailures(report);
+  } catch {
+    throw new Error(`Playwright no generó un informe JSON legible: ${tag} (${output.error?.code || output.signal || output.status}).`);
+  }
+  for (const failure of failures) console.error(`Playwright ${sanitize(JSON.stringify(failure))}`);
+  ensure(!output.error && output.status === 0 && stats?.expected > 0 && stats.unexpected === 0 && stats.flaky === 0 && stats.skipped === 0 && !failures.length, `Playwright sin casos aceptados o con fallos/omisiones: ${tag}`);
   return stats.expected;
 }
 async function playwrightChecks(selectors) {
@@ -410,7 +423,7 @@ async function playwrightChecks(selectors) {
   if (full || advertising) record(full ? 'full:playwright' : 'playwright:advertising', advertisingStart, count);
 }
 
-async function prepareProject({ needApp, needChecks, needDb, needBrowser, pair, manifest }) {
+async function prepareProject({ needApp, needChecks, needDb, needBrowser, sandboxed, pair, manifest }) {
   const generated = createDeploymentEnv('test', { id });
   values = generated.values;
   artifacts = values.ARTIFACT_DIR;
@@ -422,7 +435,7 @@ async function prepareProject({ needApp, needChecks, needDb, needBrowser, pair, 
   const db = deployed ? manifest.services.db : needDb || pair ? tagged('postgres:16-bookworm') : null;
   expected = deployed ? manifest.services : { web: app, scheduler: app, 'social-browser-worker': app, 'social-browser': runner, db };
   outputImages = { app, runner };
-  if (needChecks) checksImage = prepareChecks(deployed || needBrowser ? app : null);
+  if (needChecks) checksImage = prepareChecks(deployed || needBrowser ? app : null, sandboxed);
   portMapping = needBrowser ? { fixture: await availablePort(0), db: await availablePort(0) } : null;
   if (needApp) {
     values.APP_URL = `https://localhost:${await availablePort(0)}`;
@@ -660,14 +673,16 @@ try {
   const browser = full || plan.playwright.some(spec => spec !== 'privacy');
   const browserWorker = browser && (full || plan.playwright.some(spec => spec !== 'app:media' && /^(?:app|workbook)(?::|$)/.test(spec)));
   const web = has('https') || has('restore') || has('migration');
-  const checks = full || browser || Boolean(plan.postgres.length) || has('postgres') || has('scheduler') || has('migration') || has('restore');
-  const db = checks || web;
-  const needsDocker = db || Boolean(plan.build.length) || ['runtime', 'runner', 'compose', 'infra', 'harness'].some(has);
+  const sandboxed = (full ? readdirSync('tests').map(name => `tests/${name}`) : plan.node).filter(nodeSandboxed);
+  const databaseChecks = full || browser || Boolean(plan.postgres.length) || has('postgres') || has('scheduler') || has('migration') || has('restore');
+  const checks = databaseChecks || Boolean(sandboxed.length);
+  const db = databaseChecks || web;
+  const needsDocker = checks || db || Boolean(plan.build.length) || ['runtime', 'runner', 'compose', 'infra', 'harness'].some(has);
   let generated;
   if (needsDocker) {
     run('docker', ['info', '--format', '{{.ServerVersion}}'], 'Docker daemon disponible');
     result.compose = run('docker', ['compose', 'version', '--short'], 'Compose disponible').stdout.trim();
-    generated = await prepareProject({ needApp: web || has('runtime') || has('runner') || has('scheduler') || plan.build.includes('app'), needChecks: checks, needDb: db, needBrowser: browser, pair: has('runner'), manifest });
+    generated = await prepareProject({ needApp: web || has('runtime') || has('runner') || has('scheduler') || plan.build.includes('app'), needChecks: checks, needDb: db, needBrowser: browser, sandboxed, pair: has('runner'), manifest });
   }
   if (has('harness')) {
     const start = performance.now();

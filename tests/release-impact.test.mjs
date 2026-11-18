@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { calculateImpact, requiredChecks } from '../scripts/release-impact.mjs';
+import { playwrightFailures, preflight } from '../scripts/release-test-plan.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const noGit = spawnSync('git', ['--version']).error?.code === 'ENOENT';
@@ -221,6 +222,20 @@ test('a changed test contract runs its launcher without offering a release', fix
   const plan = await calculateImpact({ head, base, cwd });
   assert.deepEqual(requiredChecks(plan), ['node:tests/fixture.test.mjs']);
   noRelease(plan);
+});
+
+test('sandboxed social Chromium uses Docker without host browser or FFmpeg; Heka stays native', () => {
+  const plan = { node: ['tests/social-browser.test.mjs', 'tests/social-browser-measurements.test.mjs'], gates: [], build: [], postgres: [], playwright: [] };
+  assert.deepEqual(preflight(plan, 'impact'), { npm: false, browser: false, ffmpeg: false, docker: true });
+  assert.deepEqual(preflight({ ...plan, node: ['tests/heka-browser.mjs'] }, 'impact'), { npm: true, browser: true, ffmpeg: false, docker: false });
+});
+
+test('Playwright diagnostics emit only a redacted title, project and failure status', () => {
+  const test = { status: 'unexpected', projectName: 'desktop', results: [{ status: 'failed', error: { message: 'private provider body' } }] };
+  const spec = { title: 'checkout at https://fixture.example/private', file: '/private/root', tests: [test, { ...test, status: 'expected' }] };
+  assert.deepEqual(playwrightFailures({ suites: [{ specs: [], suites: [{ specs: [spec] }] }], errors: [{ message: 'private stack' }] }), [
+    { title: 'checkout at [URL redactada]', project: 'desktop', status: 'unexpected:failed' },
+  ]);
 });
 
 test('workflow, harness and npm-script-only changes each require harness checks, not images', fixtureOptions, async t => {

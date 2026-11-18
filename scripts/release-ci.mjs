@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { calculateImpact, canonicalPlan, configFiles, imageTag, requiredChecks, sha40 } from './release-impact.mjs';
 import { units } from './release-impact-matrix.mjs';
+import { nodeSandboxed } from './release-test-plan.mjs';
 
 const repository = 'HenderOrlando/allnutrition';
 const activeConfig = ['compose.yaml', 'compose.nginx.yaml', 'deploy/pg_hba.conf', 'deploy/postgres-entrypoint.sh', 'deploy/social-browser-seccomp.json'];
@@ -149,7 +150,7 @@ function preflight(planFile, plan) {
   const required = requiredChecks(plan, env.RELEASE_MODE);
   output('harness_npm', required.includes('gate:harness'));
   output('work', required.length > 0 || plan.build.length > 0);
-  output('buildkit', env.RELEASE_MODE === 'full' || Boolean(plan.build.length || plan.postgres.length ||
+  output('buildkit', env.RELEASE_MODE === 'full' || Boolean(plan.build.length || plan.postgres.length || plan.node.some(nodeSandboxed) ||
     required.some(id => /^(?:playwright:|gate:(?:runtime|runner|https|postgres|scheduler|migration|restore)$)/.test(id))));
 }
 

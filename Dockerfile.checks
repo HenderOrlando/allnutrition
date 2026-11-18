@@ -4,6 +4,13 @@ WORKDIR /app
 COPY package*.json ./
 COPY scripts/install.mjs ./scripts/install.mjs
 RUN node scripts/install.mjs
+ARG CHECKS_CHROMIUM=0
+ARG CHECKS_FFMPEG=0
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN set -e; \
+    if [ "$CHECKS_FFMPEG" = 1 ]; then apt-get update; apt-get install -y --no-install-recommends ffmpeg; fi; \
+    if [ "$CHECKS_CHROMIUM" = 1 ]; then ./node_modules/.bin/playwright install --with-deps chromium; chmod -R a+rX /ms-playwright; fi; \
+    rm -rf /var/lib/apt/lists/*
 
 FROM dependencies AS checks
 COPY . .
