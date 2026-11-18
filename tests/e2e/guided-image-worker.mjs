@@ -3,10 +3,10 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
-import { openStore } from './lib/db/index.mjs';
-import { getAssistantSettings, saveAssistantSettings } from './lib/assistant/settings.mjs';
-import { getSocialGeneration, processSocialGenerationTurn } from './lib/business/social-generation.mjs';
-import { getSocialAsset, processSocialAssetTurn } from './lib/business/social-media.mjs';
+import { openStore } from '../../lib/db/index.mjs';
+import { getAssistantSettings, saveAssistantSettings } from '../../lib/assistant/settings.mjs';
+import { getSocialGeneration, processSocialGenerationTurn } from '../../lib/business/social-generation.mjs';
+import { getSocialAsset, processSocialAssetTurn } from '../../lib/business/social-media.mjs';
 
 const [action, id, origin] = process.argv.slice(2);
 assert.match(origin || '', /^https:\/\/localhost:\d+$/);

@@ -398,8 +398,7 @@ test.describe('creador de imágenes con transporte sintético aislado', () => {
     expect(imageProject).toMatch(/^allnutrition-guided-image-[a-z0-9-]+$/);
     expect(controlledImages).toMatch(/^https:\/\/localhost:\d+$/);
     expect(controlledImages).not.toBe(process.env.E2E_BASE_URL);
-    const script = readFileSync(new URL('./guided-image-worker.mjs', import.meta.url));
-    const result = spawnSync('docker', ['exec', '-i', `${imageProject}-web-1`, 'node', '--input-type=module', '-', action, id, controlledImages], { input: script, encoding: 'utf8', timeout: 30000 });
+    const result = spawnSync('docker', ['exec', `${imageProject}-web-1`, 'node', './tests/e2e/guided-image-worker.mjs', action, id, controlledImages], { encoding: 'utf8', timeout: 30000 });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
   }
