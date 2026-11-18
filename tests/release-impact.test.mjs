@@ -236,6 +236,8 @@ test('workflow, harness and npm-script-only changes each require harness checks,
   for (const [path, content] of [
     ['.github/workflows/ci.yml', 'name: Impact CI\n'],
     ['scripts/verify-docker.mjs', 'export const version = 2;\n'],
+    ['tests/release-impact.test.mjs', 'export const requiresGitHistory = true;\n'],
+    ['deploy/audit/guest.mjs', 'export const isolation = "dedicated guest";\n'],
     ['package.json', JSON.stringify({ ...pkg, scripts: { verify: 'node two.mjs' } })],
   ]) {
     await t.test(path, async () => {

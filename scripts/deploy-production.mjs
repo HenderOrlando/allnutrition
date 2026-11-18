@@ -1,10 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { activeFiles, publicState, requireLive, requireThat, same, serviceOrder, sha, sha256, smoke } from './production-host.mjs';
-import { auditStatus, cachePut, candidateBundle, configDigest, deploymentToken, host, hostCommand, latestProduction, origin, projectTarget, publishProduction, remoteMain, remoteStream, run, sourceRoot, uploadArchive, verifyBundle, vmArgs } from './production-release.mjs';
+import { auditStatus, cachePut, candidateBundle, configDigest, deploymentToken, host, hostCommand, latestProduction, loadFromBuilder, origin, projectTarget, publishProduction, remoteMain, remoteStream, run, sourceRoot, verifyBundle, vmArgs } from './production-release.mjs';
 import { cacheGitSource, runPairIfNeeded, saveOffsite, testRecovery } from './production-recovery.mjs';
 
 const bootstrap = {
@@ -116,12 +116,20 @@ async function release(head, dryRun) {
     if (dryRun) { pretty({ dryRun: true, ...report }); return; }
     const token = deploymentToken(), transferStartedAt = new Date().toISOString();
     await cachePut(sealed, `sources/${head}/${sums['sealed-source.tar.gz']}.tar.gz`, sums['sealed-source.tar.gz']);
-    const retained = new Set([live.coveredThrough, live.configCommit, ...Object.values(live.services).map(entry => entry.sourceCommit)]);
+    const retained = new Set([manifest.configCommit, live.coveredThrough, live.configCommit, ...Object.values(live.services).map(entry => entry.sourceCommit)]);
     for (const source of retained) if (source && source !== head) await cacheGitSource(source);
-    if (plan.build.length) await uploadArchive(join(dir, 'accepted-images.tar.gz'), { token, images: accepted.images }, sums['accepted-images.tar.gz']);
-    const transferFinishedAt = new Date().toISOString();
-    await runPairIfNeeded(plan, accepted, manifest, sealed, token);
+    const bundleSha = sums['accepted-images.tar.gz'];
+    const bundleKey = `bundles/${bundleSha}.tar.gz`;
+    const bundlePath = join(dir, 'accepted-images.tar.gz');
+    if (bundleSha) await cachePut(bundlePath, bundleKey, bundleSha);
+    const builderStagedAt = new Date().toISOString();
+    const pair = await runPairIfNeeded(plan, accepted, manifest, bundleSha);
     const pairFinishedAt = new Date().toISOString();
+    if (bundleSha) {
+      requireThat(head === remoteMain() && same(latestProduction(), indexed), 'Cambió main o la base tras la prueba del par.');
+      await loadFromBuilder(bundleKey, { token, sha256: bundleSha, bytes: statSync(bundlePath).size, images: accepted.images });
+    }
+    const transferFinishedAt = new Date().toISOString();
     let rehearsal;
     if (manifest.schemaVersion > live.schemaVersion) {
       const capture = host('capture-rehearsal', { token, base: live }, { timeout: 1_200_000 });
@@ -133,7 +141,8 @@ async function release(head, dryRun) {
     const acceptance = { runId: accepted.runId, runAttempt: accepted.runAttempt, planHash: accepted.planHash, baseDeploymentId: accepted.baseDeploymentId };
     const record = await apply({ token, base: live, manifest, services: plan.recreate, files, origin, rehearsal, acceptance });
     const deploymentId = publishProduction(record.manifest, record.kind);
-    pretty({ ...report, deploymentId, transferStartedAt, transferFinishedAt, pairFinishedAt, cutStartedAt: record.startedAt, writesPausedAt: record.writesPausedAt, verifiedAt: record.observedAt });
+    pretty({ ...report, deploymentId, transferStartedAt, builderStagedAt, pair, pairFinishedAt, transferFinishedAt,
+      cutStartedAt: record.startedAt, writesPausedAt: record.writesPausedAt, verifiedAt: record.observedAt });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 

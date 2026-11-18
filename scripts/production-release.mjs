@@ -1,8 +1,9 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream, readFileSync, readdirSync, statSync } from 'node:fs';
+import { createReadStream, readFileSync, readdirSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { activeFiles, hash, imageId, publicState, requireThat, same, serviceOrder, sha, sha256, stateRoot } from './production-host.mjs';
 
 export const repo = 'HenderOrlando/allnutrition';
@@ -69,10 +70,20 @@ export async function hashFile(path) {
 export async function cachePut(path, key, digest) {
   requireThat(safeCacheKey(key) && hash.test(digest), 'Identificador de caché inválido.');
   const dest = join(releaseCache(), 'cache', key);
-  const cm = `set -eu; umask 077; dir=${quote(join(dest, '..'))}; dest=${quote(dest)}; hash=${quote(digest)}; mkdir -p "$dir"; tmp=$(mktemp "$dir/.input-XXXXXX"); trap 'rm -f "$tmp"' EXIT; cat >"$tmp"; test "$(sha256sum "$tmp" | cut -d ' ' -f 1)" = "$hash"; if test -e "$dest"; then test "$(sha256sum "$dest" | cut -d ' ' -f 1)" = "$hash"; else mv -T "$tmp" "$dest"; fi`;
+  const cm = `set -eu; umask 077; dir=${quote(join(dest, '..'))}; dest=${quote(dest)}; hash=${quote(digest)}; mkdir -p "$dir"; verify() { test -f "$1" && test ! -L "$1" && test "$(sha256sum "$1" | cut -d ' ' -f 1)" = "$hash"; }; if test -e "$dest" || test -L "$dest"; then verify "$dest"; printf 'cached\\n'; else printf 'send\\n'; tmp=$(mktemp "$dir/.input-XXXXXX"); trap 'rm -f "$tmp"' EXIT; cat >"$tmp"; verify "$tmp"; if test -e "$dest" || test -L "$dest"; then verify "$dest"; else mv -T "$tmp" "$dest"; fi; fi`;
   const { process, exit } = remoteStream(builderArgs(cm));
-  process.stdout.resume();
-  await Promise.all([pipeline(createReadStream(path), process.stdin), exit]);
+  const lines = createInterface({ input: process.stdout });
+  try {
+    const { value } = await lines[Symbol.asyncIterator]().next();
+    if (value === 'send') await pipeline(createReadStream(path), process.stdin);
+    else process.stdin.end();
+    await exit;
+    requireThat(value === 'cached' || value === 'send', 'Constructor no confirmó el estado de la caché.');
+  } catch (error) {
+    process.stdin.end();
+    await exit;
+    throw error;
+  } finally { lines.close(); }
 }
 export async function loadFromBuilder(key, { token, sha256: digest, bytes, images }) {
   requireThat(safeCacheKey(key) && hash.test(digest), 'Artefacto de imágenes inválido.');
@@ -231,8 +242,3 @@ export function projectTarget(base, head, plan, release, archive) {
   return { manifest, files };
 }
 export const deploymentToken = () => randomBytes(20).toString('hex');
-export const uploadArchive = async (path, input, archiveDigest) => {
-  const key = `bundles/${archiveDigest}.tar.gz`;
-  await cachePut(path, key, archiveDigest);
-  await loadFromBuilder(key, { token: input.token, sha256: archiveDigest, bytes: statSync(path).size, images: input.images });
-};

@@ -254,10 +254,12 @@ function record(key, start, count, extra = {}) {
   result.checks[key] = { count, durationMs: Math.max(0, Math.round(performance.now() - start)), ...extra };
   passed(key);
 }
-function tapCount(output) {
-  const count = Number(output.match(/^# pass (\d+)\s*$/m)?.[1]);
-  ensure(count > 0 && /^# skipped 0\s*$/m.test(output) && /^# cancelled 0\s*$/m.test(output) && /^# todo 0\s*$/m.test(output), 'TAP sin casos o con omisiones/cancelaciones.');
-  return count;
+function tapCount(output, suite) {
+  const counts = Object.fromEntries([...output.matchAll(/^# (tests|pass|fail|skipped|cancelled|todo) (\d+)\r?$/gm)].map(([, name, value]) => [name, Number(value)]));
+  const summary = ['tests', 'pass', 'fail', 'skipped', 'cancelled', 'todo'].map(name => `${name}=${counts[name] ?? 'ausente'}`).join(', ');
+  ensure(counts.pass > 0 && counts.pass === counts.tests && ['fail', 'skipped', 'cancelled', 'todo'].every(name => counts[name] === 0),
+    `${suite}: TAP sin casos o con fallos/omisiones (${summary}).`);
+  return counts.pass;
 }
 function checkImage(image, architecture) {
   const actual = inspectImage(image.imageId);
@@ -326,7 +328,7 @@ function nodeChecks(files, idFor) {
     const start = performance.now();
     const special = file === 'tests/heka-browser.mjs';
     const output = run('node', special ? [file] : ['--test', '--test-reporter=tap', file], file, { timeout: 7200000 });
-    const count = special ? 1 : tapCount(output.stdout);
+    const count = special ? 1 : tapCount(output.stdout, file);
     total += count;
     if (idFor) record(idFor(file), start, count);
   }
@@ -342,7 +344,7 @@ function pgChecks(groups, separate) {
     const grouped = readFileSync(file, 'utf8').includes('TEST_PG_GROUPS');
     const output = compose(['run', '--rm', '--no-deps', ...(grouped && separate ? ['-e', `TEST_PG_GROUPS=${regular.join(',')}`] : []), 'checks', ...pgCommand, file], grouped && separate ? `Contratos PostgreSQL: ${regular.join(', ')}` : 'Contratos PostgreSQL (archivo completo)', { timeout: 14400000 });
     ensure(output.stdout.includes('Contrato completo con PostgreSQL real'), 'No se ejecutó el contrato PostgreSQL');
-    const count = tapCount(output.stdout);
+    const count = tapCount(output.stdout, `${file} (${regular.join(', ')})`);
     total += count;
     const observed = Object.fromEntries([...output.stdout.matchAll(/^\s*# PG_GROUP ([a-z-]+) cases=([1-9]\d*)\s*$/gm)].map(m => [m[1], Number(m[2])]));
     if (grouped) ensure(JSON.stringify(Object.keys(observed).sort()) === JSON.stringify((separate ? regular : pgGroups).slice().sort()), 'Grupos PostgreSQL observados no coinciden');
@@ -352,7 +354,7 @@ function pgChecks(groups, separate) {
     const start = performance.now();
     const output = compose(['run', '--rm', '--no-deps', 'checks', ...pgCommand, 'tests/assistant-work-postgres.test.mjs'], 'Contratos PostgreSQL de ejecución Ali', { timeout: 3600000 });
     ensure(output.stdout.includes('recoverable assistant work contracts (disposable PostgreSQL)'), 'No se ejecutó el contrato Ali en PostgreSQL');
-    const count = tapCount(output.stdout);
+    const count = tapCount(output.stdout, 'tests/assistant-work-postgres.test.mjs');
     total += count;
     if (separate) record('pg:assistant-work', start, count);
   }
@@ -671,7 +673,7 @@ try {
     const start = performance.now();
     const test = join(harness, 'tests/release-impact.test.mjs');
     const observed = run('node', ['--test', '--test-reporter=tap', test], 'Selector ante historial Git y Compose real descartable', { cwd: harness, timeout: 300000 });
-    const count = tapCount(observed.stdout);
+    const count = tapCount(observed.stdout, 'gate:harness (historial Git)');
     record('gate:harness', start, count + 1);
   }
   if (has('desktop')) {
@@ -696,11 +698,11 @@ try {
   if (full) {
     const start = performance.now();
     run('npm', ['run', 'check'], 'Sintaxis e imports de candidato', { timeout: 300000 });
-    const files = readdirSync('tests').map(name => `tests/${name}`).filter(file => isNodeTest(file) && file !== 'tests/release-impact.test.mjs').sort();
+    const files = readdirSync('tests').map(name => `tests/${name}`).filter(isNodeTest).sort();
     let count = nodeChecks(files);
     if (!deployed && existsSync(join(harness, '.git'))) {
       const observed = run('node', ['--test', '--test-reporter=tap', join(harness, 'tests/release-impact.test.mjs')], 'Contratos del selector en checkout con historial', { cwd: harness });
-      count += tapCount(observed.stdout);
+      count += tapCount(observed.stdout, 'tests/release-impact.test.mjs (historial Git)');
     }
     const groups = [...pgGroups, ...(existsSync('tests/assistant-work-postgres.test.mjs') ? ['assistant-work'] : [])];
     count += pgChecks(groups, false);
