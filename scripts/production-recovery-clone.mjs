@@ -84,7 +84,12 @@ try {
   writeFileSync(appEnv, `DB_DRIVER=supabase\nNODE_ENV=production\nDB_SSL=verify\nDB_CA_CERT_FILE=/run/db-ca/ca.crt\nAPP_URL=https://localhost\nDATABASE_URL=postgresql://allnutrition_app:${password}@db:5432/allnutrition_test\nDATABASE_DIRECT_URL=postgresql://postgres:${admin}@db:5432/allnutrition_test\nDB_APP_PASSWORD=${password}\nINTEGRATION_SECRETS_DIR=/app/data/integration-secrets\nSOCIAL_BROWSER_CONTROL_DIR=/app/data/social-browser-control\nSOCIAL_MEDIA_DIR=/app/data/social-media\n`, { mode: 0o600 });
   docker(['network', 'create', ...labels, '--internal', network]); ownsNetwork = true;
   ensure(docker(['network', 'inspect', '-f', '{{.Internal}}', network]).trim() === 'true', 'Red de recuperación no está aislada.');
-  docker(['volume', 'create', ...labels, volume]); ownsVolume = true;
+  // The clone is disposable. Keep PostgreSQL's durability settings, but isolate its I/O from the builder's shared disk.
+  const pgDataMiB = 4096;
+  const availableKiB = Number(/^MemAvailable:\s+(\d+) kB$/m.exec(readFileSync('/proc/meminfo', 'utf8'))?.[1]);
+  ensure(availableKiB >= (pgDataMiB + 4096) * 1024, 'Memoria insuficiente para el volumen privado de recuperación.');
+  docker(['volume', 'create', ...labels, '--opt', 'type=tmpfs', '--opt', 'device=tmpfs',
+    '--opt', `o=size=${pgDataMiB}m,noswap,nodev,nosuid,noexec`, volume]); ownsVolume = true;
   docker(['run', '-d', '--name', database, ...labels, '--pull', 'never', '--network', network, '--network-alias', 'db', '--env-file', dbEnv,
     '-v', mount(tls, '/run/postgres-tls'), '-v', mount(join(root, 'deploy/pg_hba.conf'), '/etc/postgresql/pg_hba.conf'),
     '-v', mount(join(root, 'deploy/postgres-entrypoint.sh'), '/etc/postgresql/entrypoint'), '-v', mount(volume, '/var/lib/postgresql/data', false),
