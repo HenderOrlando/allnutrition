@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeSocialCampaignInput, buildSocialSpec, verifySocialApiTargeting } from '../lib/business/social-spec.mjs';
+import { normalizeSocialCampaignInput, normalizeSocialMarketCountries, assertSocialMarketCoverage, buildSocialSpec, verifySocialApiTargeting } from '../lib/business/social-spec.mjs';
 import { hash } from '../lib/business/commands.mjs';
 import { metaBudgetUnits } from '../lib/social/meta.mjs';
 
@@ -20,11 +20,34 @@ const config = (changes = {}, selected = connection) => normalizeSocialCampaignI
   name: 'Pieza aportada por usuario', connectionId: selected.id, assetId: asset.id, mode: 'paid', objective: 'traffic',
   platforms: ['facebook', 'instagram'], placements: ['facebook_feed', 'instagram_feed'],
   caption: 'Texto explícito', headline: 'Título explícito', destinationUrl: 'https://example.test/producto',
+  audience: { countries: ['CO'] },
   budgetMinor: 5000000, targetCostMinor: 100000, startAt: '2026-11-03T12:00:00Z', endAt: '2026-11-10T12:00:00Z', aiDisclosure: false,
   ...changes
 }, { connection: selected });
 const build = (campaign = config(), selected = connection, piece = asset) => buildSocialSpec(campaign, { connection: selected, asset: piece, now: NOW });
 const invalid = fn => assert.throws(fn, { status: 400 });
+
+test('un mercado editorial no amplía países comprados y conserva el hash histórico exacto', () => {
+  const historical = build();
+  assert.equal(historical.specHash, 'a383c37171575525c60702d6714f82d8f738012b7627fabedf2f119d4a85c169');
+  assert.ok(!Object.hasOwn(historical.spec, 'marketCountries'));
+  const { audience: _legacyAudience, ...withoutAudience } = config();
+  assert.equal(build(withoutAudience).specHash, historical.specHash);
+  assert.deepEqual(normalizeSocialCampaignInput({}).audience.countries, []);
+  assert.deepEqual(normalizeSocialMarketCountries(['PE', 'CO', 'PE']), ['CO', 'PE']);
+  invalid(() => normalizeSocialMarketCountries(['ZZ']));
+  const choice = config({ marketCountries: ['PE', 'CO'], audience: { countries: ['PE'], cities: [city] } });
+  const current = build({ ...choice, audienceMode: 'manual' });
+  assert.deepEqual(current.spec.marketCountries, ['CO', 'PE']);
+  assert.equal(current.spec.audienceMode, 'manual');
+  assert.deepEqual(current.spec.targeting.geo_locations.countries, ['PE']);
+  assert.deepEqual(current.spec.targeting.geo_locations.cities, [{ key: city.providerId, radius: 17, distance_unit: 'kilometer' }]);
+  assert.ok(!Object.hasOwn(current.spec.targeting, 'marketCountries'));
+  assert.throws(() => build({ ...choice, marketCountries: [] }), /confirma al menos un país/);
+  assert.throws(() => build({ ...choice, marketCountries: ['MX', 'PE'] }), /exactamente los mercados/);
+  assert.throws(() => assertSocialMarketCoverage(choice.marketCountries, { ...choice.audience, cities: [] }), /exactamente los mercados/);
+  assert.throws(() => assertSocialMarketCoverage(choice.marketCountries, { ...choice.audience, countries: ['CO', 'PE'] }), /superpongas/);
+});
 
 // The provider owns its own records; it does not generate a matching candidate from the request.
 function targetingProvider() {
@@ -171,7 +194,7 @@ test('comercio alimentario general no equivale a una condición de salud sensibl
   const connector = { async searchTargeting() { return structuredClone(providerRows); } };
   for (const candidate of providerRows) {
     try {
-      const { spec } = build(config({ audience: { interests: [candidate] } }));
+      const { spec } = build(config({ audience: { countries: ['CO'], interests: [candidate] } }));
       await verifySocialApiTargeting(spec, { connector });
       accepted.push(candidate.providerId);
     } catch (error) { assert.equal(error.status, 400); }

@@ -1,10 +1,10 @@
 // Run this stored fixture from /app inside the compiled web container.
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { openStore } from '../../lib/db/index.mjs';
 import { getAssistantSettings, saveAssistantSettings } from '../../lib/assistant/settings.mjs';
-import { getSocialGeneration, processSocialGenerationTurn } from '../../lib/business/social-generation.mjs';
+import { getSocialGeneration, getSocialGenerationBrief, processSocialGenerationTurn } from '../../lib/business/social-generation.mjs';
 import { getSocialAsset, processSocialAssetTurn } from '../../lib/business/social-media.mjs';
 
 const [action, id, origin] = process.argv.slice(2);
@@ -31,13 +31,20 @@ try {
       await processSocialAssetTurn(store);
     } else {
       assert.equal(action, 'generation');
-      assert.equal((await getSocialGeneration(store, id, admin.id)).state, 'queued');
+      const job = await getSocialGeneration(store, id, admin.id);
+      assert.equal(job.state, 'queued');
       assert.equal(Number((await store.db.get(`SELECT COUNT(*) AS n FROM ${store.t('social_generation_jobs')} WHERE state='queued'`)).n), 1);
-      const png = await sharp({ create: { width: 512, height: 640, channels: 3, background: '#365eae' } }).png().toBuffer();
+      const png = await sharp({ create: { width: 512, height: 640, channels: 3, background: job.baseAssetId ? '#2744aa' : '#c88636' } }).png().toBuffer();
       let posts = 0;
       await processSocialGenerationTurn(store, { transport: async (url, input) => {
         assert.match(url, /^https:\/\/api\.openai\.com\/v1\/images\/(edits|generations)$/);
         assert.equal(input.method, 'POST');
+        if (job.baseAssetId) {
+          assert.equal(url, 'https://api.openai.com/v1/images/edits');
+          const { baseAsset } = await getSocialGenerationBrief(store, { campaignId: job.campaignId, baseAssetId: job.baseAssetId });
+          const first = input.body.getAll('image[]')[0];
+          assert.equal(createHash('sha256').update(Buffer.from(await first.arrayBuffer())).digest('hex'), baseAsset.sha256);
+        }
         posts++;
         return Response.json({ data: [{ b64_json: png.toString('base64') }] });
       } });

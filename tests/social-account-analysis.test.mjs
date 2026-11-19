@@ -9,6 +9,7 @@ import { createTokenSocialConnection } from '../lib/business/social-connections.
 import { claimJob } from '../lib/business/job-leases.mjs';
 import { metaHistoryPeriod, currentHistoryRules } from '../lib/social/meta-account-history.mjs';
 import { queueMetaAccountAnalysisTx, processMetaAccountAnalysisTurn, getMetaAccountAnalysis, metaAccountAnalysisAction, buildMetaAccountProposals } from '../lib/business/social-account-analysis.mjs';
+import { projectMetaFields } from './social-meta-provider.mjs';
 
 const NOW = '2026-11-16T12:00:00.000Z', ACTOR = 'social-fixture-admin';
 const TOKEN = 'SYNTHETIC-HISTORY-TOKEN', PII = 'PERSON-AND-LEAD-CANARY';
@@ -33,7 +34,18 @@ async function fixture(fn, { method = 'token', noResources = false } = {}) {
       if (path === 'me') return Response.json({ id: '101', name: PII });
       if (path === 'me/permissions') return Response.json({ data: remote.scopes.map(permission => ({ permission, status: remote.declined.has(permission) ? 'declined' : 'granted' })) }, { headers });
       if (remote.rate) return Response.json({ error: { code: 4, message: PII + TOKEN } }, { status: 429, headers: { ...headers, 'retry-after': '120' } });
-      if (path === 'me/accounts') return Response.json({ data: [{ id: '201', tasks: ['ANALYZE'], access_token: TOKEN, name: PII, instagram_business_account: { id: '301', username: PII } }, { id: '202', tasks: ['ANALYZE'], access_token: TOKEN }] }, { headers });
+      if (path === 'me/accounts') {
+        const fields = url.searchParams.get('fields');
+        assert.ok(['id,tasks', 'id,name,tasks,access_token', 'id,instagram_business_account{id,username}'].includes(fields), fields);
+        const pages = [{ id: '201', tasks: ['ANALYZE'], access_token: TOKEN, instagram_business_account: { id: '301', username: PII } }, { id: '202', tasks: ['ANALYZE'], access_token: TOKEN }];
+        return Response.json({ data: pages.map(page => projectMetaFields(page, fields)) }, { headers });
+      }
+      if (path === '') {
+        assert.equal(url.searchParams.get('ids'), '201,202');
+        assert.equal(url.searchParams.get('fields'), 'id,instagram_business_account{id}');
+        if (remote.instagramRestricted) return Response.json({ error: { code: 100, message: `The field (instagram_business_account) is not accessible. ${PII}` } }, { status: 400, headers });
+        return Response.json({ '202': { id: '202' }, '201': { id: '201', instagram_business_account: { id: '301' } } }, { headers });
+      }
       if (path === 'me/adaccounts') return Response.json({ data: [{ id: 'act_501', currency: 'COP', timezone_name: 'America/Bogota', user_tasks: ['ANALYZE'], name: PII }, { id: 'act_502', currency: 'USD', timezone_name: 'America/New_York', user_tasks: ['ANALYZE'] }] }, { headers });
       if (path === '202') return Response.json({ id: '202', access_token: TOKEN });
       if (/^act_50[12]\/insights$/.test(path)) {
@@ -176,6 +188,18 @@ test('missing scopes and permission denial retain explicit Facebook and Instagra
   assert.equal(remote.calls.some(call => call.path === '301/media'), false);
   assert.ok(report.analysis.coverage.some(item => item.missing.some(missing => missing.reason === 'permission')));
 }));
+
+test('un rechazo opcional de Instagram no pierde las páginas del historial', () => fixture(async ({ queue, drain, remote }) => {
+  remote.instagramRestricted = true;
+  await queue(); const report = await drain();
+  assert.equal(report.analysis.state, 'partial');
+  const discover = kind => report.analysis.coverage.find(item => item.kind === kind && item.resourceId === null);
+  assert.equal(discover('facebook').state, 'accessible_complete');
+  assert.ok(discover('instagram').missing.some(item => item.reason === 'permission'));
+  assert.ok(remote.calls.some(call => call.path === '201/published_posts'));
+  assert.ok(!remote.calls.some(call => call.path === '301/media'));
+  assert.ok(!JSON.stringify(report).includes(PII));
+}, { noResources: true }));
 
 test('revoked credential stops reads and marks the connection reconnect_required', () => fixture(async ({ store, queue, turn, get, remote, id }) => {
   await queue(); remote.valid = false;

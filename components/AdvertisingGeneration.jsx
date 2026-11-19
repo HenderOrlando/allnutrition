@@ -1,9 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import AdvertisingAssetUpload from './AdvertisingAssetUpload';
 import styles from './AdvertisingWorkspace.module.css';
 
 const ROOT = '/api/admin/social/generation';
+const THREADS = '/api/admin/social/creative-threads';
+const EXAMPLES = ['Muestra el producto sobre un fondo claro con espacio para el texto.', 'Crea un fondo sencillo con los colores de la marca.', 'Aclara el fondo y conserva la etiqueta.'];
 const PAGE_SIZE = 12;
 const OBJECTIVES = { reach: 'Llegar a más personas', engagement: 'Invitar a interactuar', traffic: 'Llevar visitas al sitio web', whatsapp: 'Conseguir consultas por WhatsApp' };
 const BUSINESS_OBJECTIVES = { sales: 'Ventas', traffic: 'Visitas', leads: 'Contactos', whatsapp: 'Consultas por WhatsApp', reach: 'Alcance', engagement: 'Interacciones', awareness: 'Reconocimiento' };
@@ -14,17 +17,13 @@ const COP = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP',
 const isPending = job => ['queued', 'sending'].includes(job.state) || job.asset?.state === 'processing';
 const sourceId = source => `${source.kind}:${source.id}`;
 const sourceTitle = source => `${source.kind === 'product' ? 'Producto' : 'Biblioteca'}: ${identity({ ...source.facts, title: source.title })}`;
-const sameAlignment = (left, right) => Boolean(left && right && left.mode === right.mode && left.objective === right.objective && (left.offerHash ?? null) === (right.offerHash ?? null));
+const pendingAsset = asset => ['uploading', 'processing'].includes(asset?.state);
+const editable = asset => asset?.kind === 'image' && ['image/jpeg', 'image/png', 'image/webp'].includes(asset.contentType) && (asset.state === 'ready' || asset.diagnostic?.code === 'IMAGE_GEOMETRY');
 const BASE_LABEL = 'Imagen a modificar';
 const identity = item => [item.title, item.presentation, item.flavor].filter(Boolean).join(' · ');
-const narrowViewport = () => window.matchMedia('(max-width: 600px)');
-const subscribeViewport = listener => {
-  const viewport = narrowViewport();
-  viewport.addEventListener('change', listener);
-  return () => viewport.removeEventListener('change', listener);
-};
-const isNarrow = () => narrowViewport().matches;
-const isServerNarrow = () => false;
+const jobStatus = job => job.state === 'uncertain' ? 'Envío incierto' : job.state === 'queued' ? 'En cola' : job.state === 'sending' || pendingAsset(job.asset) ? 'Preparando archivo' : job.asset?.state === 'ready' ? 'Lista' : 'Falló';
+const mergeTurns = (previous, incoming) => [...new Map([...previous, ...incoming].map(turn => [turn.id, turn])).values()]
+  .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
 
 function OfferFacts({ item, label }) {
   if (!item) return null;
@@ -86,304 +85,353 @@ function BriefDetails({ context, baseName, onPreviewError }) {
   </div>;
 }
 
-function ReadyPreview({ asset, original, adjusting, onUse, disabled, compact, onOriginalError }) {
-  const [failed, setFailed] = useState(false), [loaded, setLoaded] = useState(false), [attempt, setAttempt] = useState(0);
-  const [showOriginal, setShowOriginal] = useState(false);
-  const toggleComparison = original && compact;
+function StudioPreview({ asset, original, onUse, onFresh, disabled, publishable }) {
+  const [comparison, setComparison] = useState(false), [expanded, setExpanded] = useState(false);
+  const [reviewed, setReviewed] = useState(false), [error, setError] = useState(false), [retry, setRetry] = useState(0);
+  if (!asset) return <p className={styles.help}>Todavía no hay una imagen ni un video seleccionado. Cuando añadas uno, podrás revisarlo aquí antes de usarlo.</p>;
+  const originalAsset = comparison ? original || asset : null;
+  const url = originalAsset?.originalUrl ?? asset.previewUrl ?? (editable(asset) ? asset.originalUrl : null);
+  const image = originalAsset ? originalAsset.kind === 'image' || originalAsset.contentType === 'image/gif' : asset.kind === 'image';
+  const alt = comparison || asset.state !== 'ready' ? 'Archivo original' : 'Archivo preparado para publicar';
+  const mediaProps = { src: url, onError: () => setError(true) };
+  function observed() { if (!comparison && asset.state === 'ready') setReviewed(true); setError(false); }
   return <div className={styles.stack}>
-    {toggleComparison && <div className={styles.actions} role="group" aria-label="Comparar original y variante">
-      <button type="button" className="button subtle" aria-pressed={showOriginal} onClick={() => setShowOriginal(true)}>Antes · Original</button>
-      <button type="button" className="button subtle" aria-pressed={!showOriginal} onClick={() => setShowOriginal(false)}>Después · Variante</button>
-    </div>}
-    <div className={original && !compact ? styles.summaryGrid : styles.assetPreview}>
-      {original && <div hidden={toggleComparison && !showOriginal}><div className={styles.assetPreview}>
-        <strong>Antes · Imagen original</strong><img className={styles.previewImage} src={original.previewUrl} alt="Imagen original antes del ajuste" onError={onOriginalError} />
-      </div></div>}
-      <div hidden={toggleComparison && showOriginal}><div className={styles.assetPreview}>
-        <strong>{original ? 'Después · Variante' : 'Vista previa de la pieza'}</strong>
-        {failed ? <div role="alert" className={styles.error}><p>No se pudo leer la vista previa privada de la pieza.</p><button type="button" className="button subtle" onClick={() => { setFailed(false); setAttempt(value => value + 1); }}>Volver a cargar vista previa</button></div>
-          : asset.kind === 'video' ? <video key={attempt} className={styles.previewVideo} src={asset.previewUrl} controls preload="metadata" playsInline onLoadedMetadata={() => setLoaded(true)} onError={() => { setLoaded(false); setFailed(true); }} aria-label="Vista previa de la pieza" />
-            : <img key={attempt} className={styles.previewImage} src={asset.previewUrl} alt={original ? 'Vista previa de la variante' : 'Vista previa de la pieza'} onLoad={() => setLoaded(true)} onError={() => { setLoaded(false); setFailed(true); }} />}
-      </div></div>
+    <strong>{asset.name}</strong>
+    {url && <figure className={expanded ? styles.studioExpanded : styles.studioMedia}>
+      {image ? <img key={`${url}:${retry}`} className={styles.previewImage} {...mediaProps} alt={alt} onLoad={observed}/>
+        : <video key={`${url}:${retry}`} className={styles.previewVideo} {...mediaProps} controls playsInline preload="metadata" aria-label={alt} onLoadedMetadata={observed}/>}
+      <figcaption className={styles.help}>{alt}</figcaption>
+    </figure>}
+    {pendingAsset(asset) && <p role="status">Preparando archivo; todavía no está listo para usar.</p>}
+    {asset.state === 'failed' && <p className={styles.warning}>{editable(asset) ? 'Solo para ajustar: esta foto no se puede publicar tal cual.' : 'Falló la preparación del archivo.'} {asset.diagnostic?.message}</p>}
+    {asset.state === 'ready' && !publishable && <p className={styles.warning}>Esta pieza no corresponde a la oferta, objetivo o vía actual; elige otro archivo o ajústala con los datos vigentes.</p>}
+    {asset.aiDisclosure && <p className={styles.help}>Generada con IA. Revisa producto, texto, derechos y divulgación antes de publicar.</p>}
+    {error && <div role="alert">No se pudo comprobar el archivo. <button type="button" className="button subtle" onClick={() => setRetry(value => value + 1)}>Volver a comprobar</button></div>}
+    <div className={styles.actions}>
+      {url && <button type="button" className={`button subtle ${styles.studioExpandButton}`} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Reducir vista previa' : 'Ampliar vista previa'}</button>}
+      {asset.state === 'ready' && (original?.originalUrl || asset.originalUrl) && <button type="button" className="button subtle" aria-pressed={comparison} onClick={() => setComparison(value => !value)}>{comparison ? 'Volver al archivo preparado' : 'Comparar con el original'}</button>}
+      {asset.state === 'ready' && onUse && <button type="button" className="button primary" disabled={disabled || comparison || !reviewed || error || !publishable} onClick={() => onUse(asset)}>Usar esta pieza y continuar</button>}
+      {onFresh && <button type="button" className="button subtle" disabled={disabled} onClick={onFresh}>Crear otra pieza sin usar este archivo</button>}
     </div>
-    {onUse && <div className={styles.actions}><button type="button" className="button primary" disabled={disabled || !loaded || failed} onClick={() => onUse(asset)}>{adjusting ? 'Usar la variante' : 'Usar esta imagen'}</button></div>}
   </div>;
 }
 
-function Job({ job, contextual, alignment, original, adjusting, onUseAsset, busy, compact, onOriginalError }) {
-  const { asset, state } = job;
-  const ready = state === 'succeeded' && asset?.state === 'ready' && Boolean(asset.previewUrl);
-  const aligned = !contextual || sameAlignment(asset?.alignment, alignment);
-  const label = ready ? 'Lista para revisar'
-    : isPending(job) ? 'Preparando imagen'
-      : state === 'blocked' ? 'No enviada' : state === 'uncertain' ? 'Envío incierto: posible cargo'
-        : asset?.state === 'archived' ? 'Imagen archivada' : 'No se pudo preparar la imagen';
-  return <article className={styles.card}>
-    <strong>{label} · {job.format.toUpperCase()}</strong>
-    {state === 'queued' && <p>En cola; todavía no se ha enviado.</p>}
-    {state === 'blocked' && <p>{job.notice}</p>}
-    {state === 'uncertain' && <p>El envío pudo generar un cargo, pero no hay un resultado confirmado. No se repetirá automáticamente. Comprueba el consumo antes de autorizar otra solicitud.</p>}
-    <p className={styles.help}>Solicitada: {new Date(job.createdAt).toLocaleString('es-CO')}</p>
-    {asset?.diagnostic && <p role="alert" className={styles.warning}>{asset.diagnostic.message}</p>}
-    {ready && <>
-      {contextual && !aligned && <p className={styles.warning}>Esta imagen corresponde a otra oferta u objetivo, o no se puede confirmar su correspondencia actual. Se conserva en la biblioteca.</p>}
-      <ReadyPreview key={`${asset.id}:${asset.version}`} asset={asset} original={original} adjusting={adjusting} onUse={onUseAsset} disabled={!aligned || busy || adjusting && !original} compact={compact} onOriginalError={onOriginalError} />
-      <p className={styles.help}>Revisa el producto, la etiqueta, el texto, las afirmaciones y los derechos. No se ha publicado.</p>
-    </>}
-    {asset?.originalUrl && asset.state !== 'missing_file' && <p><a href={asset.originalUrl} target="_blank" rel="noreferrer">Ver o descargar original {job.format.toUpperCase()}</a></p>}
-  </article>;
+function ReferencePicker({ api, base, items, onChange }) {
+  const [open, setOpen] = useState(false), [query, setQuery] = useState(''), [offset, setOffset] = useState(0), [page, setPage] = useState(null);
+  const limit = base ? 3 : 4, visible = items.filter(item => item.kind !== 'asset' || item.id !== base?.id);
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController(), { signal } = controller;
+    const timer = setTimeout(() => {
+      api(`${ROOT}/sources?${new URLSearchParams({ query, offset: String(offset), limit: String(PAGE_SIZE) })}`, { signal }).then(data => {
+        if (!signal.aborted) setPage({ data });
+      }, cause => { if (!signal.aborted) setPage({ error: cause.message }); });
+    }, 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [api, open, query, offset]);
+  return <details className={styles.technicalDetails} onToggle={event => setOpen(event.currentTarget.open)}><summary>Referencias opcionales: biblioteca y productos</summary>
+    <p className={styles.help}>Elige hasta {limit} fotos locales adicionales. No se descargan enlaces externos.</p>
+    <label className="field">Buscar fotos de referencia<input value={query} maxLength={100} onChange={event => { setQuery(event.target.value); setOffset(0); }}/></label>
+    {page?.error && <p role="alert">{page.error}</p>}
+    {visible.length > 0 && <ul className={styles.choiceList} aria-label="Fotos seleccionadas para el envío">{visible.map(item => <li key={sourceId(item)} className={styles.assetPreview}>
+      <span>{sourceTitle(item)}</span><img src={item.thumbnailUrl} alt="" width={72} height={72} className={styles.previewImage}/>
+      <button type="button" className="button subtle" onClick={() => onChange(items.filter(value => value !== item))}>Quitar {sourceTitle(item)}</button>
+    </li>)}</ul>}
+    <div className={styles.summaryGrid}>{page?.data?.sources.filter(item => item.kind !== 'asset' || item.id !== base?.id).map(item => {
+      const picked = visible.find(value => sourceId(value) === sourceId(item)), sameVersion = picked?.version === item.version;
+      return <label className={styles.checkRow} key={sourceId(item)}><input type="checkbox" checked={sameVersion} disabled={!picked && visible.length >= limit}
+        onChange={() => onChange(sameVersion ? items.filter(value => value !== picked) : [...items.filter(value => value !== picked), item])}/>
+        <img src={item.thumbnailUrl} alt="" width={64} height={64} className={styles.previewImage}/><span>{sourceTitle(item)}</span></label>;
+    })}</div>
+    <div className={styles.actions}><button type="button" className="button subtle" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Fuentes anteriores</button>
+      <button type="button" className="button subtle" disabled={!page?.data?.hasMore} onClick={() => setOffset(page.data.nextOffset)}>Más fuentes</button></div>
+  </details>;
 }
 
-export default function AdvertisingGeneration({ api, campaignId = null, campaignVersion = null, baseAsset = null, onUseAsset, onPreserveBase, onRefreshContext,
-  contextDirty = false, currentAlignment, onInteractionStateChange, onMutation, sourceRevision = 0, active = true, instructions, onInstructionsChange }) {
+export default function AdvertisingGeneration({ api, campaignId = null, campaignVersion = null, threadId = null, baseAsset = null, assets = [],
+  onThreadCreated, onUseAsset, onOpenCampaign, onRefreshContext, onSkip, onExit, contextDirty = false, onInteractionStateChange, onMutation,
+  active = true, instructions, onInstructionsChange, allowGeneration = true, allowPublishAsset }) {
   const [localPrompt, setLocalPrompt] = useState(''), prompt = instructions ?? localPrompt;
-  const [format, setFormat] = useState('png'), [frameCount, setFrameCount] = useState(9), [frameDurationMs, setFrameDurationMs] = useState(400);
-  const [consent, setConsent] = useState(null), [busy, setBusy] = useState(false), [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(''), [requestNotice, setRequestNotice] = useState('');
-  const [progress, setProgress] = useState(null), [listRevision, setListRevision] = useState(0);
-  const [review, setReview] = useState(null), [briefRevision, setBriefRevision] = useState(0), [failedPreviewKey, setFailedPreviewKey] = useState(null);
-  const [query, setQuery] = useState(''), [offset, setOffset] = useState(0), [page, setPage] = useState(null), [sourceRevisionLocal, setSourceRevisionLocal] = useState(0);
-  const [selected, setSelected] = useState([]), [sourceLimitError, setSourceLimitError] = useState('');
-  const request = useRef(null), mutation = useRef(null), refreshLock = useRef(false), observed = useRef(new Map()), errorRef = useRef(null);
-  const pendingRead = useRef(null);
-  const compact = useSyncExternalStore(subscribeViewport, isNarrow, isServerNarrow);
-  const callbacks = useRef({ onInteractionStateChange, onMutation });
-  callbacks.current = { onInteractionStateChange, onMutation };
-  const baseId = baseAsset?.id ?? null, adjusting = Boolean(baseId), contextual = Boolean(campaignId), requestedFormat = adjusting ? 'png' : format;
-  const briefIdentity = JSON.stringify([campaignId, campaignVersion, baseId, baseAsset?.version]);
-  const briefKey = `${briefIdentity}:${briefRevision}`;
-  const sourceKey = JSON.stringify([query, offset, sourceRevision, sourceRevisionLocal]);
-  const progressRead = progress?.campaignId === campaignId ? progress : null;
-  const availability = progressRead?.data?.availability;
-  const jobs = progressRead?.data?.jobs;
-  const briefRead = review?.key === briefKey ? review : null;
-  const context = briefRead?.data;
-  const alignment = currentAlignment === undefined ? context?.alignment : currentAlignment;
-  const alignmentKey = alignment ? JSON.stringify([alignment.mode, alignment.objective, alignment.offerHash ?? null]) : null;
-  const briefMatches = Boolean(context && context.campaignId === campaignId && context.campaignVersion === campaignVersion
-    && (context.baseAsset?.id ?? null) === baseId && (!adjusting || baseAsset.version == null || context.baseAsset.version === baseAsset.version)
-    && (!contextual || sameAlignment(context.alignment, alignment)));
-  const sourceRead = page?.key === sourceKey ? page : null;
-  const sources = sourceRead?.data?.sources || [];
-  const usableSources = selected.filter(source => source.kind !== 'asset' || source.id !== baseId);
-  const sourceLimit = adjusting ? 3 : 4;
-  const staleSource = usableSources.some(source => sources.some(current => sourceId(current) === sourceId(source) && current.version !== source.version));
-  const previewFailed = failedPreviewKey === briefKey;
-  const promptRequired = !contextual || adjusting;
-  const frames = Number(frameCount), duration = Number(frameDurationMs), gifMs = frames * duration;
-  const validFormat = requestedFormat !== 'gif' || (Number.isInteger(frames) && frames >= 2 && frames <= 16 && duration >= 20 && duration <= 2000 && duration % 10 === 0 && gifMs >= 3000 && gifMs <= 32000);
-  const canConsent = Boolean(active && !contextDirty && briefMatches && !previewFailed && !refreshing && availability?.available && !progressRead?.error
-    && (!promptRequired || prompt.trim()) && validFormat && (contextual || !staleSource && usableSources.length <= sourceLimit));
+  const [format, setFormat] = useState('png'), [frames, setFrames] = useState(9), [duration, setDuration] = useState(400);
+  const [thread, setThread] = useState(null), [turns, setTurns] = useState([]), [cursor, setCursor] = useState(null);
+  const [focused, setFocused] = useState(null), [choice, setChoice] = useState(null), [uploadState, setUploadState] = useState(null);
+  const [busy, setBusy] = useState(false), [loading, setLoading] = useState(Boolean(threadId || campaignId)), [olderBusy, setOlderBusy] = useState(false);
+  const [error, setError] = useState(''), [readError, setReadError] = useState(''), [notice, setNotice] = useState('');
+  const [refresh, setRefresh] = useState(0), [briefRefresh, setBriefRefresh] = useState(0), [review, setReview] = useState(null), [availability, setAvailability] = useState(null);
+  const [consent, setConsent] = useState(null), [failedPreview, setFailedPreview] = useState(null), [sources, setSources] = useState([]);
+  const request = useRef(null), writer = useRef(false), creation = useRef(null), creationId = useRef(null), currentThread = useRef(null), olderLoaded = useRef(false);
+  const mounted = useRef(false), callbacks = useRef(null), errorRef = useRef(null), composerRef = useRef(null), studioRef = useRef(null), headingRef = useRef(null), previewHeading = useRef(null), id = useId();
+  callbacks.current = { onThreadCreated, onInteractionStateChange };
+  const activeThreadId = threadId || thread?.id;
+  const linked = thread?.campaignId && thread.campaignId !== campaignId ? thread.campaignId : null;
+  const variants = new Map();
+  for (const asset of [baseAsset, ...(thread?.attachments || []), ...turns.toReversed().map(turn => turn.asset), thread?.selectedAsset]) {
+    if (asset && (!variants.has(asset.id) || variants.get(asset.id).version <= asset.version)) variants.set(asset.id, asset);
+  }
+  const focusedAsset = focused === false ? null : variants.get(focused || thread?.selectedAsset?.id || baseAsset?.id || [...variants.keys()].at(-1)) ?? null;
+  const base = editable(focusedAsset) ? focusedAsset : null, baseId = base?.id ?? null;
+  const original = variants.get(turns.find(turn => turn.asset?.id === focusedAsset?.id)?.baseAssetId);
+  const pending = turns.some(isPending) || thread?.attachments?.some(pendingAsset);
+  const scopeReady = !loading && !readError && !linked;
+  const briefKey = JSON.stringify([campaignId, campaignVersion, baseId, base?.version, briefRefresh]);
+  const context = review?.key === briefKey ? review.data : null;
+  const briefMatches = context?.campaignId === campaignId && context?.campaignVersion === campaignVersion &&
+    (context.baseAsset?.id ?? null) === baseId && (!base || context.baseAsset.version === base.version && (base.state !== 'ready' || context.baseAsset.sha256 === base.sha256));
+  const selectedSources = sources.filter(source => source.kind !== 'asset' || source.id !== baseId);
+  const requestedFormat = base ? 'png' : format, gifMs = frames * duration;
+  const validFormat = requestedFormat !== 'gif' || (Number.isInteger(Number(frames)) && frames >= 2 && frames <= 16 && duration >= 20 && duration <= 2000 && duration % 10 === 0 && gifMs >= 3000 && gifMs <= 32000);
+  const canConsent = scopeReady && allowGeneration && availability?.available && !contextDirty && briefMatches && failedPreview !== briefKey && (!focusedAsset || base) &&
+    prompt.trim() && validFormat && selectedSources.length <= (base ? 3 : 4);
   const payload = canConsent ? {
-    campaignId, campaignVersion, briefHash: context.briefHash,
-    baseAsset: adjusting ? { id: context.baseAsset.id, version: context.baseAsset.version, sha256: context.baseAsset.sha256 } : null,
+    campaignId, campaignVersion, briefHash: context.briefHash, baseAsset: base ? { id: baseId, version: base.version, sha256: context.baseAsset.sha256 } : null,
     configurationVersion: availability.configurationVersion, prompt, format: requestedFormat,
-    ...(requestedFormat === 'gif' ? { frameCount: frames, frameDurationMs: duration } : {}),
-    sources: contextual ? [] : usableSources.map(({ kind, id, version }) => ({ kind, id, version })), consent: CONSENT,
+    ...(requestedFormat === 'gif' ? { frameCount: Number(frames), frameDurationMs: Number(duration) } : {}),
+    sources: campaignId ? [] : selectedSources.map(({ kind, id, version }) => ({ kind, id, version })), consent: CONSENT,
   } : null;
-  const payloadKey = payload ? JSON.stringify(payload) : null;
-  const checked = Boolean(payloadKey && consent === payloadKey);
-  const dirty = Boolean(prompt || selected.length || consent || format !== 'png');
-  const currentFence = useRef(null);
-  currentFence.current = { briefKey, contextDirty, alignmentKey, prompt };
-
-  useEffect(() => { callbacks.current.onInteractionStateChange?.({ dirty, busy: busy || refreshing }); }, [dirty, busy, refreshing]);
-  useEffect(() => () => { mutation.current?.abort(); callbacks.current.onInteractionStateChange?.({ dirty: false, busy: false }); }, []);
+  const payloadKey = payload ? JSON.stringify([thread?.version ?? 1, payload]) : null, checked = Boolean(payloadKey && consent === payloadKey);
+  const dirty = Boolean(prompt || sources.length || checked || uploadState?.dirty), locked = busy || Boolean(uploadState?.busy);
+  function remember(next) {
+    if (currentThread.current?.id === next.id && currentThread.current.version > next.version) return;
+    currentThread.current = next; setThread(next);
+  }
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; callbacks.current.onInteractionStateChange?.({ dirty: false, busy: false }); };
+  }, []);
+  useEffect(() => {
+    callbacks.current.onInteractionStateChange?.(active ? { dirty, busy: locked } : { dirty: false, busy: false });
+  }, [active, dirty, locked]);
   useEffect(() => { if (active && error) errorRef.current?.focus(); }, [active, error]);
   useEffect(() => {
-    setConsent(null);
-    request.current = null;
-  }, [briefIdentity, contextDirty, currentAlignment?.mode, currentAlignment?.objective, currentAlignment?.offerHash, availability?.configurationVersion]);
-  useEffect(() => {
     if (!active) return;
-    const controller = new AbortController(), { signal } = controller, params = new URLSearchParams();
-    if (campaignId) params.set('campaignId', campaignId);
-    const path = campaignId ? `${ROOT}?${params}` : ROOT;
-    let timer, pending = pendingRead.current?.campaignId === campaignId && pendingRead.current.pending;
-    async function readProgress() {
-      if (signal.aborted) return;
-      if (document.hidden) { timer = setTimeout(readProgress, 5000); return; }
-      try {
-        const data = await api(path, { signal });
-        if (signal.aborted) return;
-        pending = data.jobs.some(isPending);
-        pendingRead.current = { campaignId, pending };
-        let newlyReady = false;
-        for (const job of data.jobs) {
-          const ready = job.asset?.state === 'ready';
-          if (ready && observed.current.get(job.id) === false) newlyReady = true;
-          observed.current.set(job.id, ready);
-        }
-        setProgress({ campaignId, data, error: '' });
-        if (newlyReady) void notifyMutation();
-      } catch (cause) {
-        if (!signal.aborted) setProgress(previous => ({ campaignId, data: previous?.campaignId === campaignId ? previous.data : null, error: cause.message }));
-      }
-      if (pending && !signal.aborted) timer = setTimeout(readProgress, 5000);
-    }
-    void readProgress();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [active, api, campaignId, listRevision]);
+    // Let the enclosing workspace finish the route's focus handoff first.
+    const frame = requestAnimationFrame(() => {
+      headingRef.current?.focus({ preventScroll: true });
+      headingRef.current?.scrollIntoView({ block: 'start' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active]);
   useEffect(() => {
-    if (!active || contextDirty) return;
+    if (!active || !window.visualViewport) return;
+    const viewport = window.visualViewport, studio = studioRef.current;
+    const update = () => {
+      const inset = viewport.scale === 1 ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
+      studio?.style.setProperty('--studio-keyboard', `${Math.round(inset)}px`);
+    };
+    update();
+    viewport.addEventListener('resize', update);
+    viewport.addEventListener('scroll', update);
+    return () => { viewport.removeEventListener('resize', update); viewport.removeEventListener('scroll', update); };
+  }, [active]);
+  useEffect(() => {
+    if (!active || !allowGeneration) return;
+    const controller = new AbortController(), { signal } = controller;
+    api(`${ROOT}?availabilityOnly=1`, { signal }).then(value => { if (!signal.aborted) setAvailability(value); },
+      cause => { if (!signal.aborted) setAvailability({ reason: `No se pudo comprobar el servicio de imágenes. ${cause.message}` }); });
+    return () => controller.abort();
+  }, [active, allowGeneration, api, briefRefresh]);
+  useEffect(() => {
+    if (!active || !activeThreadId && !campaignId) return;
+    const controller = new AbortController(), { signal } = controller;
+    let timer, target = activeThreadId;
+    if (target && currentThread.current && currentThread.current.id !== target) {
+      currentThread.current = null; olderLoaded.current = false; setThread(null); setTurns([]); setCursor(null); setFocused(null);
+    }
+    setLoading(!currentThread.current);
+    async function read() {
+      if (document.hidden) { timer = setTimeout(read, 3500); return; }
+      try {
+        if (!target) target = (await api(`${THREADS}?${new URLSearchParams({ campaignId })}`, { signal })).threads[0]?.id;
+        if (!target || signal.aborted) return;
+        const data = await api(`${THREADS}/${target}`, { signal });
+        if (signal.aborted) return;
+        remember(data.thread); setTurns(previous => mergeTurns(previous, data.turns));
+        if (!olderLoaded.current) setCursor(data.nextCursor);
+        if (data.turns.some(isPending) || data.thread.attachments.some(pendingAsset)) timer = setTimeout(read, 3500);
+        setReadError('');
+      } catch (cause) { if (!signal.aborted) setReadError(cause.message); }
+      finally { if (!signal.aborted) setLoading(false); }
+    }
+    void read();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [active, api, activeThreadId, campaignId, refresh]);
+  useEffect(() => {
+    if (!active || !allowGeneration || contextDirty || !scopeReady || focusedAsset && !baseId || !campaignId && !availability?.available) return;
     const controller = new AbortController(), params = new URLSearchParams();
     if (campaignId) params.set('campaignId', campaignId);
     if (baseId) params.set('baseAssetId', baseId);
     api(`${ROOT}/brief${params.size ? `?${params}` : ''}`, { signal: controller.signal }).then(data => {
-      if (!controller.signal.aborted) setReview({ key: briefKey, data, error: '' });
-    }, cause => {
-      if (!controller.signal.aborted) setReview({ key: briefKey, data: null, error: cause.message });
-    });
+      if (!controller.signal.aborted) setReview({ key: briefKey, data });
+    }, cause => { if (!controller.signal.aborted) setReview({ key: briefKey, error: cause.message }); });
     return () => controller.abort();
-  }, [active, api, briefKey, campaignId, baseId, contextDirty]);
-  useEffect(() => {
-    if (!active || contextual) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      api(`${ROOT}/sources?${new URLSearchParams({ query, offset: String(offset), limit: String(PAGE_SIZE) })}`, { signal: controller.signal }).then(data => {
-        if (!controller.signal.aborted) setPage({ key: sourceKey, data, error: '' });
-      }, cause => {
-        if (!controller.signal.aborted) setPage({ key: sourceKey, data: null, error: cause.message });
-      });
-    }, 250);
-    return () => { clearTimeout(timer); controller.abort(); };
-  }, [active, api, contextual, query, offset, sourceKey]);
+  }, [active, allowGeneration, availability?.available, api, briefKey, campaignId, baseId, focusedAsset?.id, scopeReady, contextDirty]);
 
-  async function notifyMutation() {
-    try { await callbacks.current.onMutation?.(); } catch (cause) {
-      setRequestNotice(`La solicitud se conserva, pero no se pudo actualizar la biblioteca. ${cause.message}`);
+  function change(setter, value) { setter(value); setConsent(null); request.current = null; }
+  function setPrompt(value) { change(onInstructionsChange || setLocalPrompt, value); }
+  function inspect(assetId, focusPreview = false) {
+    change(setFocused, assetId); setNotice('');
+    if (focusPreview) previewHeading.current?.focus();
+  }
+  async function ensureThread() {
+    if (currentThread.current) return currentThread.current;
+    if (activeThreadId) throw new Error('Vuelve a cargar la pieza en curso antes de continuar.');
+    if (!creation.current) {
+      creationId.current ??= crypto.randomUUID();
+      creation.current = api(THREADS, { method: 'POST', body: JSON.stringify({ requestId: creationId.current, campaignId }) })
+        .then(value => {
+          if (mounted.current) { remember(value); callbacks.current.onThreadCreated?.(value); }
+          return value;
+        }).finally(() => { creation.current = null; });
+    }
+    return creation.current;
+  }
+  async function task(fn) {
+    if (writer.current) return null;
+    writer.current = true; setBusy(true); setError('');
+    try { return await fn(); }
+    catch (cause) {
+      if (mounted.current) {
+        if (cause.status === 409) { setRefresh(value => value + 1); refreshBrief(); }
+        setError(cause.message);
+      }
+      return null;
+    } finally { writer.current = false; if (mounted.current) setBusy(false); }
+  }
+  async function updateAttachment(action, asset) {
+    const current = await ensureThread();
+    const result = await api(`${THREADS}/${current.id}`, { method: 'PATCH', body: JSON.stringify({ action, version: current.version, assetId: asset.id, assetVersion: asset.version }) });
+    if (mounted.current) { remember(result); inspect(asset.id); setRefresh(value => value + 1); }
+    return result;
+  }
+  async function attach(action, asset) {
+    const next = await task(() => updateAttachment(action, asset));
+    if (next && mounted.current) {
+      if (action === 'select' && next.selectedAsset) onUseAsset?.(next.selectedAsset, next);
+      else if (action === 'attach') previewHeading.current?.focus();
     }
   }
-  function changed(setter, value) {
-    setter(value); setConsent(null); request.current = null; setError(''); setRequestNotice('');
-  }
-  function toggle(source) {
-    const prior = selected.find(item => sourceId(item) === sourceId(source));
-    if (!prior && usableSources.length >= sourceLimit) { setSourceLimitError(`Selecciona como máximo ${sourceLimit} referencias adicionales.`); return; }
-    setSourceLimitError('');
-    const next = prior && prior.version === source.version ? selected.filter(item => item !== prior)
-      : prior ? selected.map(item => item === prior ? source : item) : [...selected, source];
-    changed(setSelected, next);
-  }
-  function reload() {
-    setConsent(null);
-    setBriefRevision(value => value + 1); setListRevision(value => value + 1); setSourceRevisionLocal(value => value + 1);
-  }
-  async function refreshContext() {
-    if (refreshLock.current || busy) return;
-    refreshLock.current = true; setRefreshing(true); setError('');
-    try {
-      if (onRefreshContext && await onRefreshContext() === false) return;
-      reload();
-    } catch (cause) { setError(cause.message); }
-    finally { refreshLock.current = false; setRefreshing(false); }
+  async function reserveAttachment(asset) {
+    if (currentThread.current?.attachments.some(entry => entry.id === asset.id)) return;
+    try { await updateAttachment('attach', asset); }
+    catch (cause) { if (cause.status === 409) setRefresh(value => value + 1); throw cause; }
   }
   async function submit() {
-    if (mutation.current || refreshLock.current || !checked || !payload) return;
-    if (request.current?.key !== payloadKey) request.current = { key: payloadKey, id: crypto.randomUUID() };
-    const controller = new AbortController(), { signal } = controller;
-    const requestId = request.current.id;
-    mutation.current = controller; setBusy(true); setError(''); setRequestNotice('');
-    const stillCurrent = () => {
-      const live = currentFence.current;
-      return !signal.aborted && !live.contextDirty && live.briefKey === briefKey && live.alignmentKey === alignmentKey && live.prompt === prompt;
-    };
-    try {
-      const job = await api(ROOT, { method: 'POST', body: JSON.stringify({ ...payload, requestId }), signal });
-      if (signal.aborted) return;
-      observed.current.set(job.id, job.asset?.state === 'ready');
-      if (isPending(job)) pendingRead.current = { campaignId, pending: true };
-      if (stillCurrent()) {
-        request.current = null; setConsent(null);
-        (onInstructionsChange || setLocalPrompt)(''); setSelected([]);
-        setRequestNotice('Solicitud registrada. Revisa su progreso; todavía no hay nada publicado.');
-      }
-      setListRevision(value => value + 1);
-      void notifyMutation();
-    } catch (cause) {
-      if (!stillCurrent()) return;
-      if (cause.status === 409) {
-        request.current = null;
-        reload();
-        setError(`${cause.message} Se conservaron tus indicaciones. Revisa los datos y autoriza de nuevo.`);
-      } else {
-        setError(`${cause.message} Si la respuesta se perdió, enviar las mismas indicaciones y datos conserva el identificador y no duplica la solicitud.`);
-      }
-    } finally {
-      if (mutation.current === controller) mutation.current = null;
-      if (!signal.aborted) setBusy(false);
-    }
+    if (!checked || !payload) return;
+    await task(async () => {
+      const current = await ensureThread();
+      if (current.version !== (thread?.version ?? 1)) { setConsent(null); throw new Error('La pieza en curso cambió. Revisa y vuelve a autorizar.'); }
+      if (request.current?.key !== payloadKey) request.current = { key: payloadKey, id: crypto.randomUUID() };
+      const job = await api(ROOT, { method: 'POST', body: JSON.stringify({ ...payload, requestId: request.current.id, threadId: current.id, threadVersion: current.version }) });
+      if (!mounted.current) return;
+      setTurns(previous => mergeTurns(previous, [{ ...job, prompt: prompt.trim() }])); setPrompt(''); setSources([]); setFocused(null);
+      setNotice('Turno registrado. Nada se ha publicado.'); setRefresh(value => value + 1);
+    });
   }
-
-  const visibleJobs = jobs?.filter(job => (!contextual || job.campaignId === campaignId) && (!adjusting || job.baseAssetId === baseId));
-  const reportPreviewFailure = () => setFailedPreviewKey(briefKey);
-  return <div hidden={!active}><section className={`${styles.card} ${styles.stack}`} aria-label={adjusting ? 'Ajustar con indicaciones' : 'Crear imagen'}>
-    <h3>{adjusting ? 'Ajustar con indicaciones' : 'Crear imagen'}</h3>
-    <p className={styles.help}>{adjusting ? 'La imagen original se conserva. El ajuste crea otro archivo y no cambia los hechos del catálogo.' : 'Prepara una pieza para revisar. Abrir esta sección no crea una solicitud ni publica nada.'}</p>
-    {!progressRead && <p role="status">Comprobando disponibilidad y solicitudes…</p>}
-    {progressRead?.error && <p role="alert" className={styles.error}>{progressRead.error} Vuelve a comprobar con «Actualizar progreso».</p>}
-    {availability && !availability.available && <p className={styles.warning}>{availability.reason || 'El servicio de imágenes no está disponible. Puedes subir una imagen o elegirla de biblioteca.'}</p>}
-    {!contextDirty && !briefRead && <p role="status">Preparando los datos para revisar…</p>}
-    {contextDirty && <p className={styles.warning} role="status">Hay cambios sin guardar. Guarda el borrador y vuelve a revisar los datos; tus indicaciones se conservarán.</p>}
-    {!contextDirty && briefRead?.error && <p role="alert" className={styles.error}>{briefRead.error}{adjusting && ' Si la foto no se puede ajustar, elige otra imagen.'}</p>}
-    {!contextDirty && context && !briefMatches && <p role="alert" className={styles.warning}>Cambió el borrador o la imagen a modificar. Vuelve a revisar los datos antes de autorizar.</p>}
-    {previewFailed && <p role="alert" className={styles.warning}>No se pudo ver una foto de referencia. Vuelve a comprobar los datos o elige otra imagen antes de autorizar.</p>}
-    <div className={styles.actions}>
-      {(contextDirty || briefRead?.error || context && !briefMatches || previewFailed) && <button type="button" className="button subtle" disabled={busy || refreshing || contextDirty && !onRefreshContext}
-        onClick={contextDirty || context && !briefMatches ? refreshContext : reload}>{refreshing ? 'Actualizando el borrador…' : contextDirty ? 'Guardar borrador y volver a revisar' : 'Volver a revisar los datos'}</button>}
-      {adjusting && onPreserveBase && <button type="button" className="button subtle" disabled={busy || refreshing} onClick={() => onPreserveBase(baseAsset)}>Conservar original</button>}
+  async function readOlder() {
+    if (!cursor || olderBusy || !activeThreadId) return;
+    setOlderBusy(true); setError('');
+    try {
+      const data = await api(`${THREADS}/${activeThreadId}?${new URLSearchParams({ cursor })}`);
+      if (mounted.current) { olderLoaded.current = true; setTurns(previous => mergeTurns(data.turns, previous)); setCursor(data.nextCursor); }
+    } catch (cause) { if (mounted.current) setError(cause.message); }
+    finally { if (mounted.current) setOlderBusy(false); }
+  }
+  function refreshBrief() { setConsent(null); setBriefRefresh(value => value + 1); }
+  const refreshAll = () => { setRefresh(value => value + 1); refreshBrief(); };
+  const library = assets.filter(asset => asset.state === 'ready' || editable(asset));
+  return <section ref={studioRef} className={styles.studio} hidden={!active} aria-label="Estudio visual" aria-busy={loading}>
+    <div className={styles.stack}>
+      <header className={styles.heading}><div><p className={styles.eyebrow}>Preparar la imagen o video</p><h2 ref={headingRef} tabIndex={-1}>Estudio visual</h2><p>Tu conversación es privada. Usa un archivo o crea una imagen.</p></div>
+        {onExit && <button type="button" className="text-button" disabled={locked} onClick={onExit}>Volver a publicaciones</button>}
+      </header>
+      {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}
+      {readError && <div role="alert" className={styles.error}><p>{readError}</p><button type="button" className="button subtle" onClick={refreshAll}>Volver a cargar el estudio</button></div>}
     </div>
-    {briefMatches && !contextDirty && <BriefDetails key={briefKey} context={context} baseName={baseAsset?.name} onPreviewError={reportPreviewFailure} />}
-    <fieldset className={styles.connectionFieldset} disabled={busy || refreshing}>
-      <legend>Indicaciones de la pieza</legend>
-      <label className="field">Indicaciones para esta imagen{!promptRequired && ' (opcionales)'}
-        <textarea rows={4} maxLength={4000} aria-required={promptRequired} value={prompt}
-          onChange={event => changed(onInstructionsChange || setLocalPrompt, event.target.value)}
-          placeholder={adjusting ? 'Aclara el fondo, conserva la etiqueta y la condición del obsequio.' : 'Por ejemplo: fondo azul, con espacio alrededor del producto.'} />
-      </label>
-      {adjusting && <p className={styles.help}>¿Qué quieres cambiar? Describe el estilo o el encuadre, sin cambiar etiquetas, precio, obsequios ni condiciones.</p>}
-      {!adjusting && <details className={styles.technicalDetails}><summary>Opciones de formato</summary>
-        <label className="field">Formato<select value={format} onChange={event => changed(setFormat, event.target.value)}><option value="png">Imagen PNG cuadrada</option><option value="gif">GIF animado vertical</option></select></label>
-        {format === 'gif' && <div className={styles.fieldGrid}>
-          <label className="field">Fotogramas (2–16)<input type="number" min={2} max={16} value={frameCount} onChange={event => changed(setFrameCount, event.target.value)} /></label>
-          <label className="field">Milisegundos por fotograma (20–2000, múltiplos de 10)<input type="number" min={20} max={2000} step={10} value={frameDurationMs} onChange={event => changed(setFrameDurationMs, event.target.value)} /></label>
-          <p className={styles.help}>Duración: {(gifMs / 1000).toFixed(2)} segundos. Debe estar entre 3 y 32 segundos. Se conserva el GIF y se prepara un MP4 vertical sin recorte para revisar.</p>
-        </div>}
-      </details>}
-      {!contextual && <div className={styles.stack}>
-        <h4>Referencias opcionales: biblioteca y productos</h4>
-        <p className={styles.help}>Puedes trabajar sin fotos. Elige hasta {sourceLimit} referencias {adjusting ? 'además de la imagen a modificar' : 'locales'}; no se descargan enlaces externos.</p>
-        <label className="field">Buscar fuentes<input value={query} maxLength={100} onChange={event => { setQuery(event.target.value); setOffset(0); }} /></label>
-        {!sourceRead && <p role="status">Buscando fotos de referencia…</p>}
-        {sourceRead?.error && <div role="alert" className={styles.error}><p>{sourceRead.error}</p><button type="button" className="button subtle" onClick={() => setSourceRevisionLocal(value => value + 1)}>Reintentar búsqueda</button></div>}
-        {(sourceLimitError || usableSources.length > sourceLimit) && <p role="alert">{sourceLimitError || `Retira referencias hasta conservar un máximo de ${sourceLimit}.`}</p>}
-        {staleSource && <p role="alert" className={styles.warning}>Una referencia cambió. Elige su versión actual o retírala antes de autorizar.</p>}
-        {usableSources.length > 0 && <ul className={styles.choiceList} aria-label="Fuentes seleccionadas">{usableSources.map(source => <li key={sourceId(source)} className={styles.assetPreview}>
-          <span>{sourceTitle(source)}</span><img src={source.thumbnailUrl} alt="" width={72} height={72} className={styles.previewImage} />
-          <div><button type="button" className="button subtle" onClick={() => toggle(source)} aria-label={`Quitar ${sourceTitle(source)}`}>Quitar</button></div>
-        </li>)}</ul>}
-        <div className={styles.summaryGrid}>{sources.filter(source => source.kind !== 'asset' || source.id !== baseId).map(source => <label className={styles.checkRow} key={sourceId(source)}>
-          <input type="checkbox" checked={usableSources.some(item => sourceId(item) === sourceId(source) && item.version === source.version)} onChange={() => toggle(source)} />
-          <img src={source.thumbnailUrl} alt="" width={72} height={72} className={styles.previewImage} />
-          <span>{sourceTitle(source)}</span>
-        </label>)}</div>
-        {sourceRead?.data && sources.length === 0 && <p>No hay fotos locales listas para esta búsqueda.</p>}
-        <div className={styles.actions}><button type="button" className="button subtle" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Fuentes anteriores</button>
-          <button type="button" className="button subtle" disabled={!sourceRead?.data?.hasMore} onClick={() => setOffset(sourceRead.data.nextOffset)}>Más fuentes</button></div>
-      </div>}
-      <label className={styles.checkRow}><input type="checkbox" disabled={!canConsent} checked={checked} onChange={event => setConsent(event.target.checked ? payloadKey : null)} />
-        <span>Autorizo el envío a <strong>OpenAI</strong> de las indicaciones, datos y fotos que se muestran y un posible cargo variable sin tope garantizado. Confirmo que no contienen datos de clientes ni información personal. Revisaré producto, texto, afirmaciones y derechos antes de publicar. Nada se publica automáticamente.</span>
-      </label>
-      <div className={styles.actions}><button type="button" className="button primary" disabled={!checked || busy} onClick={submit}>{busy ? 'Registrando solicitud…' : adjusting ? 'Solicitar ajuste con posible cargo' : 'Solicitar imagen con posible cargo'}</button></div>
-    </fieldset>
-    {requestNotice && <p role="status" className={styles.notice}>{requestNotice}</p>}
-    {error && <p role="alert" className={styles.error} tabIndex={-1} ref={errorRef}>{error}</p>}
-    <h4>Solicitudes recientes</h4>
-    <div className={styles.actions}><button type="button" className="button subtle" disabled={busy} onClick={() => setListRevision(value => value + 1)}>Actualizar progreso</button></div>
-    <div className={styles.stack} aria-live="polite">
-      {visibleJobs && visibleJobs.length === 0 && <p>No hay solicitudes para mostrar.</p>}
-      {visibleJobs?.map(job => <Job key={job.id} job={job} contextual={contextual} alignment={alignment} adjusting={adjusting} compact={compact} onOriginalError={reportPreviewFailure}
-        original={adjusting && briefMatches && !previewFailed ? context.baseAsset : null} onUseAsset={onUseAsset} busy={busy || refreshing} />)}
-    </div>
-  </section></div>;
+    {linked ? <div className={styles.notice}><p>Esta pieza ya tiene un borrador.</p><button type="button" className="button primary" onClick={() => onOpenCampaign?.(linked)}>Continuar borrador</button></div> : <>
+      <section className={`${styles.card} ${styles.stack}`} aria-label="Añadir una pieza">
+        <h3>Usar un archivo que ya tienes</h3>
+        <div className={styles.actions}>
+          <button type="button" className="button subtle" disabled={locked || !scopeReady} aria-expanded={choice === 'upload'} onClick={() => setChoice(value => value === 'upload' ? null : 'upload')}>Adjuntar foto o video</button>
+          <button type="button" className="button subtle" disabled={locked || !scopeReady} aria-expanded={choice === 'library'} onClick={() => setChoice(value => value === 'library' ? null : 'library')}>Elegir de biblioteca</button>
+        </div>
+        {onSkip && <button type="button" className="text-button" disabled={locked || !scopeReady} onClick={onSkip}>Definir primero, sin imagen aún</button>}
+        {choice === 'upload' && <AdvertisingAssetUpload api={api} onBeforeUpload={ensureThread} onAssetReserved={reserveAttachment} onAsset={() => setRefresh(value => value + 1)}
+          onMutation={onMutation} onInteractionStateChange={setUploadState} disabled={busy || !scopeReady}/>}
+        {choice === 'library' && <label className="field">Archivo de biblioteca<select value="" disabled={locked || !scopeReady} onChange={event => {
+          const asset = library.find(item => item.id === event.target.value);
+          if (asset) void attach('attach', asset);
+        }}><option value="">Selecciona una imagen o video</option>{library.map(asset => <option key={asset.id} value={asset.id}>{asset.name} · {asset.kind === 'video' ? 'Video' : 'Imagen'}{asset.state !== 'ready' ? ' · Solo para ajustar' : ''}</option>)}</select></label>}
+        {choice === 'library' && !library.length && <p className={styles.help}>Todavía no hay archivos disponibles. Puedes adjuntar uno aquí{onSkip ? ' o continuar sin imagen' : ''}.</p>}
+      </section>
+      <section className={`${styles.studioPreview} ${styles.card} ${styles.stack}`} aria-labelledby={`${id}-preview`}>
+        <h3 id={`${id}-preview`} ref={previewHeading} tabIndex={-1}>Tu pieza</h3>
+        {thread?.selectionChanged && <p className={styles.warning}>La pieza seleccionada cambió. Vuelve a revisar la versión actual.</p>}
+        <StudioPreview key={`${focusedAsset?.id}:${focusedAsset?.version}`} asset={focusedAsset} original={original} disabled={locked || !scopeReady}
+          onUse={onUseAsset && (asset => void attach('select', asset))} publishable={!allowPublishAsset || Boolean(focusedAsset && allowPublishAsset(focusedAsset))}
+          onFresh={allowGeneration && focusedAsset ? () => inspect(false) : null}/>
+        {variants.size > 0 && <details className={styles.technicalDetails} open={variants.size < 4}><summary>Original y variantes ({variants.size})</summary>
+          <ul className={styles.choiceList}>{[...variants.values()].map((asset, index) => <li key={asset.id}>
+            <button type="button" className="button subtle" aria-pressed={focusedAsset?.id === asset.id} disabled={locked} onClick={() => inspect(asset.id, true)}>
+              {index === 0 ? 'Original' : `Variante ${index}`} · {asset.name}{asset.state !== 'ready' && editable(asset) ? ' · Solo para ajustar' : ''}
+            </button>
+          </li>)}</ul>
+        </details>}
+      </section>
+      <div className={styles.studioChat}>
+        {allowGeneration && <section className={`${styles.card} ${styles.stack}`} aria-label="Compositor">
+          <h3>{base ? 'Ajustar una imagen' : 'Crear una imagen'}</h3>
+          {!availability && <p role="status">Comprobando disponibilidad de imágenes…</p>}
+          {availability && !availability.available && <p className={styles.warning}>{availability.reason} Puedes usar un archivo propio o continuar sin imagen.</p>}
+            {contextDirty && <p>Hay cambios sin guardar. <button type="button" className="button subtle" disabled={locked} onClick={() => void task(async () => { if (await onRefreshContext?.()) refreshBrief(); })}>Guardar borrador y volver a revisar</button></p>}
+            {focusedAsset && !base && <p className={styles.warning}>Este archivo no admite ajustes por indicaciones. Puedes usarlo si está listo o elegir otra foto fija.</p>}
+            {!contextDirty && review?.key === briefKey && review.error && <p role="alert">{review.error} <button type="button" className="button subtle" onClick={refreshBrief}>Volver a revisar los datos</button></p>}
+            {context && !briefMatches && <p role="alert">Cambió el borrador o el archivo. <button type="button" className="button subtle" onClick={refreshAll}>Volver a revisar</button></p>}
+            {failedPreview === briefKey && <p role="alert">No se pudo ver una foto de referencia. <button type="button" className="button subtle" onClick={refreshBrief}>Volver a comprobar</button></p>}
+            {briefMatches && !contextDirty && <BriefDetails key={briefKey} context={context} baseName={base?.name} onPreviewError={() => setFailedPreview(briefKey)}/>}
+          {availability?.available && <>
+            <fieldset disabled={locked || !scopeReady} className={styles.connectionFieldset}>
+              <legend>{base ? 'Indica qué quieres cambiar' : 'Cuéntanos qué quieres ver'}</legend>
+              {!base && <details className={styles.technicalDetails}><summary>Opciones de formato</summary>
+                <label className="field">Formato<select value={format} onChange={event => change(setFormat, event.target.value)}><option value="png">Imagen PNG cuadrada</option><option value="gif">GIF animado vertical</option></select></label>
+                {format === 'gif' && <div className={styles.fieldGrid}>
+                  <label className="field">Fotogramas (2–16)<input type="number" min={2} max={16} value={frames} onChange={event => change(setFrames, event.target.value)}/></label>
+                  <label className="field">Milisegundos por fotograma<input type="number" min={20} max={2000} step={10} value={duration} onChange={event => change(setDuration, event.target.value)}/></label>
+                  <p className={styles.help}>Duración: {(gifMs / 1000).toFixed(2)} segundos. Debe estar entre 3 y 32 segundos. Se conserva el GIF y se prepara un MP4 vertical.</p>
+                </div>}
+              </details>}
+              {!campaignId && <ReferencePicker api={api} base={base} items={sources} onChange={value => change(setSources, value)}/>}
+              <div className={styles.actions} aria-label="Ejemplos de indicaciones">{(base ? EXAMPLES.slice(-1) : EXAMPLES.slice(0, 2)).map(example => <button type="button" className="button subtle" key={example} onClick={() => {
+                setPrompt(example); composerRef.current?.focus();
+              }}>{example}</button>)}</div>
+              <div className={styles.studioComposer}>
+                <label htmlFor={`${id}-prompt`} className="field">{base ? '¿Qué quieres ajustar?' : 'Describe tu idea'}</label>
+                <textarea id={`${id}-prompt`} ref={composerRef} rows={3} maxLength={4000} value={prompt} aria-describedby={`${id}-consent`} onChange={event => setPrompt(event.target.value)}
+                  onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && checked) { event.preventDefault(); void submit(); } }}/>
+                <label id={`${id}-consent`} className={styles.checkRow}><input type="checkbox" disabled={!canConsent} checked={checked} onChange={event => setConsent(event.target.checked ? payloadKey : null)}/>
+                  <span>Autorizo el envío a <strong>OpenAI</strong> de mis indicaciones, los datos y las fotos mostradas, con un posible cargo variable sin tope garantizado. No contienen datos de clientes ni información personal. Revisaré el resultado y los derechos. Nada se publica automáticamente.</span>
+                </label>
+                {availability.available && !checked && <p className={styles.help}>{!prompt.trim() ? 'Escribe una idea o usa un ejemplo para empezar.' : !validFormat ? 'Corrige la duración y los fotogramas en Opciones de formato.' : canConsent ? 'Revisa lo que se enviará antes de marcar la autorización.' : 'Aún no se puede autorizar. Revisa los datos y los avisos de esta imagen.'}</p>}
+                <button type="button" className="button primary" disabled={!checked || locked} onClick={submit}>{busy ? 'Registrando turno…' : base ? 'Enviar ajuste' : 'Enviar idea'}</button>
+              </div>
+            </fieldset>
+          </>}
+        </section>}
+        {notice && <p className={styles.notice} role="status">{notice}</p>}
+        <section className={`${styles.card} ${styles.stack}`} aria-label="Chat creativo">
+          <h3>Chat creativo</h3>
+          {loading && <p role="status">Cargando tu conversación…</p>}
+          {!turns.length && !loading && <p className={styles.help}>Describe una idea, adjunta una foto o elige una pieza de biblioteca. Las fotos originales se conservan.</p>}
+          {cursor && <button type="button" className="button subtle" disabled={olderBusy} onClick={readOlder}>Cargar turnos anteriores</button>}
+          {turns.length > 0 && <ol className={styles.studioTurns}>{turns.toReversed().map(turn => <li key={turn.id}>
+            <div><strong>Tú</strong><p>{turn.prompt}</p></div>
+            <div><strong>{jobStatus(turn)}</strong><p>{turn.asset?.diagnostic?.message || turn.notice}</p>
+              {turn.asset && <button type="button" className="button subtle" disabled={locked} onClick={() => inspect(turn.asset.id, true)}>Ver {turn.asset.state === 'ready' ? 'variante' : 'archivo'} · {turn.asset.name}</button>}
+            </div>
+          </li>)}</ol>}
+          <span className={styles.visuallyHidden} role="status">{turns[0] ? `Último turno: ${jobStatus(turns[0])}` : ''}</span>
+          {pending && <button type="button" className="button subtle" onClick={refreshAll}>Actualizar progreso</button>}
+        </section>
+      </div>
+    </>}
+  </section>;
 }

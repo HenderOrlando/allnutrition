@@ -115,9 +115,14 @@ async function setupAdvertisingFixture(kind, { appImage, checksImage, dbImage, c
     const origin = `https://localhost:${httpsPort}`;
     const { envFile, values, reused } = createDeploymentEnv('test', { id });
     assert(!reused && values.POSTGRES_DB === database, 'Se requiere una base de prueba nueva.');
+    const publicationWorker = 'tests/e2e/guided-publication-worker.mjs';
+    const audienceWorker = 'tests/e2e/guided-audience-provider.mjs';
+    const controlledPublication = !approval && existsSync(join(configRoot, publicationWorker));
+    const controlledAudience = !approval && existsSync(join(configRoot, audienceWorker));
     Object.assign(env, { APP_IMAGE: appId, APP_URL: origin, HTTPS_PORT: String(httpsPort) });
     const services = { db: { image: dbId }, checks: { image: checksId }, web: {} };
     const hostDirectories = {};
+    if (controlledPublication) services.web.environment = { SOCIAL_BROWSER_URL: 'http://127.0.0.1:3320' };
     if (approval) {
       // The host Playwright fixture and the web must have the same UID to use
       // the 0700 binds. /tmp avoids UID 1000-owned /app ancestors in the keyring.
@@ -160,6 +165,29 @@ async function setupAdvertisingFixture(kind, { appImage, checksImage, dbImage, c
     await oneOff('migrate', appId);
     await oneOff('checks', checksId, ['node', 'tests/e2e/setup.mjs']);
     await up(approval ? ['web', 'db-relay'] : ['web']);
+    if (controlledPublication) await compose(['exec', '-d', 'web', 'node', publicationWorker, 'serve', '-', origin], 'runner sintético de publicación');
+    if (controlledAudience) await compose(['exec', '-d', 'web', 'node', audienceWorker, 'serve', origin], 'proveedor sintético de audiencia');
+    if (controlledPublication || controlledAudience) {
+      const ports = [...(controlledPublication ? [3320] : []), ...(controlledAudience ? [3339] : [])];
+      await compose(['exec', '-T', 'web', 'node', '-e', `
+        const net = require('node:net');
+        const { setTimeout: wait } = require('node:timers/promises');
+        const ready = port => new Promise(resolve => {
+          const socket = net.connect(port, '127.0.0.1');
+          socket.once('connect', () => { socket.end(); resolve(true); });
+          socket.once('error', () => resolve(false));
+          socket.setTimeout(500, () => { socket.destroy(); resolve(false); });
+        });
+        (async () => {
+          for (const port of ${JSON.stringify(ports)}) {
+            for (let attempt = 0; !await ready(port); attempt++) {
+              if (attempt === 29) throw Error('Fixture de ensayo sin escucha loopback: ' + port);
+              await wait(100);
+            }
+          }
+        })().catch(error => { console.error(error.message); process.exitCode = 1; });
+      `], 'disponibilidad de transportes privados');
+    }
     await up(['proxy'], 'missing');
 
     const expected = { db: dbId, web: appId, proxy: null, ...(approval && { 'db-relay': appId }) };
@@ -188,6 +216,7 @@ async function setupAdvertisingFixture(kind, { appImage, checksImage, dbImage, c
     const environment = approval ? {
       E2E_BASE_URL: origin,
       E2E_ALLOW_SELF_SIGNED: '1',
+      ADVERTISING_APPROVAL_COMPOSE_PROJECT: project,
       TEST_DATABASE_URL: `postgresql://postgres:${values.POSTGRES_PASSWORD}@127.0.0.1:${dbPort}/${database}`,
       TEST_ALLOW_DATABASE_RESET: database,
       TEST_DB_SSL: 'verify',

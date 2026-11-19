@@ -79,11 +79,12 @@ function ConnectionsIntro({ api, data, report, onMutation, onCreated }) {
       }
     } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); } finally { controllers.current.delete(controller); locked.current = false; setBusy(false); }
   }
-  return <><div className={styles.grid}>{['api', 'browser'].map(method => {
+  return <><p className={styles.help}>Para publicar o gestionar anuncios por API, elige Conectar con Facebook. Para solo consultar publicidad, puedes usar un token manual. El acceso asistido por navegador requiere autorización independiente de Meta y no se abre automáticamente si falla la API.</p><div className={styles.grid}>{['api', 'browser'].map(method => {
     const requirement = data?.requirements?.find(item => item.integrationMethod === method), available = requirement?.configured && requirement.enabled;
     return <article className={styles.card} key={method}><h2>{methods[method]}</h2>
-      <p>{method === 'api' ? 'Autoriza tu negocio desde Facebook. No introduces la contraseña en este panel.' : 'Inicia sesión personalmente en un visor privado.'}</p>
+      <p>{method === 'api' ? 'Autoriza con el usuario de Facebook que tiene acceso al negocio y a los recursos. No introduces la contraseña en este panel.' : 'Inicia sesión personalmente en un visor privado.'}</p>
       {method === 'browser' && <p className={styles.warning}>Requiere permiso previo de Meta para automatización. Los desafíos se resuelven personalmente; no se evaden. La sesión se conserva cifrada; no se guardan contraseñas, códigos de un solo uso ni capturas.</p>}
+      {method === 'api' && <p>En Meta for Developers → Facebook Login for Business → Configurations, selecciona <strong>Token de acceso de usuario</strong> (no de usuario del sistema). Guarda el ID de esa configuración y registra el callback exacto indicado en Opciones de Meta.</p>}
       {!requirement ? <p role="status">Consultando requisitos…</p> : <>
         <p>{available ? 'Esta opción está configurada y habilitada.' : 'Esta opción necesita configuración del administrador. Puedes guardar borradores mientras tanto.'}</p>
         {!requirement.enabled && <p className={styles.warning}>Esta opción está deshabilitada en las opciones guardadas.</p>}
@@ -103,6 +104,10 @@ function ConnectionCard({ api, connection, selected, report, onMutation, onLogin
   const currentIds = connection.identities || {}, initial = () => Object.fromEntries(['businessId', 'pageId', 'instagramId', 'adAccountId'].map(key => [key, currentIds[key] || '']));
   const [selection, setSelection] = useState(initial), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const selectionRef = useRef(selection), errorRef = useRef(null), baseline = useRef(JSON.stringify(initial())), locked = useRef(false), requests = useRef(new Set()), rid = useRequestIds(), owner = `connection:${connection.id}`;
+  const selectionHeading = useRef(null);
+  const resources = connection.resources || {};
+  const needsSelection = selected && connection.state === 'connected' && (!currentIds.pageId && resources.pages?.length > 0 || !currentIds.adAccountId && resources.adAccounts?.length > 0);
+  useEffect(() => { if (needsSelection) selectionHeading.current?.focus(); }, [needsSelection]);
   const dirty = JSON.stringify(selection) !== baseline.current;
   useEffect(() => {
     if (JSON.stringify(selectionRef.current) !== baseline.current) return;
@@ -135,21 +140,22 @@ function ConnectionCard({ api, connection, selected, report, onMutation, onLogin
       const payload = { action, version: connection.version, ...(action === 'select-assets' ? { identities: Object.fromEntries(Object.entries(selection).map(([key, value]) => [key, value || null])) } : {}) };
       const result = await api(`${ROOT}/connections/${encodeURIComponent(connection.id)}/actions`, { method: 'POST', body: JSON.stringify({ ...payload, requestId: rid(action, payload) }), signal: controller.signal });
       if (action === 'select-assets') { const next = Object.fromEntries(['businessId', 'pageId', 'instagramId', 'adAccountId'].map(key => [key, result.identities?.[key] || ''])); baseline.current = JSON.stringify(next); selectionRef.current = next; setSelection(next); }
-      setNotice(`Validación terminada: ${states[result.state] || result.state}. Sólo se habilitan las capacidades comprobadas.`); await onMutation();
+      setNotice(result.state === 'reconnect_required' ? 'Meta no confirmó el acceso vigente. Sigue la indicación de esta ficha y revisa la evaluación de acceso.' : `Validación terminada: ${states[result.state] || result.state}. Solo se habilitan las capacidades comprobadas.`); await onMutation();
     } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); } finally { requests.current.delete(controller); locked.current = false; setBusy(false); }
   }
-  const resources = connection.resources || {}, page = resources.pages?.find(item => item.id === selection.pageId);
+  const page = resources.pages?.find(item => item.id === selection.pageId);
   const resourceName = (group, id, fallback) => id ? resources[group]?.find(item => item.id === id)?.name || id : fallback;
   const tokenOnly = connection.authenticationMethod === 'token' || connection.readOnly;
   return <article className={styles.card} aria-label={connection.name || 'Conexión Meta'} aria-current={selected ? 'true' : undefined}><header className={styles.toolbar}><div><h2>{connection.name || 'Conexión Meta'}</h2><p>{methods[connection.integrationMethod]} · Versión {connection.version}</p></div><span className={styles.badge}>{states[connection.state] || connection.state}</span></header>
-    {connection.integrationMethod === 'api' && <p className={styles.notice}>{tokenOnly ? 'Token manual · Solo lectura. Para renovar el acceso crea una nueva conexión manual; no se reautoriza por OAuth.' : 'Autenticación OAuth'}</p>}
+    {connection.integrationMethod === 'api' && <p className={styles.notice}>{tokenOnly ? 'Token manual · Solo lectura. Para renovar el acceso, crea una conexión nueva con un token de la misma app; esta ficha no se reautoriza por OAuth.' : 'Facebook Login for Business · Token de acceso de usuario.'}</p>}
+    {connection.state === 'reconnect_required' && <p className={styles.warning}>{tokenOnly ? <>Usa <a href="#meta-manual-connection">Token de acceso manual</a> con un token vigente de la misma app y vuelve a seleccionar la cuenta correspondiente.</> : connection.integrationMethod === 'api' ? 'Pulsa Volver a autorizar con Facebook con el mismo usuario de Meta; después pulsa Verificar conexión.' : 'Pulsa Abrir acceso asistido y completa el inicio de sesión en el visor.'}</p>}
     <dl className="summary-values"><div><dt>Usuario verificado</dt><dd>{currentIds.userName || currentIds.userId || 'No verificado'}</dd></div><div><dt>Negocio</dt><dd>{resourceName('businesses', currentIds.businessId, 'Sin negocio')}</dd></div><div><dt>Página Facebook</dt><dd>{resourceName('pages', currentIds.pageId, 'Sin página')}</dd></div><div><dt>Instagram profesional</dt><dd>{currentIds.instagramId || 'Sin Instagram profesional'}</dd></div><div><dt>Cuenta de anuncios</dt><dd>{resourceName('adAccounts', currentIds.adAccountId, 'No seleccionada')} · {connection.currency || 'Sin moneda'} · {connection.timeZone || 'Sin zona verificada'}</dd></div><div><dt>Última validación / consulta</dt><dd>{date(connection.validatedAt)}</dd></div><div><dt>Caducidad informada</dt><dd>{connection.expiresAt ? date(connection.expiresAt) : 'No informada; no significa sesión perpetua'}</dd></div></dl>
     {connection.disconnectStatus && <div className={styles.warning} role="status"><p>{connection.disconnectStatus.state === 'needs_confirmation' ? 'Las cantidades o la autorización cambiaron. Revisa y confirma de nuevo la desconexión/eliminación.' : 'Pausas pendientes de confirmar antes de desconectar. Aún no se afirma que se detuvo el gasto.'}</p><p>Solicitada: {date(connection.disconnectStatus.requestedAt)}</p>{connection.disconnectStatus.receiptId && <p>Recibo solicitado: {connection.disconnectStatus.receiptId}</p>}{connection.disconnectStatus.state === 'needs_confirmation' && <button type="button" className="button subtle" disabled={busy || dirty} onClick={() => onAction(connection.disconnectStatus.action)}>Revisar y confirmar de nuevo</button>}</div>}
     <ul className={styles.choiceList}>{Object.entries(capabilities).map(([key, label]) => <li key={key}>{label}: <strong>{connection.state === 'connected' && connection.capabilities?.[key] && (!tokenOnly || key === 'insights') ? 'Disponible' : 'No acreditada / no disponible'}</strong></li>)}</ul>
     {connection.resourceNotice && <p className={styles.notice}>{connection.resourceNotice}</p>}
     {connection.state === 'layout_changed' && <p className={styles.warning}>No se harán clics alternativos: se requiere corregir y revalidar la versión del adaptador.</p>}
     {connection.state === 'challenge_required' && <p className={styles.warning}>Completa el desafío personalmente en el visor; no hay evasión ni reintento de contraseña.</p>}
-    <details className={styles.detail} open={dirty || undefined}><summary>Elegir página y cuenta de anuncios</summary><p>Selecciona únicamente recursos descubiertos por esta vía. No se aceptan identificadores escritos libremente ni cambios de recursos de una conexión aprobada.</p>
+    <details className={styles.detail} open={dirty || needsSelection || undefined}><summary ref={selectionHeading}>Seleccionar página y cuenta</summary><p>Selecciona únicamente recursos descubiertos por esta vía. No se aceptan identificadores escritos libremente ni cambios de recursos de una conexión aprobada.</p>
       <fieldset disabled={busy || connection.state !== 'connected'} className={styles.fieldGrid}><legend>Recursos profesionales</legend>
         <SelectField name={`business-${connection.id}`} label="Negocio" value={selection.businessId} options={[{ value: '', label: 'Sin seleccionar' }, ...(resources.businesses || []).map(item => ({ value: item.id, label: `${item.name || item.id} · ${item.id}` }))]} onChange={value => choose('businessId', value)}/>
         <SelectField name={`page-${connection.id}`} label="Página Facebook" value={selection.pageId} options={[{ value: '', label: 'Sin seleccionar' }, ...(resources.pages || []).map(item => ({ value: item.id, label: `${item.name || item.id} · ${item.id}` }))]} onChange={value => choose('pageId', value)}/>
@@ -160,7 +166,7 @@ function ConnectionCard({ api, connection, selected, report, onMutation, onLogin
     <details className={styles.technicalDetails}><summary>Detalles técnicos</summary><p>Permisos concedidos: {connection.permissions?.join(', ') || 'No informados por esta vía'}</p><p>Adaptador: {connection.adapterVersion || 'Versión no informada'} · Formato: {connection.locale || 'No informado'}</p></details>
     {connection.integrationMethod === 'api' && <><MetaEvaluation evaluation={connection.evaluation}/><MetaAdvertisingRead api={api} connection={connection} report={report} blocked={dirty || busy}/></>}
     {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}{notice && <p role="status" className={styles.notice}>{notice}</p>}
-    <div className={styles.actions}><button type="button" className="button subtle" disabled={busy || dirty} onClick={() => act('validate')}>Comprobar conexión</button>{!tokenOnly && <button type="button" className="button subtle" disabled={busy || dirty} onClick={() => connection.integrationMethod === 'api' ? act('oauth') : onLogin()}>{connection.integrationMethod === 'api' ? 'Volver a iniciar sesión' : 'Abrir acceso asistido'}</button>}</div>
+    <div className={styles.actions}><button type="button" className="button subtle" disabled={busy || dirty} onClick={() => act('validate')}>Verificar conexión</button>{!tokenOnly && <button type="button" className="button subtle" disabled={busy || dirty} onClick={() => connection.integrationMethod === 'api' ? act('oauth') : onLogin()}>{connection.integrationMethod === 'api' ? 'Volver a autorizar con Facebook' : 'Abrir acceso asistido'}</button>}</div>
     <details className={styles.technicalDetails}><summary>Desconectar o eliminar datos locales</summary><div className={styles.actions}><button type="button" className="button subtle" disabled={busy || dirty || connection.state === 'disconnected'} onClick={() => onAction('disconnect')}>Desconectar cuenta</button><button type="button" className="button danger" disabled={busy || dirty} onClick={() => onAction('delete-platform-data')}>Eliminar datos locales…</button></div></details>
   </article>;
 }
@@ -295,17 +301,18 @@ function SocialSettingsForm({ api, settings, report, onSaved, disabled }) {
     } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); }
     finally { requests.current.delete(controller); locked.current = false; setBusy(false); }
   }
-  return <form className={styles.panel} onSubmit={submit} aria-label="Opciones de Meta" aria-busy={busy}>
+  return <form className={styles.panel} method="post" onSubmit={submit} aria-label="Opciones de Meta" aria-busy={busy}>
     <h2>Opciones de Meta</h2>
     <p>Los cambios se aplican sin reiniciar. Cambiar app, secreto u origen exige volver a verificar las preparaciones pendientes. Para cambiar de app, desconecta antes las cuentas API.</p>
     <fieldset disabled={busy || disabled} className={styles.connectionFieldset}><legend>Configuración de publicación</legend>
       <div className={styles.fieldGrid}>
         <label className="field">Origen público del panel<input name="publicBaseUrl" type="url" maxLength={2048} required value={form.publicBaseUrl} onChange={event => set('publicBaseUrl', event.target.value)} aria-describedby="social-origin-help"/></label>
         <label className="field">ID de app de Meta<input name="appId" maxLength={100} value={form.appId} onChange={event => set('appId', event.target.value)} autoComplete="off"/></label>
-        <label className="field">ID de configuración de inicio de sesión<input name="loginConfigId" maxLength={100} value={form.loginConfigId} onChange={event => set('loginConfigId', event.target.value)} autoComplete="off"/></label>
+        <label className="field">ID de configuración de inicio de sesión<input name="loginConfigId" maxLength={100} value={form.loginConfigId} onChange={event => set('loginConfigId', event.target.value)} autoComplete="off" aria-describedby="social-login-config-help"/></label>
         <label className="field">Secreto de app de Meta<input name="appSecret" type="password" maxLength={4096} value={form.appSecret} onChange={event => set('appSecret', event.target.value)} autoComplete="new-password" aria-describedby="social-secret-help"/></label>
       </div>
       <p id="social-origin-help" className={styles.help}>Usa el origen HTTPS autorizado del panel, sin ruta. Solo se permite HTTP en loopback de desarrollo.</p>
+      <p id="social-login-config-help" className={styles.help}>Para OAuth, usa el ID de una configuración de Facebook Login for Business de esta app que emita Token de acceso de usuario. El token manual no usa este ID.</p>
       <p id="social-secret-help" className={styles.help}>{saved.hasAppSecret ? 'Hay un secreto guardado; nunca se muestra. Deja el campo vacío para conservarlo.' : 'No hay secreto guardado.'} Cambiar la app requiere introducir un secreto nuevo.</p>
       <label className={styles.checkRow}><input name="publishingEnabled" type="checkbox" checked={form.publishingEnabled} onChange={event => set('publishingEnabled', event.target.checked)}/>Habilitar publicación y activación</label>
       <label className={styles.checkRow}><input name="browserEnabled" type="checkbox" checked={form.browserEnabled} onChange={event => set('browserEnabled', event.target.checked)}/>Habilitar acceso asistido por navegador</label>

@@ -135,6 +135,10 @@ test('los formularios publicitarios solo admiten campos asistibles y respetan el
   }, { patch: true });
   assert.deepEqual(campaign, { name: 'Prueba', caption: 'Texto', headline: 'Titular' });
   assert.throws(() => validateAssistantFormValues('campaign-draft', { title: 'Campo incorrecto' }, { patch: true }), /Campo no permitido/);
+  for (const patch of [{ marketCountries: ['MX'] }, { audience: { countries: ['PE'] } }, { audienceMode: 'automatic' }]) {
+    assert.throws(() => validateAssistantFormValues('campaign-draft', patch, { patch: true }), /Campo no permitido/);
+  }
+  assert.deepEqual(validateAssistantSubmission('campaign-draft', { marketCountries: ['MX', 'PE'], audience: { countries: ['PE'] } }), { marketCountries: ['MX', 'PE'], audience: { countries: ['PE'] } });
 
   const reason = 'R'.repeat(500);
   assert.equal(validateAssistantFormValues('advertising-result-action', { reason }, { patch: true }).reason.length, 500);

@@ -56,6 +56,8 @@ function syntheticProvider() {
     else if (path === 'me/permissions') data = { data: (remote.permission ? META_PERMISSIONS : []).map(permission => ({ permission, status: 'granted' })) };
     else if (path === 'me/accounts') data = { data: [{ id: '200', name: 'Página sintética', tasks: remote.pageTasks, access_token: PAGE_TOKEN, business: { id: '500', name: 'Negocio sintético' }, instagram_business_account: { id: '300', username: 'synthetic' }, whatsapp_number: '+573001234567' }] };
     else if (path === 'me/adaccounts') data = { data: [{ id: 'act_400', name: 'Cuenta sintética', currency: remote.currency, timezone_name: 'America/Bogota', account_status: remote.accountStatus, user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: '500', name: 'Negocio sintético' } }] };
+    else if (path === '200') data = { id: '200', whatsapp_number: '+573001234567' };
+    else if (path === 'act_400') data = { id: 'act_400', user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: '500' } };
     else if (path === 'search') data = { data: url.searchParams.get('type') === 'adinterest' ? [{ id: '900', name: 'Deporte', path: ['Intereses', 'Deporte'] }] : [{ key: 'CO', name: 'Colombia', type: 'country', country_code: 'CO' }] };
     else assert.fail(`Lectura remota no prevista: ${path}`);
     return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });
@@ -78,6 +80,7 @@ async function setup(store, t, { method = 'api', mode = 'organic', objective = '
   await mkdir(join(root, assetId), { mode: 0o700 }); await writeFile(join(root, key), bytes, { mode: 0o600 });
   await insertRow(store, 'social_assets', { id: assetId, state: 'ready', sha256: assetHash, bytes: bytes.length, ...editable({ name: 'Pieza aportada', kind: 'image', contentType: 'image/jpeg', derivativeKey: key, derivativeSha256: assetHash, derivativeBytes: bytes.length, derivativeContentType: 'image/jpeg', width: 540, height: 675, uploadFence: 'PRIVATE-UPLOAD-FENCE', processingFence: 'PRIVATE-PROCESSING-FENCE' }) });
   const configuration = { name: 'Campaña sintética', connectionId, assetId, mode, objective, platforms, caption: 'Texto escrito por el administrador', headline: '', destinationUrl: mode === 'paid' && objective === 'traffic' ? 'https://example.test/products' : '', whatsappNumber: objective === 'whatsapp' ? '+573001234567' : '', whatsappGreeting: objective === 'whatsapp' ? 'Quiero consultar sobre este producto' : '', audience: { countries: ['CO'], regions: [], cities: [], ageMin: 18, ageMax: 65, genders: [], interests: [] }, placements: platforms.map(platform => `${platform}_feed`), budgetMinor: mode === 'paid' ? 5000000 : 0, publishAt: null, startAt: mode === 'paid' ? START : null, endAt: mode === 'paid' ? END : null, observationDays: 7, aiDisclosure: false };
+  configuration.marketCountries = ['CO'];
   const options = { env, now: NOW, transport: { fetchImpl: remote.fetchImpl } };
   const context = { store, env, actorId, connectionId, assetId, assetHash, configuration, options, remote, root };
   context.create = (extra = {}) => saveSocialCampaign(store, { ...configuration, ...extra, requestId: randomUUID() }, actorId, options);
@@ -110,6 +113,34 @@ async function validatedPreflight(f, campaign) {
   return { campaign: await get(f.store, 'social_campaigns', campaign.id), operationId: id, ref, mediaEvidence };
 }
 const cases = [
+  ['una pendiente histórica conserva su audiencia, exige mercado explícito y duplica sólo la nueva configuración', async (store, t) => {
+    const f = await setup(store, t, { mode: 'paid' });
+    const original = await f.create();
+    const row = await store.db.get(`SELECT data FROM ${store.t('social_campaigns')} WHERE id=?`, [original.id]);
+    const { marketCountries: _market, audienceMode: _provenance, ...legacy } = JSON.parse(row.data);
+    await store.db.run(`UPDATE ${store.t('social_campaigns')} SET data=? WHERE id=?`, [JSON.stringify(legacy), original.id]);
+    const saved = await saveSocialCampaign(store, { id: original.id, version: original.version, requestId: randomUUID(), name: 'Edición anterior a elegir mercado' }, f.actorId, f.options);
+    const incomplete = await f.build(saved.id);
+    assert.equal(Object.hasOwn(incomplete.campaign, 'marketCountries'), false);
+    assert.deepEqual(incomplete.campaign.audience, legacy.audience);
+    const historicalForecast = await f.forecast(saved.id);
+    await assert.rejects(f.action(saved, 'prepare-paid', f.approvalInput(historicalForecast)), /confirma al menos un país/);
+    await assert.rejects(saveSocialCampaign(store, { id: saved.id, version: saved.version, requestId: randomUUID(), audienceMode: 'automatic' }, f.actorId, f.options), /desde el cliente/);
+    const market = await saveSocialCampaign(store, { id: saved.id, version: saved.version, requestId: randomUUID(),
+      marketCountries: ['PE', 'MX', 'MX'], audience: { countries: ['PE', 'MX'] } }, f.actorId, f.options);
+    const next = await f.build(market.id);
+    assert.notEqual(next.specHash, historicalForecast.specHash);
+    assert.deepEqual(next.spec.marketCountries, ['MX', 'PE']);
+    assert.equal(next.spec.currency, 'COP');
+    assert.equal(next.spec.audienceMode, 'manual');
+    const duplicate = await f.action(market, 'duplicate');
+    const copy = await get(store, 'social_campaigns', duplicate.id);
+    assert.deepEqual(copy.marketCountries, ['MX', 'PE']);
+    assert.deepEqual(copy.audience, next.spec.audience);
+    assert.equal(copy.audienceMode, 'manual');
+    assert.equal(copy.startAt, null);
+    await assertUnqueued(store, original.id);
+  }],
   ['la oferta revisada conserva variante, composición y condición y congela la aprobación', async (store, t) => {
     const f = await setup(store, t);
     const product = (slug, flavor) => store.save('products', { slug, title: 'Proteína', status: 'draft', orderable: true, flavor, presentation: '500 g', stockQuantity: 10, price: 45000, sku: slug });

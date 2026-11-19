@@ -119,9 +119,10 @@ test('redes sociales: configuración dinámica, custodia, CAS y navegación sin 
     await navigate(page, 'Publicidad');
     await expect(page.getByRole('form', { name: 'Opciones de Meta', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Conectar con Facebook', exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Crear publicidad', exact: true }).first().click();
-    await openDisclosure(page, /^Cuenta y redes/);
-    await page.getByRole('button', { name: 'Conectar cuenta', exact: true }).click();
+    await page.getByRole('button', { name: 'Crear publicación o campaña', exact: true }).click();
+    await page.getByRole('button', { name: 'Definir primero, sin imagen aún', exact: true }).click();
+    await page.getByRole('button', { name: 'Publicación sin inversión', exact: true }).click();
+    await page.getByRole('button', { name: 'Conectar cuenta en Redes sociales', exact: true }).click();
     await expect(page).toHaveURL(url => url.searchParams.get('section') === 'business' && url.searchParams.get('tab') === 'social');
     await expect(form).toBeVisible();
     await expect(form.getByRole('checkbox', { name: 'Habilitar publicación y activación', exact: true })).not.toBeChecked();

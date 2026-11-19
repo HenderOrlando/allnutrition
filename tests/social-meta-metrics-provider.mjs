@@ -92,13 +92,15 @@ export async function createMetaMetricsProvider() {
         return send(response, node);
       }
       if (path === 'me/accounts' && state.hidePages || path === 'me/adaccounts' && state.hideAdAccounts) return send(response, { data: [] });
+      if (path === '200' && params.fields?.startsWith('id,business{')) return send(response, { id: '200', business: { id: state.pageBusinessId } });
+      if (path === 'act_400' && params.fields?.startsWith('id,business{')) return send(response, { id: 'act_400', business: { id: state.adBusinessId } });
       const result = await publishing.fetchImpl(url.href, { method: 'GET', headers: request.headers });
       const body = await result.json();
       if (path === 'me/accounts' && Array.isArray(body.data)) for (const page of body.data) {
-        page.tasks = clone(state.pageTasks); page.business = { id: state.pageBusinessId, name: 'Synthetic page business' };
+        if (Object.hasOwn(page, 'tasks')) page.tasks = clone(state.pageTasks);
       }
       if (path === 'me/adaccounts' && Array.isArray(body.data)) for (const account of body.data) {
-        account.user_tasks = clone(state.adTasks); account.business = { id: state.adBusinessId, name: 'Synthetic ad business' };
+        if (Object.hasOwn(account, 'user_tasks')) account.user_tasks = clone(state.adTasks);
       }
       response.writeHead(result.status, Object.fromEntries(result.headers)); response.end(JSON.stringify(body));
     } catch { error(response, 100); }

@@ -40,10 +40,24 @@ const reasonLabels = {
   external_configuration_change: 'La configuración remota cambió respecto a la aprobación', approved_horizon_mismatch: 'El horizonte no coincide con el aprobado',
   expense_date_unknown: 'Fecha del gasto desconocida', expense_cost_unknown: 'Importe del gasto pendiente',
   expense_payment_date_unknown: 'Fecha del pago desconocida', configuration_not_verified: 'No se pudo verificar la configuración remota',
+  incompatible_or_unknown_market: 'Los mercados de la pieza original y la variante son distintos o no se confirmaron.',
+  primary_kpi_unavailable: 'La red no informó el indicador principal en una captura compatible.',
+  complete_primary_capture_unavailable: 'Falta una captura completa del indicador principal.',
+  newer_capture_incomplete: 'La captura más reciente no tiene cobertura completa.',
+  stale_metrics: 'La última captura completa es antigua.',
+  fewer_than_three_complete_days: 'Aún no transcurrieron tres días completos de pauta.',
+  organic_horizon_not_reached: 'Aún no termina el horizonte de observación del post.'
 };
 const method = value => value === 'api' ? 'Conexión oficial de Meta (API)' : value === 'browser' ? 'Acceso asistido por navegador' : 'Vía sin informar';
 const label = key => metricLabels[key] || key;
-const reasonText = value => typeof value === 'string' ? reasonLabels[value] || value : value?.reason ? `${value.metric ? label(value.metric) + ': ' : ''}${reasonLabels[value.reason] || value.reason}${value.sampleCount != null ? ` (${value.sampleCount} muestras)` : ''}` : JSON.stringify(value);
+const reasonText = value => {
+  if (typeof value === 'string') {
+    const [channel, reason] = value.split(':', 2);
+    if (channels[channel] && reasonLabels[reason]) return `${channels[channel]}: ${reasonLabels[reason]}`;
+    return reasonLabels[value] || value;
+  }
+  return value?.reason ? `${value.metric ? label(value.metric) + ': ' : ''}${reasonLabels[value.reason] || value.reason}${value.sampleCount != null ? ` (${value.sampleCount} muestras)` : ''}` : JSON.stringify(value);
+};
 const text = value => value == null || value === '' ? 'Sin dato' : typeof value === 'object' ? JSON.stringify(value) : String(value);
 const number = value => value == null || !Number.isFinite(value) ? 'Sin dato' : new Intl.NumberFormat('es-CO', { maximumFractionDigits: 8 }).format(value);
 function money(value, currency) {
@@ -79,13 +93,13 @@ function Facts({ rows }) {
 function Metric({ value, currency }) {
   return <><strong>{metricValue(value, currency)}</strong>{value && <small className={styles.help}>{value.status === 'estimated' ? 'Estimado' : value.status === 'reported' ? 'Reportado' : value.status === 'unsupported' ? 'No soportado' : 'No disponible'} · {value.precision === 'exact' ? 'Precisión exacta de lectura' : value.precision === 'rounded' ? 'Redondeado; no apto para ratios exactos' : 'Precisión desconocida'}</small>}{value?.reason && <small className={styles.help}>{reasonText(value.reason)}</small>}{value && <details className={styles.evidence}><summary>Evidencia de la métrica</summary><p>Definición original: {value.sourceMetric || 'Sin definición acreditada'} · Unidad técnica: {value.unit || 'Sin unidad informada'}</p></details>}</>;
 }
-function Measurement({ item, delivery, onCampaign }) {
+function Measurement({ item, delivery, onCampaign, anchor = true }) {
   const [rowPage, setRowPage] = useState(1);
   useEffect(() => setRowPage(1), [item.id]);
   const visibleRows = (item.rows || []).slice((rowPage - 1) * 20, rowPage * 20);
   const metrics = Object.entries(item.values || {}), ratioEntries = Object.entries(item.ratios || {});
   const rowKeys = [...new Set((item.rows || []).flatMap(row => Object.keys(row.values || {})))];
-  return <article className={styles.card} id={`social-measurement-${item.id}`} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+  return <article className={styles.card} id={anchor ? `social-measurement-${item.id}` : undefined} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
     <header><p className={styles.eyebrow}>{method(item.integrationMethod)} · {scopes[item.scope] || item.scope}</p><h3>{channels[delivery?.channel] || item.entity?.type || 'Medición'} · {dimensions[item.dimension] || item.dimension}</h3></header>
     {onCampaign && delivery && <button type="button" className="text-button" onClick={() => onCampaign(delivery.campaignId)}>Abrir publicación de esta entrega</button>}
     <p>{date(item.periodStart, item.timeZone)} — {date(item.periodEnd, item.timeZone)} · {windows[item.query?.window] || item.query?.window || 'Ventana sin informar'}{item.query?.horizon ? ` · horizonte ${item.query.horizon} días` : ''} · Moneda: {item.currency || 'No informada'}</p>
@@ -131,6 +145,46 @@ function EvidenceIds({ ids = [] }) {
   return ids.length ? <ul>{ids.map(id => <li key={id}><a href={`#social-measurement-${id}`} onClick={openCaptures}>{id}</a></li>)}</ul> : <p>Sin capturas identificadas.</p>;
 }
 function openCaptures() { const details = document.getElementById('social-results-captures'); if (details) details.open = true; }
+function RecommendationCaptureLinks({ recommendation, onOpen }) {
+  return recommendation.metricIds?.length > 0 ? <ul>{recommendation.metricIds.map((id, index) => <li key={id}><button type="button" className="text-button" onClick={() => onOpen(recommendation, id)}>Abrir captura citada {recommendation.metricIds.length > 1 ? index + 1 : ''}</button></li>)}</ul> : <p>Sin capturas identificadas.</p>;
+}
+function RecommendationEvidence({ item, asOf, campaign }) {
+  const evidence = item.primaryEvidence, criterion = item.successCriterion;
+  const format = (value, key = evidence?.metric) => key?.endsWith('Minor') ? money(value, campaign.currency) : key === 'ctrLinkPercent' ? `${number(value)} %` : key === 'organicResponse' ? `${number(value * 100)} %` : number(value);
+  const numbers = [
+    !evidence?.placement && ['Observado', evidence?.value], ['Cuartil inferior comparable', evidence?.historicalLower], ['Mediana comparable', evidence?.historicalMedian],
+    ['Período anterior', evidence?.previousValue], ['Frecuencia observada', evidence?.frequency, 'frequency'],
+    ['Mediana en franja propuesta', evidence?.observedBandMedian], ['Mediana de la otra franja', evidence?.referenceBandMedian],
+    [evidence?.placement, evidence?.selectedCostMinor, 'costPerPrimaryResultMinor'], [evidence?.comparedPlacement, evidence?.comparedCostMinor, 'costPerPrimaryResultMinor'],
+    ['Pedidos vinculados', evidence?.orderCount, 'orders'], ['Costo por resultado observado', evidence?.costPerResultMinor, 'costPerPrimaryResultMinor'],
+  ].filter(row => row && row[0] && Number.isFinite(row[1]));
+  const threshold = { gt: 'Más de', gte: 'Al menos', lt: 'Menos de', lte: 'No más de' }[criterion?.operator];
+  return <>
+    {numbers.length > 0 && <Facts rows={numbers.map(([title, value, key]) => [title, format(value, key)])}/>}
+    {evidence?.selectedResults != null && <p>Volumen observado: {number(evidence.selectedResults)} resultados en {evidence.placement} frente a {number(evidence.comparedResults)} en {evidence.comparedPlacement}.</p>}
+    {evidence?.periods?.length ? <ul className={styles.help}>{evidence.periods.map(period => <li key={period.captureId}>{[channels[period.channel], windows[period.window]].filter(Boolean).join(' · ')}: {date(period.start, period.timeZone)} — {date(period.end, period.timeZone)} · lectura del {date(period.fetchedAt)} · {method(period.integrationMethod)}</li>)}</ul> : <p className={styles.help}>Corte del análisis: {date(asOf)}{item.metricIds?.length ? '. El período exacto consta en la captura citada.' : '. No hay captura compatible para esta observación.'}</p>}
+    <p className={styles.help}>{item.sampleIds?.length ? `Comparación con ${item.sampleIds.length} piezas compatibles.` : numbers.length > 1 ? 'Sin cohorte histórica; los valores son de esta pieza.' : 'No hay una comparación histórica compatible para esta observación.'}</p>
+    <p><strong>Cómo sabremos si mejoró:</strong> {criterion?.text}{threshold && Number.isFinite(criterion.target) && <> {threshold} {format(criterion.target, criterion.metric)}.</>}{criterion?.minimumResults && <> Mínimo: {number(criterion.minimumResults)} resultados.</>}{criterion?.maxCostPerResultMinor != null && <> Costo máximo: {money(criterion.maxCostPerResultMinor, campaign.currency)}.</>}</p>
+  </>;
+}
+function EvidenceDialog({ evidence, api, onClose }) {
+  const ref = useRef(null), [data, setData] = useState(null), [error, setError] = useState('');
+  const close = useDialog(ref, { onClose });
+  useEffect(() => {
+    const controller = new AbortController();
+    const { recommendation, captureId } = evidence;
+    const params = new URLSearchParams({ campaignId: recommendation.campaignId, evidenceHash: recommendation.evidenceHash, captureId });
+    api(`${ROOT}/recommendations/${encodeURIComponent(recommendation.id)}/evidence?${params}`, { signal: controller.signal }).then(result => {
+      if (!controller.signal.aborted) setData(result);
+    }).catch(cause => { if (!controller.signal.aborted) setError(cause.message); });
+    return () => controller.abort();
+  }, [api, evidence]);
+  return <dialog ref={ref} className={`admin-dialog ${styles.dialog}`} aria-labelledby="social-evidence-title">
+    <header className={styles.dialogHeader}><h2 id="social-evidence-title">Captura exacta del análisis</h2></header>
+    <div className={styles.dialogBody}>{error ? <p role="alert">{error}</p> : data ? <><p>Corte: {date(data.asOf)}. Lectura conservada, independiente de los filtros de la ficha.</p><Measurement item={data.measurement} delivery={data.delivery} anchor={false}/></> : <p role="status">Cargando la captura citada…</p>}</div>
+    <footer className={styles.actions}><button type="button" className="button subtle" onClick={close} data-dialog-initial-focus>Cerrar captura</button></footer>
+  </dialog>;
+}
 function UserCostTarget({ campaign, measurements }) {
   if (campaign.targetCostMinor == null) return null;
   const approved = campaign.revisions?.at(-1)?.spec;
@@ -162,27 +216,27 @@ function BusinessPanel({ business, stale, onNavigate, links, onLink }) {
     <details className={styles.evidence}><summary>Hechos y cobertura comercial</summary><Facts rows={[["Inicio económico conocido", business.coverage?.economicStartOn], ["Corte acumulado", business.accumulatedThrough || business.coverage?.through], ["Versiones de vínculos", text(business.linkVersions)], ["Hash de hechos", business.factHash], ["Hechos de ventas", text(business.recognizedProductSales?.factIds)], ["Hechos de contribución", text(business.knownContribution?.factIds)], ["Pagos de gastos", text(business.advertisingPayments?.payments)]]}/><EvidenceIds ids={business.metaSpend?.measurementIds}/></details>
   </section>;
 }
-function Recommendations({ analysis, campaign, stale, onAction, onAnalyze, busy, measurements }) {
+function Recommendations({ analysis, campaign, stale, onAction, onAnalyze, busy, onEvidence }) {
   const options = new Map(campaign.recommendations?.map(item => [item.id, item]) || []);
   const recommendations = (analysis?.recommendations || []).slice(0, 5).map(item => ({ ...item, inPlace: options.get(item.id)?.inPlace || [] }));
   const card = item => {
     const type = item.proposedChange?.type, maintenance = ['measurement', 'offer_costs'].includes(type);
     const available = item.inPlace.filter(option => option.allowed), changeDrafts = Object.values(item.changeDrafts || {});
-    const evidence = measurements.find(capture => item.metricIds?.includes(capture.id));
+    const observed = item.primaryEvidence;
     return <article className={styles.card} key={item.id}>
-      <h4>{type === 'measurement' ? 'Falta medición' : item.observation}</h4>
-      {type === 'measurement' && <p>{item.observation} {analysis.observationComplete ? '' : 'La publicación puede necesitar más tiempo antes de una comparación.'}</p>}
-      <p><strong>Qué probar:</strong> {item.proposedChange?.text}</p><p><strong>Cómo sabremos si ayudó:</strong> {item.successCriterion?.text}</p>
-      <p className={styles.help}>{channels[item.primaryEvidence?.channel] || (campaign.mode === 'paid' ? 'Pauta Meta' : 'Consultar la red en la evidencia')} · {evidence ? `${date(evidence.periodStart, evidence.timeZone)} — ${date(evidence.periodEnd, evidence.timeZone)}` : `corte ${date(analysis.asOf)}`} · {item.sampleIds?.length ? `${item.sampleIds.length} piezas comparables` : 'Referencia de esta pieza, no un promedio de mercado'}</p>
+      <h4>{type === 'measurement' ? 'Falta evidencia suficiente' : label(observed?.metric || item.successCriterion?.metric || 'Resultado')}</h4>
+      <p><strong>Qué observamos:</strong> {item.observation}</p>
+      <p><strong>Qué probar:</strong> {item.proposedChange?.text}</p>
+      <RecommendationEvidence item={item} asOf={analysis.asOf} campaign={campaign}/>
       {stale && <p className={styles.warning}>Propuesta conservada, no vigente. Revisa mejoras después de la lectura o el cambio de estado.</p>}
       {item.state === 'dismissed' && <p>Descartada, no evaluada.</p>}
       {item.state === 'applied' && <p>{item.trial ? 'Cambio remoto comprobado.' : 'Borrador preparado; no significa que se publicó.'}</p>}
       {item.conclusion && <p>{conclusions[item.conclusion]}.</p>}
-      <details className={styles.evidence}><summary>Ver evidencia y comparables</summary><p>{item.hypothesis}</p><Reasons values={item.limitations || []}/><EvidenceIds ids={item.metricIds}/>{item.sampleIds?.map(id => <p key={id}><button type="button" className="text-button" onClick={() => onAction({ type: 'open-sample', campaignId: id })}>Abrir publicación de muestra {id}</button></p>)}</details>
+      <details className={styles.evidence}><summary>Hipótesis, limitaciones y capturas</summary><p><strong>Hipótesis:</strong> {item.hypothesis}</p><Reasons values={item.limitations || []}/><RecommendationCaptureLinks recommendation={item} onOpen={onEvidence}/>{item.sampleIds?.map(id => <p key={id}><button type="button" className="text-button" onClick={() => onAction({ type: 'open-sample', campaignId: id })}>Abrir publicación de muestra {id}</button></p>)}</details>
       {item.state === 'suggested' && <><div className={styles.actions}>
         {maintenance ? <button type="button" className="button primary" disabled={busy} onClick={() => onAction({ type })}>{type === 'measurement' ? 'Completar medición' : 'Revisar pedidos y costos vinculados'}</button> : changeDrafts.length ? changeDrafts.map(id => <button type="button" className="button primary" key={id} disabled={busy} onClick={() => onAction({ type: 'open-draft', campaignId: id })}>Retomar cambio en la misma pieza</button>) : <>
-          {available.map(option => <button type="button" className="button primary" key={option.deliveryId} disabled={busy || stale} onClick={() => onAction({ type: 'prepare-in-place', recommendation: item, option })}>{option.channel === 'facebook' ? 'Cambiar solo Facebook · Probar aquí' : 'Cambiar esta campaña · Probar aquí'}</button>)}
-          <button type="button" className="button subtle" disabled={busy || stale} onClick={() => onAction({ type: 'duplicate-from-recommendation', recommendation: item })}>Probar en {campaign.mode === 'paid' ? 'una nueva campaña' : 'una nueva publicación'}</button>
+          {available.map(option => <button type="button" className="button primary" key={option.deliveryId} disabled={busy || stale} onClick={() => onAction({ type: 'prepare-in-place', recommendation: item, option })}>Cambiar aquí{option.channel === 'facebook' ? ' · solo Facebook' : ''}</button>)}
+          <button type="button" className="button subtle" disabled={busy || stale} onClick={() => onAction({ type: 'duplicate-from-recommendation', recommendation: item })}>Preparar una variante</button>
         </>}
         {!changeDrafts.length && <button type="button" className="button subtle" disabled={busy} onClick={() => onAction({ type: 'dismiss', recommendation: item })}>Descartar con motivo</button>}
       </div>{!maintenance && !changeDrafts.length && item.inPlace.filter(option => !option.allowed).map(option => <p className={styles.help} key={option.deliveryId}>{channels[option.channel]}: {option.reason}</p>)}</>}
@@ -207,28 +261,34 @@ function Performance({ campaign, rows }) {
   const approved = campaign.revisions?.at(-1);
   const effective = campaign.deliveries?.find(delivery => delivery.effectiveSpec && delivery.effectiveSpec.assetId !== campaign.asset?.id)?.effectiveSpec;
   const asset = effective ? { id: effective.assetId, kind: effective.assetType, state: 'ready' } : campaign.asset;
-  const unavailable = { early: 'Aún es pronto', unavailable: 'Sin dato', zero: '0 reportado' };
+  const unavailable = { early: 'Aún es pronto', unavailable: 'Sin dato reportado', unsupported: 'No compatible con este destino', zero: '0 reportado' };
   return <section className={styles.panel} aria-labelledby="social-result-kpi">
-    {asset?.kind === 'image' && asset.state === 'ready' && <img width="96" height="96" style={{ objectFit: 'contain' }} src={`${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=derivative`} alt="Vista previa de la pieza aprobada"/>}
-    {asset?.kind === 'video' && asset.state === 'ready' && <video width="160" controls preload="metadata" src={`${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=derivative`} aria-label="Vista previa de la pieza aprobada"/>}
-    <Offer offer={approved?.offerSnapshot || (!approved ? campaign.offerSnapshot : null)}/><p>Objetivo: {objectives[campaign.objective]}</p>
-    <ul>{campaign.deliveries?.map(delivery => <li key={delivery.id}><strong>{channels[delivery.channel]}: </strong>{states[delivery.state] || delivery.state}{delivery.remoteRefs?.permalink && <> · <a href={delivery.remoteRefs.permalink} target="_blank" rel="noreferrer">Ver en Meta</a></>}{delivery.effectiveSpec && <> · Cambio confirmado en la misma entrega.</>}</li>)}</ul>
-    <h3 id="social-result-kpi">¿Logró lo que buscabas?</h3>
+    <h3 id="social-result-kpi">¿Se logró el objetivo?</h3>
+    <div className={styles.campaignSummary}>
+      {asset?.kind === 'image' && asset.state === 'ready' && <img className={styles.cardThumb} width="80" height="80" src={`${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=derivative`} alt="Vista previa de la pieza aprobada"/>}
+      {asset?.kind === 'video' && asset.state === 'ready' && <video className={styles.cardThumb} width="160" controls preload="metadata" src={`${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=derivative`} aria-label="Vista previa de la pieza aprobada"/>}
+      <div><p><strong>Objetivo:</strong> {objectives[campaign.objective]}</p><Offer offer={approved?.offerSnapshot || (!approved ? campaign.offerSnapshot : null)}/>
+        {approved?.spec?.marketCountries?.length ? <p>Mercados elegidos: {approved.spec.marketCountries.join(', ')}{campaign.mode === 'organic' ? ' · No limitan ni garantizan la distribución.' : ''}</p> : <p>Mercado histórico sin confirmar.</p>}
+      </div>
+    </div>
+    <ul className={styles.deliveryStates} aria-label="Estado por destino">{campaign.deliveries?.map(delivery => <li key={delivery.id}><strong>{channels[delivery.channel]}: </strong>{states[delivery.state] || delivery.state}{delivery.remoteRefs?.permalink && <> · <a href={delivery.remoteRefs.permalink} target="_blank" rel="noreferrer">Ver en Meta</a></>}{delivery.effectiveSpec && <> · Cambio confirmado en la misma entrega.</>}</li>)}</ul>
     {!rows?.length && <p>Sin dato para esta selección de fechas o filtros.</p>}
     <div className={styles.metricGrid}>{rows?.map(row => <article className={styles.card} key={row.deliveryId}>
       <h4>{primaryLabels[row.metric]} · {channels[row.channel]}</h4><strong className={styles.metricValue}>{unavailable[row.status] || metricValue(row.value, row.currency)}</strong>
-      {row.fetchedAt && <p>{date(row.periodStart, row.timeZone)} — {date(row.periodEnd, row.timeZone)} · última captura mostrada {date(row.fetchedAt)}</p>}
-      {row.authorized != null && <p>Gasto reportado: {metricValue(row.spend, row.currency)} · total autorizado: {money(row.authorized, row.currency)}{row.costMinor != null && <> · costo por resultado: {money(row.costMinor, row.currency)}</>}</p>}
+      {row.fetchedAt ? <p>{date(row.periodStart, row.timeZone)} — {date(row.periodEnd, row.timeZone)} · última captura {date(row.fetchedAt)} · fuente: {method(row.integrationMethod)}{row.value?.sourceMetric ? ` (${row.value.sourceMetric})` : ''}</p> : <p>Sin captura del indicador para esta selección.</p>}
+      {row.authorized != null && <p>{row.partial ? 'Gasto de la captura parcial' : 'Gasto confirmado por lectura'}: {metricValue(row.spend, row.currency)} · Presupuesto autorizado: {money(row.authorized, row.currency)}{row.costMinor != null && <> · Costo por resultado: {money(row.costMinor, row.currency)}</>}</p>}
       {row.stale && <p className={styles.warning}>Datos desactualizados.</p>}
       {row.newerPartial ? <p className={styles.warning}>La lectura más reciente fue parcial; se conserva la captura completa anterior.</p> : row.partial && <p className={styles.warning}>Cobertura parcial: no es un total completo.</p>}
       {row.lastError && <p className={styles.warning}>La última lectura falló. {row.lastError.message}</p>}
+      {row.nextReadAt && <p className={styles.help}>Próxima comprobación programada: {date(row.nextReadAt)}.</p>}
+      {row.reason && <Reasons values={[row.reason]}/>}
       {row.captureId && <a href={`#social-measurement-${row.captureId}`} onClick={openCaptures}>Ver evidencia de este dato</a>}
     </article>)}</div>
-    <p className={styles.help}>{campaign.mode === 'paid' ? 'El gasto se reporta para el anuncio; autorizar ubicaciones no demuestra distribución en cada red.' : 'No se suman personas entre redes.'} La previsión aprobada es solo referencia: no es venta, dato observado ni garantía.</p>
+    <p className={styles.help}>{campaign.mode === 'paid' ? 'El gasto se reporta para el anuncio; autorizar ubicaciones no demuestra distribución en cada red.' : 'No se suman personas entre redes.'} Una conversación o un clic no es una venta. La previsión no es una garantía.</p>
   </section>;
 }
 
-function Learnings({ id, api, refresh, onNavigate }) {
+function Learnings({ id, api, refresh, onNavigate, onEvidence }) {
   const [data, setData] = useState(null), [error, setError] = useState(''), [cursor, setCursor] = useState(null);
   useEffect(() => {
     const controller = new AbortController(), query = new URLSearchParams({ campaignId: id });
@@ -245,7 +305,7 @@ function Learnings({ id, api, refresh, onNavigate }) {
       <h4>{item.proposedChange?.text || item.observation}</h4>
       <p>{[objectives[item.objective], channels[item.channel], item.applicationMode === 'same' ? 'Misma entrega' : item.applicationMode === 'new' ? 'Pieza nueva' : null].filter(Boolean).join(' · ')}</p><Offer offer={item.offerSnapshot}/>
       <p>Propuesta {date(item.createdAt)}{item.childCampaignId || Object.keys(item.changeDrafts || {}).length ? ' → borrador preparado' : ''}{item.transition ? ` → cambio comprobado ${date(item.transition.through)}` : item.childApprovedAt ? ' → pieza aprobada' : ''}</p>
-      {item.before != null && item.after != null && <Facts rows={[['Antes', text(item.before)], ['Después', text(item.after)]]}/>}
+      {item.before != null && item.after != null && <Facts rows={[[item.applicationMode === 'same' ? 'Antes' : 'Original', text(item.before)], [item.applicationMode === 'same' ? 'Después' : 'Variante', text(item.after)]]}/>}
       <p><strong>Criterio:</strong> {item.criterion?.text || 'No se congeló un criterio comparable.'}</p>
       {item.state === 'dismissed' ? <p>Descartada, no evaluada. {item.reason}</p> : item.conclusion ? <><strong>{conclusions[item.conclusion]}</strong>
         {item.evaluation?.reasons?.includes('lifetime_cannot_isolate_change') ? <p>No se puede aislar el efecto del cambio con el total acumulado de esta publicación.</p> : <Reasons values={item.evaluation?.reasons || []}/>}
@@ -253,6 +313,7 @@ function Learnings({ id, api, refresh, onNavigate }) {
         {[item.evaluation?.beforePeriod, item.evaluation?.afterPeriod].map((period, index) => period && (period.impressions != null || period.reach != null) ?
           <p key={index}>{index === 0 ? 'Exposición anterior' : 'Exposición posterior'}: {number(period.impressions ?? period.reach)} {period.impressions != null ? 'impresiones' : 'personas alcanzadas'} en una captura completa.</p> : null)}
       </> : item.transition || item.childState && !['draft', 'cancelled'].includes(item.childState) ? <p>Aún estamos midiendo{item.expectedAt ? ` · horizonte ${date(item.expectedAt)}` : ''}.</p> : item.childCampaignId ? <p>Borrador preparado; todavía no acredita publicación.</p> : null}
+      {item.metricIds?.length > 0 && <details className={styles.evidence}><summary>Capturas que fundamentaron la propuesta</summary><RecommendationCaptureLinks recommendation={item} onOpen={onEvidence}/></details>}
       {item.state === 'suggested' && Object.values(item.changeDrafts || {}).map(draftId => <button type="button" className="button subtle" key={draftId} onClick={() => navigate(draftId, 'campaigns')}>Retomar cambio preparado</button>)}
       <div className={styles.actions}>{item.campaignId !== id && <button type="button" className="button subtle" onClick={() => navigate(item.campaignId, 'results')}>Ver pieza original</button>}{item.childCampaignId && item.childCampaignId !== id && <button type="button" className="button subtle" onClick={() => navigate(item.childCampaignId, item.childState === 'draft' ? 'campaigns' : 'results')}>{item.childState === 'draft' ? 'Retomar borrador' : 'Ver variante'}</button>}{item.operationId && <a href="#social-results-captures" onClick={openCaptures}>Comprobar la misma entrega</a>}</div>
     </article>)}
@@ -347,7 +408,8 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
   const [campaignSearch, setCampaignSearch] = useState(''), [campaignQuery, setCampaignQuery] = useState({ q: '', page: 1 }), [campaignList, setCampaignList] = useState(null), [listError, setListError] = useState(''), [listLoading, setListLoading] = useState(false);
   const [from, setFrom] = useState(view.from || ''), [to, setTo] = useState(view.to || '');
   const [action, setAction] = useState(null), [actionBusy, setActionBusy] = useState(false), [dialogInteraction, setDialogInteraction] = useState({ dirty: false, busy: false }), [notice, setNotice] = useState(''), [invalidatedAnalysis, setInvalidatedAnalysis] = useState(null);
-  const sequence = useRef(0), reads = useRef(null), requestIds = useRef(new Map()), mutationControllers = useRef(new Set()), mounted = useRef(true), parentInteraction = useRef(onInteractionStateChange), headingRef = useRef(null), errorRef = useRef(null), listErrorRef = useRef(null), filterSummary = useRef(null), focusId = useRef(null);
+  const [evidence, setEvidence] = useState(null);
+  const sequence = useRef(0), reads = useRef(null), requestIds = useRef(new Map()), mutationControllers = useRef(new Set()), mounted = useRef(true), parentInteraction = useRef(onInteractionStateChange), headingRef = useRef(null), errorRef = useRef(null), listErrorRef = useRef(null), filterSummary = useRef(null), focusId = useRef(null), focusAccount = useRef(false);
   parentInteraction.current = onInteractionStateChange;
   const actionBusyRef = useRef(false), dialogInteractionRef = useRef(dialogInteraction);
   const reportDialog = useCallback(state => {
@@ -362,7 +424,14 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
   const busy = actionBusy || dialogInteraction.busy;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; reads.current?.abort(); for (const controller of mutationControllers.current) controller.abort(); parentInteraction.current?.({ dirty: false, busy: false }); }; }, []);
   useEffect(() => { setFrom(view.from || ''); setTo(view.to || ''); }, [view.from, view.to]);
-  useEffect(() => { setError(''); setNotice(''); setAction(null); }, [id]);
+  useEffect(() => { setError(''); setNotice(''); setAction(null); setEvidence(null); }, [id]);
+  useEffect(() => {
+    if (id || (!focusId.current && !focusAccount.current)) return;
+    focusId.current = null;
+    const target = focusAccount.current ? document.getElementById('social-account-measurement') : headingRef.current;
+    focusAccount.current = false;
+    target?.focus();
+  }, [id]);
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
   useEffect(() => { if (listError) listErrorRef.current?.focus(); }, [listError]);
   const queryKey = JSON.stringify({ campaignId: id, from: view.from || '', to: view.to || '', integrationMethod, scope, dimension, page: view.page || 1 });
@@ -382,10 +451,14 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
       if (controller.signal.aborted || seq !== sequence.current) return;
       setError('');
       setSnapshot({ key: queryKey, campaignId: id, from: view.from || null, to: view.to || null, results: result, campaign: detail, links, loadedAt: new Date().toISOString() });
-      if (focusId.current !== id) { focusId.current = id; headingRef.current?.focus({ preventScroll: true }); }
     }).catch(cause => { if (cause.name !== 'AbortError' && !controller.signal.aborted && seq === sequence.current) setError(cause.message); }).finally(() => { if (!controller.signal.aborted && seq === sequence.current) setLoading(false); });
     return () => controller.abort();
   }, [api, id, queryKey, view.from, view.to, view.page, integrationMethod, scope, dimension, revision, refresh]);
+  useEffect(() => {
+    if (!sameRecord || focusId.current === id) return;
+    focusId.current = id;
+    headingRef.current?.focus();
+  }, [sameRecord, id]);
   useEffect(() => {
     if (sameRecord && view.resultsFocus) {
       const section = document.getElementById(`social-results-${view.resultsFocus}`);
@@ -436,6 +509,9 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
     } catch (cause) { if (cause.name !== 'AbortError' && mounted.current && !controller.signal.aborted) setError(cause.message); }
     finally { mutationControllers.current.delete(controller); if (mounted.current) reportAction(false); }
   }
+  function openEvidence(recommendation, captureId) {
+    setEvidence({ recommendation, captureId });
+  }
   function recommendationAction(next) {
     if (next.type === 'open-sample' || next.type === 'open-draft') return onNavigate?.({ section: 'advertising', tab: next.type === 'open-draft' ? 'campaigns' : 'results', record: next.campaignId });
     if (next.type === 'measurement' || next.type === 'offer_costs') {
@@ -456,24 +532,30 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
     grouped.get(key).items.push({ item, delivery });
   }
   return <section className={styles.stack} style={{ minWidth: 0 }} aria-label="Resultados de publicidad">
-    <header className={styles.toolbar}><div><p className={styles.eyebrow}>Evidencia, no atribución causal</p><h2 ref={headingRef} tabIndex={-1}>{campaign?.name || (id ? 'Resultados de la publicación' : 'Elige una publicación o campaña')}</h2></div>{id && <button type="button" className="button subtle" disabled={loading || busy || !!action} onClick={() => setRefresh(value => value + 1)}>Actualizar vista</button>}</header>
-    {!id && <section className={styles.queryPanel} aria-label="Seleccionar publicación"><form method="post" onSubmit={event => { event.preventDefault(); setCampaignQuery({ q: campaignSearch.trim(), page: 1 }); }}><div className={styles.fieldGrid}><Field field={{ name: 'campaignSearch', label: 'Buscar publicaciones', max: 100 }} value={campaignSearch} onChange={setCampaignSearch}/><button type="submit" className="button subtle" disabled={listLoading}>Buscar publicaciones</button></div></form>
+    <header className={styles.heading}><div><p className={styles.eyebrow}>{id ? 'Resultados de esta publicación' : 'Rendimiento en Facebook e Instagram'}</p><h2 ref={headingRef} tabIndex={-1}>{campaign?.name || (id ? 'Resultados de la publicación' : 'Elige una publicación o campaña')}</h2>
+      {!id && <p>Consulta qué reportó Meta para una publicación o baja a <a href="#social-account-measurement">Medición de la cuenta</a> para revisar fuentes y análisis histórico.</p>}</div>
+      {id && <button type="button" className="button subtle" disabled={busy || !!action} onClick={() => change({ record: null, resultsFocus: null, page: 1 })}>Elegir otra publicación o campaña</button>}
+    </header>
+    {!id && <section className={styles.queryPanel} aria-label="Seleccionar publicación"><form method="post" onSubmit={event => { event.preventDefault(); setCampaignQuery({ q: campaignSearch.trim(), page: 1 }); }}><div className={styles.filterBar}><Field field={{ name: 'campaignSearch', label: 'Buscar publicaciones', max: 100 }} value={campaignSearch} onChange={setCampaignSearch}/><button type="submit" className="button subtle" disabled={listLoading}>Buscar publicaciones</button></div></form>
       {listError && <p ref={listErrorRef} tabIndex={-1} role="alert" className={styles.error}>{listError}<button type="button" className="text-button" onClick={() => setCampaignQuery(value => ({ ...value }))}>Reintentar listado</button></p>}
       <label className="field">Publicación o campaña<select value="" disabled={listLoading || Boolean(listError)} onChange={event => change({ record: event.target.value || null, resultsFocus: null, page: 1 })}><option value="">Elige por nombre</option>{campaignList?.campaigns?.map(item => <option key={item.id} value={item.id}>{item.name} · {campaignState(item)}</option>)}</select></label>
-      {listLoading && <p role="status">Cargando publicaciones…</p>}{campaignList && <div className={styles.pagination}><button type="button" className="button subtle" disabled={busy || !!action || listLoading || campaignList.page <= 1} onClick={() => setCampaignQuery({ q: campaignQuery.q, page: campaignList.page - 1 })}>Publicaciones anteriores</button><span>Página {campaignList.page} de {campaignList.pages} · {campaignList.total} publicaciones · búsqueda «{campaignQuery.q || 'todas'}»</span><button type="button" className="button subtle" disabled={busy || !!action || listLoading || campaignList.page >= campaignList.pages} onClick={() => setCampaignQuery({ q: campaignQuery.q, page: campaignList.page + 1 })}>Publicaciones siguientes</button></div>}
+      {listLoading && <p role="status">Cargando publicaciones…</p>}{campaignList && campaignList.pages > 1 && <div className={styles.pagination}><button type="button" className="button subtle" disabled={busy || !!action || listLoading || campaignList.page <= 1} onClick={() => setCampaignQuery({ q: campaignQuery.q, page: campaignList.page - 1 })}>Publicaciones anteriores</button><span>Página {campaignList.page} de {campaignList.pages} · {campaignList.total} publicaciones · búsqueda «{campaignQuery.q || 'todas'}»</span><button type="button" className="button subtle" disabled={busy || !!action || listLoading || campaignList.page >= campaignList.pages} onClick={() => setCampaignQuery({ q: campaignQuery.q, page: campaignList.page + 1 })}>Publicaciones siguientes</button></div>}
       {!listLoading && campaignList?.campaigns?.length === 0 && <p>{campaignQuery.q ? 'No hay coincidencias con ese nombre.' : 'Aún no hay piezas para consultar.'} <button type="button" className="text-button" onClick={() => onNavigate?.({ section: 'advertising', tab: 'campaigns', record: 'new' })}>Crear publicidad</button></p>}
     </section>}
-    {id && <button type="button" className="button subtle" disabled={busy || !!action} onClick={() => change({ record: null, resultsFocus: null, page: 1 })}>Elegir otra publicación o campaña</button>}
+    {notice && id && <p role="status" className={styles.notice}>{notice}</p>}{error && id && <div role="alert" tabIndex={-1} ref={errorRef} className={styles.error}>{error}<button type="button" className="button subtle" disabled={busy || !!action} onClick={() => setRefresh(value => value + 1)}>Reintentar lectura</button>{sameRecord && <p>Se conserva la lectura de esta ficha del {date(snapshot.loadedAt)}; no acredita una actualización exitosa.</p>}</div>}
+    {loading && id && <p role="status">{sameRecord ? 'Actualizando sin borrar la evidencia anterior…' : 'Cargando resultados…'}</p>}
+    {sameRecord && !current && <p className={styles.warning}>La lectura de esta ficha del {date(snapshot.loadedAt)} todavía corresponde a los filtros anteriores.</p>}
     {sameRecord && (hasDeliveries ? <Performance campaign={campaign} rows={results.performance}/> : <>
-      <p>{campaignState(campaign)} · Sin entregas; aún no hay rendimiento que analizar.</p>
+      <p className={styles.notice}><strong>{campaignState(campaign)}</strong> · Sin entregas; aún no hay rendimiento que analizar. Guardar o aprobar no equivale a publicar.</p>
       <ApprovedCampaign campaign={campaign} onNavigate={onNavigate}/>
     </>)}
     {sameRecord && <div className={styles.actions}><button type="button" className="button subtle" disabled={busy || !!action} onClick={() => onNavigate?.({ section: 'advertising', tab: 'campaigns', record: id })}>Administrar publicación</button>
+      <button type="button" className="button subtle" disabled={loading || busy || !!action} onClick={() => setRefresh(value => value + 1)}>Actualizar vista</button>
       {campaign.deliveries?.length > 0 && <button type="button" className="button subtle" disabled={busy || !!action || !current} onClick={() => campaignAction('sync')}>Actualizar desde Meta</button>}
       {campaign.operations?.some(op => op.step.startsWith('amend:') && ['sent','uncertain'].includes(op.state)) && <button type="button" className="button subtle" disabled={busy || !!action || !current} onClick={() => campaignAction('reconcile')}>Comprobar el cambio sin reenviar</button>}
     </div>}
-    {hasDeliveries && <Recommendations analysis={analysis} campaign={campaign} stale={analysisStale || !current || Boolean(error)} measurements={results.measurements} busy={busy || !!action || !current} onAnalyze={() => campaignAction('analyze')} onAction={recommendationAction}/>}
-    {hasDeliveries && <Learnings id={id} key={id} api={api} refresh={snapshot.loadedAt} onNavigate={onNavigate}/>}
+    {hasDeliveries && <Recommendations analysis={analysis} campaign={campaign} stale={analysisStale || !current || Boolean(error)} busy={busy || !!action || !current} onAnalyze={() => campaignAction('analyze')} onAction={recommendationAction} onEvidence={openEvidence}/>}
+    {hasDeliveries && <Learnings id={id} key={id} api={api} refresh={snapshot.loadedAt} onNavigate={onNavigate} onEvidence={openEvidence}/>}
     {sameRecord && <details id="social-results-detail" className={styles.technicalDetails}><summary>Medición de esta pieza y filtros</summary>
     <div className={styles.queryPanel} aria-label="Filtrar métricas">
       <form method="post" onSubmit={applyPeriod}><fieldset disabled={busy || !!action} className="editor-fieldset"><div className={styles.fieldGrid}><Field field={{ name: 'from', type: 'date', label: 'Desde' }} value={from} onChange={value => setFrom(value || '')}/><Field field={{ name: 'to', type: 'date', label: 'Hasta' }} value={to} onChange={value => setTo(value || '')}/></div><div className={styles.actions}><button type="submit" className="button subtle">Aplicar fechas</button></div></fieldset></form>
@@ -482,11 +564,9 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
       <p className={styles.help}>Las fechas seleccionan capturas compatibles; solo el desglose diario filtra días. No recortan el acumulado comercial de pedidos y gastos vinculados.</p>
       <p className={styles.help}>Actualizar vista solo lee datos locales. Pedir actualización a Meta encola una consulta al proveedor, sujeta a permisos y espera. Las lecturas locales automáticas ocurren cada {pending ? '5 segundos mientras hay trabajo pendiente' : '60 segundos con esta vista visible'}.</p>
     </div>
-    <p>Si faltan permisos o la cuenta no está configurada, completa primero la medición de la cuenta.</p><button type="button" className="button subtle" onClick={() => change({ record: null, resultsFocus: null })}>Medición de la cuenta</button>
+    <p>Si faltan permisos o la cuenta no está configurada, abre la medición de la cuenta para comprobar el acceso y las fuentes.</p>
+    <button type="button" className="button subtle" disabled={busy || !!action} onClick={() => { focusAccount.current = true; change({ record: null, resultsFocus: null }); }}>Medición de la cuenta</button>
     </details>}
-    {notice && id && <p role="status" className={styles.notice}>{notice}</p>}{error && id && <div role="alert" tabIndex={-1} ref={errorRef} className={styles.error}>{error}<button type="button" className="button subtle" disabled={busy || !!action} onClick={() => setRefresh(value => value + 1)}>Reintentar lectura</button>{sameRecord && <p>Se conserva la lectura de esta ficha del {date(snapshot.loadedAt)}; no acredita una actualización exitosa.</p>}</div>}
-    {loading && id && <p role="status">{sameRecord ? 'Actualizando sin borrar la evidencia anterior…' : 'Cargando resultados…'}</p>}
-    {sameRecord && !current && <p className={styles.warning}>La lectura de esta ficha del {date(snapshot.loadedAt)} todavía corresponde a los filtros anteriores.</p>}
     {hasDeliveries && <details id="social-results-captures" className={styles.technicalDetails}><summary>Métricas completas, capturas y estado por destino</summary><div style={{ minWidth: 0 }} inert={!current ? true : undefined} className={styles.stack}>
       <p className={styles.muted}>Corte de lectura social {date(results.asOf)} · cargado localmente {date(snapshot.loadedAt)}. Alcance único entre entregas: no disponible sin deduplicación; no se suman personas de redes o campañas.</p>
       <section className={styles.panel}><h3>Estado de publicación por red</h3>{campaign?.restoreHold && <p className={styles.warning}>Bloqueo de restauración: comprobar el estado en Meta sin reenviar y aceptar la recuperación antes de continuar. Restaurar no detiene anuncios activos.</p>}{campaign?.state === 'scheduled' && campaign.revisions?.at(-1)?.spec?.publishAt && Date.parse(campaign.revisions.at(-1).spec.publishAt) < Date.now() && <p className={styles.warning}>La hora programada ya pasó y no hay confirmación de publicación en este estado. Revisa el procesamiento en segundo plano y las operaciones; el reloj local no acredita que se haya publicado.</p>}{!results.deliveries?.length && <p>No hay entregas aprobadas en esta selección. No significa cero resultados publicados fuera del módulo.</p>}{results.deliveries?.map(delivery => <article className={styles.card} key={delivery.id}><h4>{channels[delivery.channel] || delivery.channel} · {method(delivery.integrationMethod)}</h4><p>Estado local: {states[delivery.state] || delivery.state} · último estado confirmado: {states[delivery.lastConfirmedState] || delivery.lastConfirmedState || 'Sin confirmación remota'}</p><p>Última consulta correcta {date(delivery.metricSync?.lastSuccessAt)} · próximo turno {date(delivery.nextSyncAt || delivery.metricSync?.nextAt)}</p>{delivery.metricSync?.lastError && <p className={styles.warning}>Último error: {text(delivery.metricSync.lastError)}. Se conserva evidencia anterior.</p>}{delivery.metricSync?.blocked && <p className={styles.warning}>Consulta bloqueada: revisar conexión/permisos/interfaz. Actualizar no evade este bloqueo.</p>}{['uncertain', 'blocked', 'needs_attention', 'partial'].includes(delivery.state) && <p className={styles.warning}>Revisar operaciones y comprobar el estado en Meta sin reenviar desde la publicación.</p>}</article>)}</section>
@@ -497,5 +577,6 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
     </div></details>}
     {hasDeliveries && results.business && <details id="social-results-business" className={styles.technicalDetails}><summary>Pedidos y gastos vinculados (separados de Meta)</summary><BusinessPanel business={results.business} stale={commercialStale} links={snapshot.links} onNavigate={onNavigate} onLink={(kind, record) => setAction({ type: 'link', kind, record })}/></details>}
     {action && current && <ResultActionDialog action={action} campaignId={id} api={api} requestIds={requestIds} onClose={() => setAction(null)} onSaved={saved} onInteractionStateChange={reportDialog}/>}
+    {evidence && <EvidenceDialog key={evidence.captureId} evidence={evidence} api={api} onClose={() => setEvidence(null)}/>}
   </section>;
 }

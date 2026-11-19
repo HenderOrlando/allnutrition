@@ -47,7 +47,6 @@ test('respaldo exige el marcador y las tres tablas de Heka v15 en el mismo snaps
   }
   await t.test('versión posterior no reemplaza el marcador v15', () => check(latest, async db => {
     await db.run('DELETE FROM migrations WHERE version=15');
-    await db.run('INSERT INTO migrations(version,applied_at) VALUES(16,?)', [at]);
   }));
   await t.test('versión posterior sin relaciones ni marcador v15', () => check(v9, db =>
     db.run('INSERT INTO migrations(version,applied_at) VALUES(16,?)', [at])));

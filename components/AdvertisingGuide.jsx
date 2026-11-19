@@ -5,73 +5,78 @@ const topics = [
   {
     id: 'start', title: 'Empezar y guardar una idea',
     steps: [
-      'Elige Crear publicidad y decide entre post sin inversión y campaña pagada.',
-      'Busca la referencia exacta por presentación, sabor o SKU. Puedes anunciar solo la marca. Si añades un obsequio a un producto o combo, escribe para qué compra aplica.',
-      'Guardar borrador solo requiere un nombre; puedes añadir cuenta, redes y pieza después.',
+      'Pulsa Crear publicación o campaña. En el Estudio visual, usa Adjuntar foto o video, Elegir de biblioteca o describe una idea. Para subir o elegir un archivo no necesitas IA ni una cuenta de Meta.',
+      'Usar esta pieza y continuar elige el archivo que acabas de revisar. Si todavía no tienes una imagen, usa Definir primero, sin imagen aún. Después elige Publicación sin inversión o Anuncio pagado.',
+      'En Definir publicación puedes anunciar solo la marca o elegir una oferta del catálogo por presentación, sabor o SKU. Guardar borrador te permite retomar el trabajo sin publicar ni autorizar gasto.',
     ],
     example: 'Conseguir consultas por WhatsApp sobre Dúo Cacao con muestra de vainilla, «Solo con Dúo». La muestra no forma parte del contenido normal del combo.',
   },
   {
     id: 'prepare', title: 'Preparar y aprobar',
     steps: [
-      'El recorrido es Qué anunciar → Preparar contenido → Revisar y publicar. Continuar y Anterior no guardan, publican ni solicitan imágenes.',
-      'Sube o elige una foto, úsala tal cual si está lista, o prepara una variante con indicaciones. Por ejemplo: «Aclara el fondo, conserva la etiqueta y la condición Solo con Dúo». El original nunca se sustituye automáticamente.',
-      'Revisa la oferta exacta, los destinos y la estimación. En orgánico, primero aprueba sin publicar; después puedes autorizar el envío desde Administrar publicación. En pauta, primero se prepara sin activar; autorizar inversión es otra decisión.',
+      'En Definir publicación elige objetivo, oferta, mensaje, cuenta, redes y países. En una publicación sin inversión, los países orientan el mensaje: no limitan ni garantizan la distribución.',
+      'Si generas o ajustas una imagen, revisa los datos y fotos que se enviarán a OpenAI y autoriza el posible cargo de cada solicitud. El original se conserva y un envío incierto no se repite.',
+      'Para un anuncio pagado, confirma los países antes de definir la audiencia. Elige público amplio sin IA, configúralo tú o solicita ayuda a Ali con su autorización separada. Elegir zonas no incluye todo el país.',
+      'Pulsa Continuar a revisión. En Qué falta antes de aprobar, cada acción te lleva al campo pendiente o a la configuración que corresponde. Después revisa la pieza por red y consulta la estimación.',
+      'Aprobar sin publicar y Preparar sin activar no envían la publicación ni autorizan inversión. Después usa Publicar, Programar o Autorizar inversión, según corresponda.',
     ],
   },
   {
     id: 'organize', title: 'Encontrar y organizar',
     steps: [
       'En Publicaciones y campañas, busca por nombre; Más filtros ofrece Red y Objetivo.',
-      'Desde la tarjeta puedes retomar un borrador, comprobar la publicación o ver el rendimiento de esa pieza.',
+      'Mis piezas en curso reabre tus conversaciones privadas. Quien colabora en un borrador puede revisar su pieza comercial, no leer tu conversación.',
+      'La tarjeta indica el siguiente paso: retomar un borrador, revisar la autorización, comprobar en Meta sin reenviar o ver resultados cuando se confirme la entrega.',
       'En Biblioteca, espera Lista para revisar y abre la vista previa. Archivar conserva historia y archivos: no borra ni libera espacio.',
     ],
   },
   {
     id: 'connect', title: 'Conectar una cuenta',
     steps: [
-      'En Configuración → Redes sociales, guarda las opciones de Meta y elige un método disponible: Conectar con Facebook autoriza desde Facebook sin introducir la contraseña en este panel.',
-      'En esa misma configuración, el acceso asistido requiere permiso previo de Meta: usa Crear conexión y abrir acceso, inicia sesión personalmente en el visor privado y resuelve los desafíos; la sesión se conserva cifrada.',
-      'Elige página y cuenta de anuncios y comprueba sus capacidades en Redes sociales; puedes guardar borradores mientras tanto, sin sustitución automática de método. Deshabilitar publicación no confirma detener gasto remoto.',
+      'En Configuración → Redes sociales, completa las opciones requeridas para tu vía. Conectar con Facebook abre la autorización oficial; no introduzcas tu contraseña en este panel.',
+      'En Cuentas conectadas, abre la cuenta y elige Seleccionar página y cuenta. Comprueba que la página, Instagram o la cuenta de anuncios elegidas aparezcan con el permiso que necesitas. Un token manual solo permite consultar.',
+      'Para publicar, revisa también que esté habilitada la publicación en las opciones de Meta. Si usas acceso asistido, este requiere permiso previo de Meta y que completes personalmente el acceso o el desafío en el visor privado. No se cambia de método automáticamente.',
     ],
   },
   {
     id: 'investment', title: 'Controlar inversión y pendientes',
     steps: [
-      'Revisa presupuesto total, moneda y fechas: no es un presupuesto diario ni dinero ya gastado o pagado.',
-      'Preparar el anuncio no activa inversión; activar y reanudar requieren otra autorización expresa, y una pausa solicitada solo detiene gasto cuando Meta la confirma.',
-      'Ante incertidumbre usa Comprobar estado en Meta sin reenviar; no repitas una publicación incierta y, sin acceso válido para pausarla, detén los anuncios directamente en Meta.',
+      'Revisa presupuesto total, moneda y zona de la cuenta, no de los países elegidos. No es un presupuesto diario ni dinero ya gastado o pagado.',
+      'Preparar no activa inversión. Para activar o reanudar, confirma el importe restante comprobado y las fechas originales. Solicitar una pausa no acredita que el gasto se detuvo.',
+      'Ante incertidumbre usa Comprobar en Meta sin reenviar; no repitas el envío original. Sin acceso válido para pausarlo, detén el anuncio directamente en Meta.',
     ],
     example: 'Un presupuesto total de 50.000 COP no significa que ya gastaste ni pagaste 50.000 COP.',
   },
   {
     id: 'results', title: 'Entender resultados y mejorar',
     steps: [
-      'Ver rendimiento abre esa pieza. Para el ejemplo de WhatsApp, revisa conversaciones y costo por conversación solo si se reportaron. Cero, sin dato y aún es pronto no significan lo mismo.',
-      'Cambiar esta pieza afecta solo el destino comprobable que revisaste; una nueva variante no hereda los comentarios ni resultados. Ambas alternativas requieren aprobación humana y en pauta nunca reactivan gasto.',
-      'En Qué aprendimos, compara la misma métrica y período según el criterio de la prueba. Si no hay datos comparables, no se puede aislar la mejora ni atribuir ventas. Actualizar vista solo lee los datos locales.',
+      'Ver resultados abre la pieza y la métrica de su objetivo. Para WhatsApp, revisa conversaciones y costo por conversación solo si se reportaron. Cero, sin dato y aún es pronto no significan lo mismo.',
+      'Abre la captura citada para comprobar qué provocó la sugerencia. Cambiar aquí afecta solo el destino comprobable que revisaste; Preparar una variante conserva el original y no transfiere comentarios ni métricas.',
+      'En Qué aprendimos, compara la misma métrica y período según el criterio de la prueba. Actualizar vista solo lee datos locales; Actualizar desde Meta solicita una captura y Revisar mejoras, un análisis local. Medición de la cuenta lleva a fuentes e historial, separados de la publicación.',
     ],
   },
 ];
 
 const firstTopic = { assets: 'organize', results: 'results' };
 
-export default function AdvertisingGuide({ tab = 'campaigns' }) {
+export default function AdvertisingGuide({ tab = 'campaigns', onConnections }) {
   const first = firstTopic[tab];
   const ordered = first ? [topics.find(topic => topic.id === first), ...topics.filter(topic => topic.id !== first)] : topics;
-  return <details className={styles.guide}>
+  return <details id="advertising-guide" className={styles.guide}>
     <summary>Cómo usar Publicidad</summary>
-    <p className={finance.guideRoutine}>Crea la pieza, revisa dónde saldrá, mide su objetivo y prueba una mejora cuando los datos la sustenten.</p>
-    <p>Leer esta guía no guarda, publica ni autoriza inversión.</p>
+    <p className={finance.guideRoutine}>Empieza donde estés: crear, resolver un requisito o entender lo que reportó Meta.</p>
+    <p>Leer la guía no guarda, publica ni autoriza inversión.</p>
     {ordered.map(topic => <details className={finance.guideTopic} key={topic.id}>
       <summary>{topic.title}</summary>
       <ol>{topic.steps.map(step => <li key={step}>{step}</li>)}</ol>
+      {topic.id === 'connect' && onConnections && <div className={styles.actions}><button type="button" className="button subtle" onClick={onConnections}>Abrir Configuración → Redes sociales</button></div>}
       {topic.example && <p><strong>Ejemplo ficticio:</strong> {topic.example}</p>}
     </details>)}
     <section className={finance.glossary} aria-label="Glosario de Publicidad">
       <h2>Glosario breve</h2>
       <dl>
         <dt>Publicación sin inversión (orgánica)</dt><dd>Contenido publicado sin comprar distribución en la red, sin alcance garantizado.</dd>
+        <dt>Mercado</dt><dd>País o países elegidos para orientar el mensaje. En pauta se cubren solo con los países completos o las zonas verificadas que hayas seleccionado.</dd>
         <dt>Anuncio pagado (pauta)</dt><dd>Contenido cuya distribución usa un presupuesto y necesita autorización separada para activar gasto.</dd>
         <dt>Borrador</dt><dd>Idea guardada que puedes completar y revisar, sin autorización para publicar o gastar.</dd>
         <dt>Presupuesto total</dt><dd>Importe autorizado para el intervalo completo, distinto del gasto reportado y de los pagos.</dd>

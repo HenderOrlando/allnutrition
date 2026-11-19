@@ -257,7 +257,7 @@ test('Ads measurements survive losing Page/Instagram publishing access without a
   await assert.rejects(() => f.api.executeStep({
     operation: { channel: 'meta_ads', deliveryId: 'local-delivery', state: 'prepared', step: 'create_campaign', specHash: hash(frozen), remoteRefs: {} },
     spec: frozen, beforeSend: () => { sent = true; }
-  }), sanitized('account_mismatch'));
+  }), sanitized('permission'));
   assert.equal(sent, false);
   assert.equal(f.calls.some(call => call.method !== 'GET'), false);
   f.state.adTasks = ['DRAFT'];
@@ -267,7 +267,7 @@ test('Ads measurements survive losing Page/Instagram publishing access without a
 test('Page insights survive losing the selected ad account and enforce the actual resource business', async t => {
   const f = await fixture(t);
   f.state.hideAdAccounts = true;
-  f.state.permissions = ['pages_show_list', 'pages_read_engagement', 'read_insights'];
+  f.state.permissions = ['pages_show_list', 'pages_read_engagement', 'read_insights', 'business_management'];
   const args = { delivery: { id: 'fb-image', channel: 'facebook', remoteRefs: { postId: '200_400' } }, spec: spec('organic'), query: query('aggregate', true) };
   const { snapshots } = await f.measure(args);
   assert.equal(snapshots.find(snapshot => snapshot.scope === 'mixed').values.reach.value, 1000);

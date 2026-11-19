@@ -115,6 +115,29 @@ for (const objective of ['whatsapp', 'reach', 'engagement']) test(`paid ${object
   assert.equal(f.provider.state.activationCount, 0);
 });
 
+test('orgánico con objetivo WhatsApp publica sin cuenta publicitaria ni número de pauta', async t => {
+  const f = await fixture(t, { mode: 'organic', channel: 'facebook', objective: 'whatsapp' });
+  f.provider.state.permissions = ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts', 'business_management'];
+  f.provider.state.whatsappNumber = null;
+  f.spec.identities = { userId: '100', businessId: '500', pageId: '200' };
+  f.operation.specHash = hash(f.spec);
+  const result = await f.prepare();
+  assert.equal(result.state, 'published');
+  assert.ok(f.provider.requests.some(request => request.path === '200/feed' && request.method === 'POST'));
+  assert.ok(!f.provider.requests.some(request => request.path.includes('adaccounts') || request.fields?.includes('whatsapp_number') || request.fields?.includes('instagram_business_account')));
+});
+
+test('pauta WhatsApp requiere el número comprobado en la página, sin envío ante ausencia o discrepancia', async t => {
+  for (const number of [null, '+525500000001']) {
+    const f = await fixture(t, { objective: 'whatsapp' });
+    f.provider.state.whatsappNumber = number;
+    await assert.rejects(f.turn(), error => error.errorCode === 'SPEC_MISMATCH');
+    assert.equal(f.receipts.length, 0);
+    assert.ok(!f.provider.requests.some(request => request.method === 'POST'));
+    assert.deepEqual(f.provider.requests.filter(request => request.fields === 'id,whatsapp_number').map(request => request.path), ['200']);
+  }
+});
+
 for (const channel of ['facebook', 'instagram']) for (const kind of ['image', 'video']) test(`organic ${channel} ${kind} confirms owned published object, not upload success`, async t => {
   const f = await fixture(t, { mode: 'organic', channel, kind });
   const result = await f.prepare(); assert.equal(result.state, 'published'); assert.equal(result.evidence.remoteRead, true);

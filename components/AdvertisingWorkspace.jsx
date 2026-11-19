@@ -9,6 +9,7 @@ import AdvertisingResults from './AdvertisingResults';
 import AdvertisingGuide from './AdvertisingGuide';
 import AdvertisingGeneration from './AdvertisingGeneration';
 import AdvertisingAssetUpload from './AdvertisingAssetUpload';
+import { countryLabel } from './AdvertisingMarkets';
 import { offerLabel } from './AdvertisingOfferPicker';
 import MetaAccountAnalysis from './MetaAccountAnalysis';
 import AdvertisingMeasurement from './AdvertisingMeasurement';
@@ -70,12 +71,11 @@ function useRequestIds() {
   }, []);
 }
 
-export default function AdvertisingWorkspace({ api, view, onViewChange, onNavigate, onInteractionStateChange, onMutation, revision = 0, assistantOpenRequest, onAssistantOpenHandled }) {
+export default function AdvertisingWorkspace({ api, view, onViewChange, onStudioThread, onNavigate, onInteractionStateChange, onMutation, revision = 0, assistantOpenRequest, onAssistantOpenHandled }) {
   const tab = tabs.some(item => item.id === view.tab) ? view.tab : 'campaigns';
   const [refresh, setRefresh] = useState(0), [inventory, setInventory] = useState({ data: null, error: '', loading: false, fetchedAt: null });
   const [notice, setNotice] = useState('');
   const heading = useRef(null), queryPanel = useRef(null), interaction = useRef(new Map()), callbacks = useRef({}), mounted = useRef(true);
-  const imageContinuation = useRef(null);
   callbacks.current = { onInteractionStateChange, onMutation, onViewChange, view };
   const assistantBridge = useAssistantBridge(), assistantOpenNotice = useRef('');
   const [assistantOpenContext, setAssistantOpenContext] = useState(null);
@@ -112,7 +112,6 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
   const editorReport = useCallback(state => report('editor', state), [report]);
   const resultsReport = useCallback(state => report('results', state), [report]);
   const generationReport = useCallback(state => report('generation', state), [report]);
-  const editorUploadReport = useCallback(state => report('editor-upload', state), [report]);
   const editorComposerReport = useCallback(state => report('editor-composer', state), [report]);
   const accountAnalysisReport = useCallback(state => report('account-analysis', state), [report]);
   const measurementReport = useCallback(state => report('measurement', state), [report]);
@@ -122,7 +121,8 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
     window.addEventListener('beforeunload', beforeUnload);
     return () => { mounted.current = false; window.removeEventListener('beforeunload', beforeUnload); callbacks.current.onInteractionStateChange?.({ dirty: false, busy: false }); };
   }, []);
-  useEffect(() => { if (tab !== 'campaigns' || !view.record) heading.current?.focus({ preventScroll: true }); }, [tab, view.record]);
+  const listVisible = tab !== 'campaigns' || !view.record;
+  useEffect(() => { if (listVisible) heading.current?.focus({ preventScroll: true }); }, [tab, listVisible]);
   const invalidate = useCallback(async () => {
     if (mounted.current) setRefresh(value => value + 1);
     try { await callbacks.current.onMutation?.(); } catch (cause) { if (mounted.current) setNotice(`Operación guardada; actualización general pendiente. ${cause.message}`); }
@@ -157,19 +157,17 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
   useEffect(() => { setListPending(Boolean(campaignRead.data?.campaigns.some(pendingCampaign))); }, [campaignRead.data]);
   const change = patch => onViewChange({ ...patch, page: patch.page ?? 1 });
   const navigate = patch => onNavigate ? onNavigate({ section: 'advertising', ...patch }) : change(patch);
-  const committed = useCallback((result, next) => {
+  const committed = useCallback(result => {
     // Only release this editor's interaction after its complete commit chain.
     // Other owners remain guarded by the parent navigation machinery.
     report('editor', { dirty: false, busy: false });
-    if (result?.id && next?.openImage) imageContinuation.current = { campaignId: result.id, baseAssetId: next.baseAssetId, instructions: next.instructions };
     // Only a newly assigned record needs canonical navigation; saving in place keeps Back intact.
     if (result?.id && (callbacks.current.view.record !== result.id || callbacks.current.view.tab !== 'campaigns')) callbacks.current.onViewChange({ tab: 'campaigns', record: result.id, page: 1 });
     setRefresh(value => value + 1);
   }, [report]);
-  const takeImageContinuation = useCallback(id => {
-    const next = imageContinuation.current; imageContinuation.current = null;
-    return next?.campaignId === id ? next : null;
-  }, []);
+  const startStudio = () => change({ tab: 'campaigns', record: 'new', studio: null, mode: null, objective: null });
+  const editorProps = { api, connections, requirements: connectionRead.data?.requirements, assets: inventory.data?.assets,
+    onSaved: committed, onNavigate: navigate, onInteractionStateChange: editorReport, onComposerState: editorComposerReport, onMutation: invalidate, revision };
   const campaignFilters = [
     ['q', 'Búsqueda', view.q], ['mode', 'Tipo de publicación', { organic: 'Publicación sin inversión', paid: 'Anuncio pagado' }[view.mode]],
     ['status', 'Estado', states[view.status]], ['network', 'Red', { facebook: 'Facebook', instagram: 'Instagram' }[view.network]],
@@ -177,17 +175,36 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
   ].filter(([key]) => Boolean(view[key]));
   const clearCampaignFilters = () => { change({ q: null, mode: null, status: null, network: null, objective: null, record: null, page: 1 }); queryPanel.current?.querySelector('input[name="q"]')?.focus(); };
   const currentCampaignQuery = campaignRead.path === listPath;
-  return <section className={styles.workspace} aria-label="Publicidad en redes sociales">
-    <header className="workspace-heading"><div><p className={styles.eyebrow}>Facebook e Instagram</p><h1 ref={heading} tabIndex={-1} data-admin-section-heading>Publicidad</h1><p>Elige qué anunciar, prepara la pieza y revisa qué lograste. Tú decides qué se publica y cuándo autorizas inversión.</p></div>{tab === 'campaigns' && !view.record && <button type="button" className="button primary" onClick={() => change({ record: 'new' })}>Crear publicidad</button>}</header>
-    <AdvertisingGuide key={tab} tab={tab}/>
+  return <section className={`${styles.workspace} ${styles.advertising}`} aria-label="Publicidad en redes sociales">
+    <header className="workspace-heading"><div><p className={styles.eyebrow}>Facebook e Instagram</p><h1 ref={heading} tabIndex={-1} data-admin-section-heading>Publicidad</h1></div>
+      <button type="button" className="text-button" aria-controls="advertising-guide" onClick={() => {
+        const guide = document.getElementById('advertising-guide');
+        guide.open = true;
+        guide.querySelector('summary')?.focus();
+        guide.scrollIntoView({ block: 'start' });
+      }}>Ver guía</button>
+    </header>
     <WorkspaceTabs label="Vistas de publicidad" items={tabs} value={tab} onChange={value => change({ tab: value, record: null, resultsFocus: null, status: null, q: null })}/>
-    <p className={styles.taskIntro}>{{ campaigns: 'Guarda un borrador y retómalo después. Guardar no publica ni autoriza gasto.', assets: 'Sube archivos propios o elige Crear imagen y revisa el resultado antes de usarlo.', results: 'Revisa el rendimiento de una pieza, qué probar y qué aprendiste.' }[tab]}</p>
     {notice && <p className={styles.notice} role="status">{notice}</p>}
     {tab === 'campaigns' && view.record ? <>
       <ReadStatus state={connectionRead} label="cuentas conectadas" onRetry={() => setRefresh(value => value + 1)}/><ReadStatus state={inventory} label="imágenes y videos privados" onRetry={() => setRefresh(value => value + 1)}/>
-      <AdvertisingCampaignEditor api={api} campaignId={view.record} connections={connections} requirements={connectionRead.data?.requirements} assets={inventory.data?.assets} initialMode={view.mode || 'organic'} initialObjective={view.objective || 'engagement'} onSaved={committed} takeImageContinuation={takeImageContinuation} onNavigate={navigate} onInteractionStateChange={editorReport} onUploadState={editorUploadReport} onComposerState={editorComposerReport} onMutation={invalidate} revision={revision}/>
+      {view.record === 'new' ? <NewPublication view={view} editorProps={editorProps} onThread={onStudioThread} onInteractionStateChange={generationReport}
+        assisted={assistantOpenRequest?.open?.target === 'campaign-draft' && assistantOpenRequest.open.view?.record === 'new'}
+        onOpenCampaign={id => change({ record: id, studio: null })} onBack={() => change({ record: 'new', studio: view.studio })}
+        onExit={() => change({ record: null, studio: null })}/>
+        : <AdvertisingCampaignEditor {...editorProps} campaignId={view.record}/>}
     </> : tab === 'campaigns' ? <>
+      <section className={styles.startPanel} aria-labelledby="advertising-start-title">
+        <div><h2 id="advertising-start-title">Prepara tu próxima publicación</h2><p>Publica sin inversión o prepara un anuncio con presupuesto. Puedes empezar sin una cuenta conectada y guardar lo que lleves como borrador.</p></div>
+        <button type="button" className="button primary" onClick={startStudio}>Crear publicación o campaña</button>
+        <ol aria-label="Recorrido de una publicación">
+          <li><strong>1. Prepara la imagen o video</strong><span>Crea, sube o elige un archivo. Puedes hacerlo después.</span></li>
+          <li><strong>2. Define qué y dónde publicar</strong><span>Elige objetivo, mensaje, cuenta y redes.</span></li>
+          <li><strong>3. Revisa antes de enviar</strong><span>Aprobar no publica ni activa inversión.</span></li>
+        </ol>
+      </section>
       <section ref={queryPanel} className={styles.queryPanel} aria-label="Buscar y filtrar publicaciones">
+        <h2>Tus publicaciones y campañas</h2>
         <div className={styles.filterBar}>
           <Field field={{ name: 'q', label: 'Buscar publicación', max: 100 }} value={view.q || ''} onChange={value => change({ q: value || null })}/>
           <SelectField name="mode" label="Tipo de publicación" value={view.mode} options={[{ value: '', label: 'Todas' }, { value: 'organic', label: 'Publicación sin inversión' }, { value: 'paid', label: 'Anuncio pagado' }]} onChange={value => change({ mode: value || null })}/>
@@ -198,57 +215,136 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onNaviga
           <SelectField name="objective" label="Objetivo" value={view.objective} options={[{ value: '', label: 'Todos' }, ...Object.entries(objectives).map(([value, label]) => ({ value, label }))]} onChange={value => change({ objective: value || null })}/>
         </div></details>
         {campaignFilters.length ? <div className="active-filters" aria-label="Filtros activos">{campaignFilters.map(([key, label, value]) => <button key={key} type="button" className="filter-chip" aria-label={`Quitar filtro: ${label}: ${value}`} onClick={() => { change({ [key]: null, page: 1 }); queryPanel.current?.querySelector('input[name="q"]')?.focus(); }}>{label}: {value} <span aria-hidden="true">×</span></button>)}<button type="button" className="text-button" onClick={clearCampaignFilters}>Limpiar filtros</button></div> : <p className={styles.help}>Se muestran todas las publicaciones</p>}
-        <p className={styles.help}>Últimas actualizadas primero</p>
+        <p className={styles.help}>Ordenadas por última actualización.</p>
       </section>
       <ReadStatus state={campaignRead} label="publicaciones" onRetry={() => setRefresh(value => value + 1)}/>
       {campaignRead.data && !currentCampaignQuery && <p role="status" className={styles.warning}>Resultados de la consulta anterior; actualizando filtros</p>}
       {campaignRead.data && <div inert={!currentCampaignQuery} aria-busy={campaignRead.loading}>
         <div className={styles.stack}>{campaignRead.data.campaigns.map(campaign => <CampaignRow key={campaign.id} campaign={campaign} asset={inventory.data?.assets.find(item => item.id === campaign.assetId && item.state === 'ready')} onOpen={() => change({ record: campaign.id })} onResults={resultsFocus => change({ tab: 'results', record: campaign.id, resultsFocus: resultsFocus || null })}/>)}</div>
         {currentCampaignQuery && !campaignRead.loading && !campaignRead.error && !campaignRead.data.campaigns.length && <div className={`admin-empty ${styles.empty}`}>
-          {campaignRead.data.total > 0 ? <><h2>Esta página no tiene publicaciones</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : campaignFilters.length ? <><h2>No hay publicaciones con estos filtros</h2><button type="button" className="button subtle" onClick={clearCampaignFilters}>Limpiar filtros</button></> : <><h2>Empieza con un borrador</h2><p>Elige una oferta o anuncia tu marca. Puedes añadir la cuenta y la pieza después.</p><div className={styles.actions}><button type="button" className="button primary" onClick={() => change({ record: 'new' })}>Crear publicidad</button><button type="button" className="button subtle" onClick={() => change({ tab: 'assets', record: null })}>Biblioteca</button></div></>}
+          {campaignRead.data.total > 0 ? <><h2>Esta página no tiene publicaciones</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : campaignFilters.length ? <><h2>No hay publicaciones con estos filtros</h2><button type="button" className="button subtle" onClick={clearCampaignFilters}>Limpiar filtros</button></> : <><h2>Aún no hay publicaciones</h2><p>Tus borradores y publicaciones aparecerán aquí. Si ya tienes una imagen o video guardado, puedes usarlo al crear.</p><button type="button" className="button subtle" onClick={() => change({ tab: 'assets', record: null })}>Ir a la biblioteca</button></>}
         </div>}
-        <Pagination page={campaignRead.data.page} pages={campaignRead.data.pages} total={campaignRead.data.total} disabled={campaignRead.loading || !currentCampaignQuery} onPage={page => change({ page })}/>
+        {campaignRead.data.pages > 1 && <Pagination page={campaignRead.data.page} pages={campaignRead.data.pages} total={campaignRead.data.total} disabled={campaignRead.loading || !currentCampaignQuery} onPage={page => change({ page })}/>}
       </div>}
+      <PrivatePieces api={api} onResume={id => change({ tab: 'campaigns', record: 'new', studio: id, mode: null, objective: null })}/>
     </> : tab === 'assets' ? <>
-      <LibraryComposer api={api} onInteractionStateChange={generationReport} onMutation={invalidate} sourceRevision={`${refreshKey}:${inventory.fetchedAt || ''}`}/>
+      <section className={styles.startPanel} aria-labelledby="advertising-library-title">
+        <div><h2 id="advertising-library-title">Biblioteca privada</h2><p>Guarda imágenes y videos para usarlos más adelante. Subir un archivo no lo publica.</p></div>
+        <button type="button" className="button primary" onClick={startStudio}>Crear imagen en el estudio</button>
+      </section>
       <AssetsPanel api={api} view={view} inventory={inventory} change={change} report={report} onMutation={invalidate} onRetry={() => setRefresh(value => value + 1)}/>
+      <details className={styles.guide}><summary>Historial de imágenes anterior al estudio</summary><LegacyGenerationHistory api={api}/></details>
     </> : <>
       <AdvertisingResults api={api} campaignId={view.record && view.record !== 'new' ? view.record : null} view={view} onViewChange={onViewChange} onNavigate={navigate} onInteractionStateChange={resultsReport} onMutation={invalidate} revision={revision}/>
       {(!view.record || view.record === 'new') && <>
         <ReadStatus state={connectionRead} label="cuentas para análisis y medición" onRetry={() => setRefresh(value => value + 1)}/>
-        <AdvertisingMeasurement api={api} connections={connections} onInteractionStateChange={measurementReport} onMutation={invalidate}/>
-        <MetaAccountAnalysis api={api} connections={connections} onInteractionStateChange={accountAnalysisReport} onMutation={invalidate}/>
+        <section className={styles.stack} aria-labelledby="social-account-measurement">
+          <h2 id="social-account-measurement" tabIndex={-1}>Medición de la cuenta</h2>
+          <AdvertisingMeasurement api={api} connections={connections} onInteractionStateChange={measurementReport} onMutation={invalidate}/>
+          <MetaAccountAnalysis api={api} connections={connections} onInteractionStateChange={accountAnalysisReport} onMutation={invalidate}/>
+        </section>
       </>}
     </>}
+    <AdvertisingGuide key={tab} tab={tab} onConnections={() => onNavigate?.({ section: 'business', tab: 'social', record: null })}/>
   </section>;
 }
 
-function LibraryComposer(props) {
-  const [opened, setOpened] = useState(false);
-  return <details className={styles.guide} onToggle={event => setOpened(event.currentTarget.open)}><summary>Crear imagen</summary>{opened && <AdvertisingGeneration {...props}/>}</details>;
+function NewPublication({ view, editorProps, onThread, onInteractionStateChange, onOpenCampaign, onBack, onExit, assisted }) {
+  const [selection, setSelection] = useState(undefined), [mode, setMode] = useState(null);
+  const heading = useRef(null);
+  useEffect(() => { if (selection !== undefined && !mode) heading.current?.focus(); }, [selection, mode]);
+  useEffect(() => { if (assisted) setMode(value => value || view.mode || 'organic'); }, [assisted, view.mode]);
+  function back() {
+    if (onBack() === false) return;
+    setMode(null); setSelection(undefined);
+  }
+  if (mode) return <div className={styles.stack}>
+    <div className={styles.actions}><button type="button" className="button subtle" onClick={back}>Volver al estudio</button></div>
+    <AdvertisingCampaignEditor {...editorProps} campaignId="new" initialMode={mode} initialObjective={view.objective || 'engagement'} studioThread={selection || null} studioId={view.studio} onStudioThread={onThread}/>
+  </div>;
+  if (selection !== undefined) return <section className={`${styles.card} ${styles.stack}`} aria-label="Elegir tipo de publicación">
+    <header><h2 ref={heading} tabIndex={-1}>¿Qué quieres publicar?</h2>
+      <p>{selection?.selectedAsset ? <>Imagen o video elegido: <strong>{selection.selectedAsset.name}</strong>.</> : 'Puedes añadir una imagen o un video más adelante.'}</p>
+    </header>
+    <div className={styles.fieldGrid}>
+      <div className={`${styles.card} ${styles.stack}`}><p>Comparte en tus redes sin pagar por difusión.</p><button type="button" className="button subtle" onClick={() => setMode('organic')}>Publicación sin inversión</button></div>
+      <div className={`${styles.card} ${styles.stack}`}><p>Elige público, fechas y presupuesto. Activar el gasto requiere otra confirmación.</p><button type="button" className="button subtle" onClick={() => setMode('paid')}>Anuncio pagado</button></div>
+    </div>
+    <div className={styles.actions}><button type="button" className="button subtle" onClick={back}>Volver al estudio</button></div>
+  </section>;
+  return <div className={styles.stack}>
+    <AdvertisingGeneration api={editorProps.api} assets={editorProps.assets} threadId={view.studio} onThreadCreated={thread => onThread?.(thread.id)}
+      onUseAsset={(_asset, thread) => setSelection(thread)} onOpenCampaign={onOpenCampaign} onInteractionStateChange={onInteractionStateChange} onMutation={editorProps.onMutation}
+      onSkip={() => { if (onBack() !== false) setSelection(null); }} onExit={onExit}/>
+  </div>;
+}
+
+function PrivatePieces({ api, onResume }) {
+  const [paging, setPaging] = useState({ cursor: null, threads: [], nextCursor: null, error: '', loading: false });
+  useEffect(() => {
+    const controller = new AbortController(), { signal } = controller;
+    const cursor = paging.cursor;
+    setPaging(value => ({ ...value, loading: true, error: '' }));
+    api(`${ROOT}/creative-threads${cursor ? `?${new URLSearchParams({ cursor })}` : ''}`, { signal }).then(data => {
+      if (!signal.aborted) setPaging(value => ({ ...value, threads: [...new Map([...value.threads, ...data.threads].map(item => [item.id, item])).values()], nextCursor: data.nextCursor, loading: false }));
+    }, cause => { if (!signal.aborted) setPaging(value => ({ ...value, loading: false, error: cause.message })); });
+    return () => controller.abort();
+  }, [api, paging.cursor]);
+  return <details className={styles.guide}><summary>Mis piezas en curso{paging.threads.length ? ` (${paging.threads.length}${paging.nextCursor ? '+' : ''})` : ''}</summary>
+    {paging.loading && <p role="status">Buscando tus piezas en curso…</p>}
+    {paging.error && <p role="alert">{paging.error}</p>}
+    {!paging.loading && !paging.error && !paging.threads.length && <p>No hay piezas en curso sin borrador.</p>}
+    {paging.threads.length > 0 && <ul className={styles.choiceList}>{paging.threads.map(thread => <li key={thread.id} className={styles.toolbar}>
+      <div><strong>{thread.selectedAsset?.name || 'Pieza sin seleccionar'}</strong><p className={styles.help}>Última actividad: {date(thread.updatedAt)}</p></div>
+      <button type="button" className="button subtle" onClick={() => onResume(thread.id)}>Reanudar pieza</button>
+    </li>)}</ul>}
+    {paging.nextCursor && <button type="button" className="button subtle" disabled={paging.loading} onClick={() => setPaging(value => ({ ...value, cursor: value.nextCursor }))}>Cargar más piezas</button>}
+  </details>;
+}
+
+function LegacyGenerationHistory({ api }) {
+  const read = useRead(api, `${ROOT}/generation`, 0);
+  return <div className={styles.stack}><ReadStatus state={read} label="historial anterior"/>
+    {read.data && (read.data.jobs.length ? <ul className={styles.choiceList}>{read.data.jobs.map(job => <li key={job.id}>
+      <strong>{job.asset?.name || `Solicitud ${job.format?.toUpperCase() || 'de imagen'}`}</strong><p>{date(job.createdAt)} · {job.notice}</p>
+      {job.asset?.originalUrl && <a href={job.asset.originalUrl}>Ver original</a>}
+    </li>)}</ul> : <p>No hay solicitudes anteriores.</p>)}
+  </div>;
 }
 
 function CampaignRow({ campaign, asset, onOpen, onResults }) {
   const deliveries = campaign.deliveries || [];
   const awaitingPublication = campaign.mode === 'organic' && campaign.state === 'ready' && !deliveries.length;
+  const confirmed = deliveries.some(delivery => delivery.remoteId && delivery.lastConfirmedAt &&
+    (campaign.mode === 'paid' ? ['active', 'completed'].includes(delivery.lastConfirmedState) : delivery.state === 'published' || delivery.lastConfirmedState === 'published'));
+  const needsCheck = ['partial', 'needs_attention', 'failed'].includes(campaign.state) || deliveries.some(item => item.state === 'uncertain');
+  const next = campaign.state === 'draft' ? 'Continuar borrador' : needsCheck ? 'Comprobar en Meta sin reenviar' :
+    awaitingPublication ? campaign.publishAt ? 'Revisar programación' : 'Revisar publicación' :
+    campaign.state === 'ready' && campaign.mode === 'paid' ? 'Revisar inversión' : confirmed ? 'Ver resultados' : 'Ver progreso';
   const status = awaitingPublication ? 'Aprobada, pendiente de publicar' : campaign.mode === 'paid' && campaign.state === 'ready' ? 'Preparada, sin gasto autorizado' : states[campaign.state] || campaign.state;
   const syncDates = deliveries.map(item => item.metricSync?.lastCompletedAt).filter(Boolean).sort();
   const spendSummary = campaign.lastMeasurementSummary, spend = spendSummary?.spendMinor;
   const spendText = spend?.value != null && ['reported', 'estimated'].includes(spend.status)
     ? `${money(spend.value, spendSummary.currency)}${spend.precision !== 'exact' || spend.status === 'estimated' ? ' · Estimado / precisión no exacta' : ''}`
     : 'No disponible';
-  return <article className={styles.card}><header className={styles.toolbar}><h2>{campaign.name}</h2><span className={styles.badge}>{status}</span></header>
-    <p>{campaign.mode === 'paid' ? 'Anuncio pagado' : 'Publicación sin inversión'} · {objectives[campaign.objective]} · {campaign.platforms?.map(value => value === 'facebook' ? 'Facebook' : 'Instagram').join(' · ') || 'Sin destinos elegidos'}</p>
-    {(asset?.kind === 'image' || campaign.offerSnapshot?.primary?.image) && <img className={styles.cardThumb} width={72} height={72} loading="lazy" src={asset?.kind === 'image' ? asset.previewUrl : campaign.offerSnapshot.primary.image} alt=""/>}
-    {campaign.offerSnapshot?.primary && <p>{offerLabel(campaign.offerSnapshot.primary)}</p>}
-    <dl className="summary-values"><div><dt>{campaign.mode === 'paid' ? 'Inicio / fin' : 'Publicación'}</dt><dd>{campaign.mode === 'paid' ? `${date(campaign.startAt)} / ${date(campaign.endAt)}` : campaign.publishAt ? date(campaign.publishAt) : 'Al autorizar la publicación y procesar la solicitud'}</dd></div>{campaign.mode === 'paid' && deliveries.length > 0 && <div><dt>Gasto reportado</dt><dd>{spendText}{spendSummary && <small className={styles.muted}> · {spendSummary.complete ? 'Consulta completa' : 'Cobertura parcial'} · {date(spendSummary.fetchedAt)} · {methods[spendSummary.integrationMethod] || 'Fuente no informada'}</small>}</dd></div>}{deliveries.length > 0 && <div><dt>Última consulta completa</dt><dd>{date(syncDates.at(-1))}</dd></div>}</dl>
+  return <article className={`${styles.card} ${styles.stack}`}><header className={styles.heading}><h3>{campaign.name}</h3><span className={styles.badge}>{status}</span></header>
+    <div className={styles.campaignSummary}>
+      {(asset?.kind === 'image' || campaign.offerSnapshot?.primary?.image) && <img className={styles.cardThumb} width={72} height={72} loading="lazy" src={asset?.kind === 'image' ? asset.previewUrl : campaign.offerSnapshot.primary.image} alt=""/>}
+      <div><p><strong>{campaign.mode === 'paid' ? 'Anuncio pagado' : 'Publicación sin inversión'}</strong> · {objectives[campaign.objective]}</p>
+        <p>{campaign.platforms?.map(value => value === 'facebook' ? 'Facebook' : 'Instagram').join(' · ') || 'Sin redes elegidas'} · {campaign.marketCountries?.map(countryLabel).join(', ') || 'Sin países elegidos'}</p>
+        {campaign.offerSnapshot?.primary && <p>{offerLabel(campaign.offerSnapshot.primary)}</p>}
+      </div>
+    </div>
     {(campaign.restoreHold || campaign.restore_hold) && <p className={styles.warning}>{campaign.mode === 'organic' && !deliveries.length ? 'Restaurada sin entrega: duplica, vuelve a validar y aprueba el nuevo borrador.' : 'Restaurada: bloqueada hasta reconexión, comprobación de estado en Meta sin reenviar y reanudación explícita.'}</p>}
     {deliveries.length > 0 && <ul className={styles.choiceList}>{deliveries.map(delivery => <li key={delivery.id}><strong>{delivery.channel === 'meta_ads' ? 'Anuncio Meta · presupuesto único' : delivery.channel === 'facebook' ? 'Facebook' : 'Instagram'}</strong>: {states[delivery.state] || delivery.state}{delivery.lastConfirmedState && <span> · Último confirmado: {states[delivery.lastConfirmedState] || delivery.lastConfirmedState}</span>}{delivery.state === 'uncertain' && <p className={styles.warning}>Envío incierto: comprueba el estado en Meta sin reenviar.</p>}{['queued', 'scheduled'].includes(delivery.state) && campaign.publishAt && Date.parse(campaign.publishAt) < Date.now() - 900000 && <p className={styles.warning}>Horario vencido por más de 15 minutos: requiere revisión; no se presenta como publicada.</p>}</li>)}</ul>}
-    <details className={styles.technicalDetails}><summary>Detalles del seguimiento</summary><p>{methods[campaign.integrationMethod] || 'Sin conexión seleccionada'}</p>{deliveries.map(delivery => <p key={delivery.id}>{delivery.channel} · Próxima consulta: {date(delivery.nextSyncAt)}{delivery.metricSync?.lastError?.code ? ` · ${delivery.metricSync.lastError.code}` : ''}</p>)}</details>
+    {(deliveries.length > 0 || campaign.publishAt || campaign.startAt || campaign.endAt) && <details className={styles.technicalDetails}><summary>Fechas y seguimiento</summary>
+      <dl className="summary-values"><div><dt>{campaign.mode === 'paid' ? 'Inicio / fin' : 'Publicación'}</dt><dd>{campaign.mode === 'paid' ? `${date(campaign.startAt)} / ${date(campaign.endAt)}` : campaign.publishAt ? date(campaign.publishAt) : 'Al autorizar la publicación y procesar la solicitud'}</dd></div>{campaign.mode === 'paid' && deliveries.length > 0 && <div><dt>Gasto reportado</dt><dd>{spendText}{spendSummary && <small className={styles.muted}> · {spendSummary.complete ? 'Consulta completa' : 'Cobertura parcial'} · {date(spendSummary.fetchedAt)} · {methods[spendSummary.integrationMethod] || 'Fuente no informada'}</small>}</dd></div>}{deliveries.length > 0 && <div><dt>Última consulta completa</dt><dd>{date(syncDates.at(-1))}</dd></div>}</dl>
+      <p>{methods[campaign.integrationMethod] || 'Sin conexión seleccionada'}</p>{deliveries.map(delivery => <p key={delivery.id}>{delivery.channel} · Próxima consulta: {date(delivery.nextSyncAt)}{delivery.metricSync?.lastError?.code ? ` · ${delivery.metricSync.lastError.code}` : ''}</p>)}
+    </details>}
     <div className={styles.actions}>
-      {campaign.state === 'draft' ? <button type="button" className="button primary" onClick={onOpen}>Continuar borrador</button> : !deliveries.length || pendingCampaign(campaign) || ['failed', 'needs_attention', 'partial', 'ready', 'scheduled'].includes(campaign.state)
-        ? <button type="button" className="button primary" onClick={onOpen}>{awaitingPublication ? 'Administrar publicación' : 'Comprobar publicación'}</button> : <button type="button" className="button primary" onClick={() => onResults()}>Ver rendimiento</button>}
-      {campaign.state !== 'draft' && <button type="button" className="button subtle" onClick={onOpen}>Abrir ficha</button>}
+      <button type="button" className="button primary" onClick={next === 'Ver resultados' ? () => onResults() : onOpen}>{next}</button>
+      {next === 'Ver resultados' && <button type="button" className="button subtle" onClick={onOpen}>Abrir ficha</button>}
+      {needsCheck && confirmed && <button type="button" className="button subtle" onClick={() => onResults()}>Ver resultados</button>}
       {deliveries.length > 0 && campaign.improvementState && <button type="button" className="button subtle" onClick={() => onResults(campaign.improvementState === 'suggested' ? 'recommendations' : 'learnings')}>{{ suggested: 'Mejora disponible · Ver propuesta', observing: 'Prueba en curso', concluded: 'Ya hay una conclusión' }[campaign.improvementState]}</button>}
     </div>
   </article>;

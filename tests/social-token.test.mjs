@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { openStore } from '../lib/db/index.mjs';
 import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
-import { createTokenSocialConnection, socialConnectionAction, getSocialConnections, startSocialOAuth, completeSocialOAuth } from '../lib/business/social-connections.mjs';
+import { createTokenSocialConnection, socialConnectionAction, getSocialConnections, startSocialOAuth, completeSocialOAuth, socialMetaError } from '../lib/business/social-connections.mjs';
 import { getSocialAccountAdvertising } from '../lib/business/social-account-advertising.mjs';
 import { getSocialConnection } from '../lib/business/social.mjs';
 import { loadCredentials } from '../lib/social/credentials.mjs';
@@ -64,6 +64,23 @@ test('manual token is encrypted, idempotent and independent of OAuth login confi
   await assert.rejects(createTokenSocialConnection(store, { ...input, accessToken: 'DIFFERENT-SYNTHETIC-TOKEN' }, actorId, options), /datos distintos/);
 }));
 
+test('el token manual conserva la operación y no guarda una conexión ante un 100 genérico', () => setup(async ({ store, input, options, remote }) => {
+  let report;
+  await assert.rejects(() => createTokenSocialConnection(store, input, actorId, { ...options, fetchImpl: async (url, init) => {
+    if (new URL(url).pathname.endsWith('/me/adaccounts')) return Response.json({ error: { code: 100, message: TOKEN } }, { status: 400 });
+    return options.fetchImpl(url, init);
+  } }), error => {
+    report = socialMetaError(error);
+    assert.equal(error.kind, 'rejected');
+    assert.deepEqual(report.diagnostic, { stage: 'validation', operation: 'list_ad_accounts', httpStatus: 400, code: 100 });
+    assert.match(report.error, /Enumerar cuentas de anuncios.*Configuración del negocio de Meta/);
+    return true;
+  });
+  assert.ok(!JSON.stringify(report).includes(TOKEN));
+  assert.deepEqual(remote.calls.map(call => call.path), ['debug_token', 'me', 'me/permissions']);
+  for (const table of ['social_connections', 'social_credentials']) assert.deepEqual(await store.db.all(`SELECT * FROM ${store.t(table)}`), []);
+}));
+
 test('manual connection reads existing campaign metrics, preserving unknown values and live permissions', () => setup(async ({ create, select, query, remote }) => {
   const connection = await select(await create());
   assert.equal(connection.capabilities.insights, true);
@@ -95,6 +112,7 @@ test('account tasks are required even with ads_read; revoked token disables the 
   remote.valid = false;
   await assert.rejects(query(connection), error => error.kind === 'reconnect_required');
   assert.equal((await getSocialConnection(store, connection.id)).state, 'reconnect_required');
+  assert.match((await getSocialConnection(store, connection.id)).evaluation.restrictions.join(' '), /Operación: Inspeccionar token/);
 }));
 
 test('rate limiting retains provider usage and retry delay without exposing raw error text', () => setup(async ({ create, select, query, remote, store }) => {

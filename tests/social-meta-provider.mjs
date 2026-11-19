@@ -4,6 +4,13 @@ import { META_PERMISSIONS } from '../lib/social/config.mjs';
 const reply = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', ...headers } });
 const invalid = () => reply({ error: { code: 100, message: 'Synthetic invalid request' } }, 400);
 const clone = value => structuredClone(value);
+// Project only named Graph fields, including nested expansions used by connection reads.
+export function projectMetaFields(row, fields) {
+  return Object.fromEntries((fields || '').matchAll(/([a-z_]+)(?:\{([^}]+)\})?/g).flatMap(([_, key, nested]) => {
+    if (!Object.hasOwn(row, key)) return [];
+    return [[key, nested && row[key] && typeof row[key] === 'object' ? projectMetaFields(row[key], nested) : row[key]]];
+  }));
+}
 
 // A stateful Graph-shaped provider: it owns IDs, relationships, uploads and delivery.
 // No spec endpoint, connector import, input echo, or real network access.
@@ -51,6 +58,8 @@ export function createMetaPublishingProvider({ now = Date.now(), appId = '42', u
     const url = new URL(rawUrl), method = options.method || 'GET';
     if (!['graph.facebook.com', 'graph-video.facebook.com', 'rupload.facebook.com'].includes(url.hostname) || url.protocol !== 'https:') throw new Error('Synthetic provider forbids network');
     const path = url.pathname.replace(/^\//, '').replace(/^v26\.0\//, '');
+    const fields = url.searchParams.get('fields');
+    const project = row => projectMetaFields(row, fields);
     const list = items => {
       const start = Number(url.searchParams.get('after') || 0), end = start + state.pageSize;
       const next = new URL(url); next.searchParams.delete('appsecret_proof'); next.searchParams.delete('access_token'); next.searchParams.set('after', String(end));
@@ -78,16 +87,18 @@ export function createMetaPublishingProvider({ now = Date.now(), appId = '42', u
     }
     const safeBody = Object.fromEntries(Object.entries(body).filter(([key]) => !/token|proof|url|welcome|caption|message/i.test(key)));
     if (safeBody.object_story_spec) safeBody.object_story_spec = { page_id: safeBody.object_story_spec.page_id, instagram_user_id: safeBody.object_story_spec.instagram_user_id };
-    requests.push({ method, path, body: clone(safeBody), ...(headers.has('offset') ? { offset: Number(headers.get('offset')) } : {}) });
+    requests.push({ method, path, fields, body: clone(safeBody), ...(headers.has('offset') ? { offset: Number(headers.get('offset')) } : {}) });
     const lost = hookMatches(state.loseResponse, path);
     function finish(data) { if (lost) { state.loseResponse.times--; throw new TypeError('Synthetic response lost after effect'); } return reply(data); }
     if (path === 'debug_token') return reply({ data: { is_valid: true, app_id: appId, user_id: userId, type: 'USER', expires_at: Math.floor(clock() / 1000) + 86400, data_access_expires_at: Math.floor(clock() / 1000) + 86400, scopes: [...state.permissions] } });
     if (path === 'me' && method === 'GET') return reply({ id: userId, name: 'Synthetic administrator' });
     if (path === 'me/permissions') return method === 'DELETE' ? finish({ success: true }) : reply({ data: state.permissions.map(permission => ({ permission, status: 'granted' })) });
-    if (path === 'me/accounts') return reply({ data: state.hidePages ? [] : [{ id: pageId, name: 'Synthetic Page', access_token: state.pageToken, tasks: ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE', 'MANAGE'], business: { id: businessId, name: 'Synthetic business' }, instagram_business_account: { id: instagramId, username: 'synthetic' }, whatsapp_number: state.whatsappNumber }] });
+    const page = { id: pageId, name: 'Synthetic Page', access_token: state.pageToken, tasks: ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE', 'MANAGE'], business: { id: businessId, name: 'Synthetic business' }, instagram_business_account: { id: instagramId, username: 'synthetic' }, whatsapp_number: state.whatsappNumber };
+    if (path === 'me/accounts') return reply({ data: state.hidePages ? [] : [project(page)] });
+    if (path === pageId && method === 'GET') return state.hidePages ? invalid() : reply(project(page));
     const account = { id: adAccountId, name: 'Synthetic ad account', currency: state.currency, timezone_name: state.timeZone, account_status: state.accountStatus, user_tasks: ['ADVERTISE', 'ANALYZE', 'MANAGE', 'CREATE_CONTENT'], business: { id: businessId, name: 'Synthetic business' } };
-    if (path === 'me/adaccounts') return reply({ data: [account] });
-    if (path === adAccountId && method === 'GET') return reply(account);
+    if (path === 'me/adaccounts') return reply({ data: [project(account)] });
+    if (path === adAccountId && method === 'GET') return reply(project(account));
     if (path === 'search') return reply({ data: [] });
     if (path === `${adAccountId}/reachestimate`) return reply({ data: [{ users_lower_bound: 10000, users_upper_bound: 20000, estimate_ready: true }] });
     if (path === `${instagramId}/content_publishing_limit`) return reply({ data: [{ quota_usage: [...objects.values()].filter(object => object.type === 'media').length, config: { quota_total: 100, quota_duration: 86400 } }] });

@@ -7,7 +7,7 @@ const EXPIRES = NOW / 1000 + 3600;
 const TOKEN = 'SYNTHETIC-ACCESS-TOKEN-CANARY';
 const SECRET = 'SYNTHETIC-ACCESS-SECRET-CANARY';
 const PAGE_TOKEN = 'SYNTHETIC-ACCESS-PAGE-CANARY';
-const SCOPES = ['ads_read', 'ads_management', 'pages_read_engagement', 'pages_manage_posts', 'pages_manage_ads', 'read_insights', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights'];
+const SCOPES = ['ads_read', 'ads_management', 'pages_show_list', 'pages_read_engagement', 'pages_manage_posts', 'pages_manage_ads', 'read_insights', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights', 'business_management'];
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 const denied = error => error instanceof MetaApiError && error.kind === 'permission';
 
@@ -24,6 +24,7 @@ function fixture({ authenticationMethod = 'token', readOnly = false, identities 
     if (path === 'me/permissions' && init.method === 'DELETE') return json({ success: true });
     if (path === 'me/accounts') return json({ data: pages ?? [] });
     if (path === 'me/adaccounts') return json({ data: [account] });
+    if (path === '200') return json(pages?.[0] || {});
     if (path === 'act_400') return json(account);
     throw new Error(`Unexpected synthetic request ${path}`);
   };

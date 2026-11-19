@@ -26,13 +26,16 @@ test('applicable rules retain plan order, typed evidence and five-card ceiling w
   assert.deepEqual([...result.recommendations[0].sampleIds].sort(), input.samples.map(sample => sample.campaignId).sort());
   assert.equal(result.recommendations.length <= 5, true);
   for (const recommendation of result.recommendations) {
-    assert.equal(recommendation.analysisVersion, 'social-improvements-v1');
+    assert.equal(recommendation.analysisVersion, 'social-improvements-v2');
     assert.equal(recommendation.evidenceHash, result.recommendations[0].evidenceHash);
     assert.equal(typeof recommendation.successCriterion.metric, 'string');
     assert.equal(recommendation.metricIds.every(id => [...input.measurements, ...input.samples.map(s => s.measurement)].some(m => m.id === id)), true);
     assert.equal(recommendation.sampleIds.every(id => input.samples.some(s => s.campaignId === id)), true);
   }
   assert.deepEqual(input, before);
+  assert.deepEqual(result.recommendations[1].primaryEvidence.periods.map(period => period.window), ['previous_3d', 'recent_3d']);
+  assert.equal(result.recommendations[1].primaryEvidence.previousValue, 1);
+  assert.equal(result.recommendations[1].primaryEvidence.value, 0.8);
 });
 
 test('weak CTR uses strict Q25, exact ratios, known zero and at least five comparable campaigns', () => {
@@ -230,6 +233,18 @@ test('child evaluation blocks before horizon and resolves unknown or incompatibl
   }
 });
 
+test('variant evaluation cannot borrow a market or replace its cited baseline with a later reading', () => {
+  for (const patch of [p => { p.child.spec.marketCountries = ['MX']; }, p => { delete p.parent.spec.marketCountries; delete p.child.spec.marketCountries; }]) {
+    const p = evaluationPair(); patch(p);
+    assert.deepEqual(evaluateSocialRecommendation(p.recommendation, p).reasons, ['incompatible_or_unknown_market']);
+  }
+  const p = evaluationPair(), baseline = p.parent.measurements[0];
+  p.parent.measurements.push({ ...baseline, id: 'another-capture', fetchedAt: '2026-11-03T12:00:00.000Z' });
+  assert.deepEqual(evaluateSocialRecommendation(p.recommendation, p).metricIds, [baseline.id, p.child.measurements[0].id]);
+  p.parent.measurements.shift();
+  assert.deepEqual(evaluateSocialRecommendation(p.recommendation, p).reasons, ['compatible_definition_scope_and_capture_unavailable']);
+});
+
 test('primary results respect the objective, reported zero, organic scope and incomplete newer reads', () => {
   for (const [objective, metric] of [['traffic','linkClicks'], ['whatsapp','conversations'], ['reach','reach'], ['engagement','interactions']]) {
     const input = improvementInput({ objective }), delivery = input.deliveries[0], base = current(input);
@@ -247,6 +262,10 @@ test('primary results respect the objective, reported zero, organic scope and in
   delete reading.values.interactions;
   assert.equal(socialDeliveryPerformance(delivery, organic.spec, [reading], CUT).status, 'unavailable');
   assert.equal(socialDeliveryPerformance(delivery, organic.spec, [reading], CUT).spend, null);
+  organic.spec.objective = 'whatsapp';
+  reading.values.conversations = exactMetric(0);
+  assert.equal(socialDeliveryPerformance(delivery, organic.spec, [reading], CUT).status, 'unsupported');
+  assert.equal(socialDeliveryPerformance(delivery, organic.spec, [reading], CUT).value, null);
 });
 
 test('same-ad evaluation uses exact isolated complete windows; overlap, pause, delay or unbalanced spend are inconclusive', () => {

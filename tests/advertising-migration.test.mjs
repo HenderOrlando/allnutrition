@@ -6,8 +6,10 @@ import { ADVERTISING_INTERNAL_TABLES, migrateAdvertisingIntelligenceV14 } from '
 import { insertRow } from '../lib/business/commands.mjs';
 import { socialConnection } from './social-contract.mjs';
 import { importData } from '../lib/import.mjs';
+import { removeStudioV16 } from './social-studio-contract.mjs';
 
 async function dropAdvertising(store) {
+  await removeStudioV16(store);
   await store.transaction(async tx => {
     await tx.lockWrites();
     for (const table of [...ADVERTISING_INTERNAL_TABLES].reverse()) await tx.db.exec(`DROP TABLE ${tx.t(table)}`);

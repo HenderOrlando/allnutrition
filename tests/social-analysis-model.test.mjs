@@ -9,7 +9,7 @@ const at = days => new Date(Date.parse('2026-10-01T12:00:00.000Z') + days * DAY)
 export const metric = (value, sourceMetric = 'synthetic_link_clicks') => ({ value, unit: 'count', sourceMetric, status: 'reported', precision: 'exact', displayValue: String(value), reason: null });
 export function modelSpec(extra = {}) {
   return { mode: 'paid', objective: 'traffic', integrationMethod: 'api', assetType: 'image', platforms: ['facebook'], placements: ['facebook_feed'],
-    identities: { businessId: '500', pageId: '200', adAccountId: 'act_400' }, audience: { countries: ['CO'], ageMin: 18 },
+    identities: { businessId: '500', pageId: '200', adAccountId: 'act_400' }, marketCountries: ['CO'], audience: { countries: ['CO'], ageMin: 18 },
     budgetMinor: 5000000, currency: 'COP', timeZone: 'America/Bogota', startAt: at(40), endAt: at(47), observationDays: 7, ...extra };
 }
 export function modelSample(index, value, extra = {}) {
@@ -60,6 +60,20 @@ test('cohort excludes mismatched configuration and incomplete or rounded definit
     const samples = cohort(); mutate(samples[0]); samples[0].specHash = hash(samples[0].spec);
     assert.equal(forecast(modelSpec(), samples).metricRanges.linkClicks, undefined, String(mutate));
   }
+});
+test('new cohorts require the same confirmed market set; historical specs and approved forecast reads are unchanged', () => {
+  const spec = modelSpec(), old = modelSample('historical', 125), different = modelSample('other-market', 125, { marketCountries: ['MX'] });
+  delete old.spec.marketCountries;
+  old.specHash = hash(old.spec);
+  const oldHash = old.specHash, oldJSON = JSON.stringify(old);
+  const selection = selectSocialComparableSamples(spec, [old, different, modelSample('same', 150)], { asOf: NOW });
+  assert.deepEqual(selection.samples.map(sample => sample.campaignId), ['synthetic-campaign-same']);
+  assert.deepEqual(selection.exclusions.map(item => item.reason), ['incompatible_specification', 'incompatible_specification']);
+  assert.equal(selectSocialComparableSamples(old.spec, [old], { asOf: NOW }).samples.length, 0);
+  const approved = forecast(modelSpec({ startAt: at(0), endAt: at(7) }), cohort());
+  approved.specHash = oldHash;
+  assert.equal(compareSocialForecast(old.spec, approved, old.deliveries, old.measurements, { asOf: NOW }).find(row => row.metric === 'linkClicks').reported.value, 125);
+  assert.equal(JSON.stringify(old), oldJSON);
 });
 test('organic uses first full horizon capture and keeps networks separate without money extrapolation', () => {
   const extra = { mode: 'organic', objective: 'reach', budgetMinor: 0, platforms: ['facebook'], placements: ['facebook_feed'] }, spec = modelSpec(extra), samples = cohort(extra);

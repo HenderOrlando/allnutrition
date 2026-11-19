@@ -22,13 +22,13 @@ function fileError(file, accept) {
   return '';
 }
 
-export default function AdvertisingAssetUpload({ api, onAsset, onMutation, onInteractionStateChange, accept = DEFAULT_ACCEPT, disabled = false, submitLabel = 'Subir archivo', active = true }) {
+export default function AdvertisingAssetUpload({ api, onBeforeUpload, onAssetReserved, onAsset, onMutation, onInteractionStateChange, accept = DEFAULT_ACCEPT, disabled = false, submitLabel = 'Subir archivo', active = true }) {
   const [file, setFile] = useState(null), [name, setName] = useState(''), [slot, setSlot] = useState(null);
   const [busy, setBusy] = useState(false), [phase, setPhase] = useState(''), [error, setError] = useState('');
   const [asset, setAsset] = useState(null), [readError, setReadError] = useState(''), [revision, setRevision] = useState(0);
   const input = useRef(null), errorRef = useRef(null), mutation = useRef(null), attempt = useRef(null), selection = useRef(null), tracked = useRef(null);
-  const callbacks = useRef({ onAsset, onMutation, onInteractionStateChange });
-  callbacks.current = { onAsset, onMutation, onInteractionStateChange };
+  const callbacks = useRef({ onBeforeUpload, onAssetReserved, onAsset, onMutation, onInteractionStateChange });
+  callbacks.current = { onBeforeUpload, onAssetReserved, onAsset, onMutation, onInteractionStateChange };
   const dirty = Boolean(file || name);
   const assistant = useAssistantForm({
     target: 'asset-metadata', values: { name }, dirty, busy: busy || disabled, enabled: active,
@@ -98,9 +98,14 @@ export default function AdvertisingAssetUpload({ api, onAsset, onMutation, onInt
     const current = attempt.current ??= { reserveId: crypto.randomUUID(), uploadId: crypto.randomUUID(), slot: null };
     try {
       setPhase('Reservando espacio privado para el archivo original y su versión para publicar…');
+      await callbacks.current.onBeforeUpload?.();
+      if (signal.aborted) return;
       const reserved = current.slot ?? await api(ASSETS, { method: 'POST', body: JSON.stringify({ ...payload, requestId: current.reserveId }), signal });
       if (signal.aborted) return;
-      current.slot = reserved; setSlot(reserved); setPhase('Enviando el archivo original; aún no es publicable…');
+      current.slot = reserved; setSlot(reserved);
+      await callbacks.current.onAssetReserved?.(reserved);
+      if (signal.aborted) return;
+      setPhase('Enviando el archivo original; aún no es publicable…');
       const uploaded = await api(`${ASSETS}/${encodeURIComponent(reserved.id)}/content`, { method: 'PUT', body: file, headers: {
         'content-type': file.type, 'x-asset-version': String(reserved.version), 'x-request-id': current.uploadId,
       }, signal });

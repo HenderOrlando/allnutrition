@@ -39,11 +39,14 @@ async function fixture(store, { method = 'api', mode = 'paid', objective = 'traf
     else if (path === 'me/permissions') data = { data: META_PERMISSIONS.map(permission => ({ permission, status: 'granted' })) };
     else if (path === 'me/accounts') data = { data: [{ id: '200', tasks: ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE'], access_token: 'SYNTHETIC-PAGE-TOKEN', business: { id: '500' } }] };
     else if (path === 'me/adaccounts') data = { data: [{ id: 'act_400', currency: 'COP', timezone_name: 'America/Bogota', account_status: 1, user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: '500' } }] };
+    else if (path === '200') data = { id: '200', business: { id: '500' } };
+    else if (path === 'act_400') data = { id: 'act_400', user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: '500' } };
     else if (path === 'act_400/reachestimate') { if (remote.beforeEstimate) await remote.beforeEstimate(); data = { data: [remote.audience] }; }
     else assert.fail(`Unexpected synthetic request ${path}`);
     return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });
   };
   const saved = await saveSocialCampaign(store, { name: 'Pronóstico sintético', connectionId, assetId, mode, objective, platforms: ['facebook'], placements: ['facebook_feed'],
+    marketCountries: ['CO'],
     caption: 'Texto aportado', destinationUrl: mode === 'paid' && objective === 'traffic' ? 'https://example.test/products' : '', audience: { countries: ['CO'], regions: [], cities: [], interests: [], ageMin: 18, ageMax: 65, genders: [] },
     budgetMinor: mode === 'paid' ? 5000000 : 0, startAt: mode === 'paid' ? START : null, endAt: mode === 'paid' ? END : null, observationDays: 7, aiDisclosure: false, requestId: randomUUID() }, actorId, { env, now: NOW });
   const campaign = await get(store, 'social_campaigns', saved.id), connection = await get(store, 'social_connections', connectionId), asset = await get(store, 'social_assets', assetId);

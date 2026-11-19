@@ -17,6 +17,25 @@
 - Humo HTTPS anónimo: inicio, privacidad, salud y callback OAuth **200**; Heka y finalización OAuth sin sesión **401**. Se comprobó CSP y `no-store` del callback sin ejecutar su script. No se probó un panel autenticado, conexión real a Heka/Meta, publicación ni cargo.
 - La primera auditoría integral se inició a las **00:33:55.023 UTC**; inventario y HTTPS aprobaron y la suite aislada quedó en ejecución. El arranque no acredita aún la suite completa.
 
+## Meta Graph v26 · verificación local de conexión y publicación
+
+- Node 24: 98 contratos de OAuth, Graph, acceso, token manual y publicación y 32 de métricas e historial, sin omitidos. Se probó el documento del callback con un proveedor aislado, incluida la llegada a la ficha correcta, sin autorización real ni exposición de secretos.
+- No se comprobó la cuenta afectada ni se publicó o activó contenido en Meta. La aceptación real requiere una instancia autorizada, publicación desactivada, selección de los recursos esperados y revalidación; una capacidad no comprobada no se considera resuelta.
+
+El mensaje `400/100` reportado con **Etapa: validación de la conexión** y sin **Operación** coincide con el formateador del corte v15 (`e5892e9`, que incluye `89aae00`) y el HEAD histórico `e8d8715` del 18 de noviembre de 2026 (UTC−05). Un `.next/server` local anterior, con `BUILD_ID` fechado el 17 de noviembre a las 08:56 UTC−05, contenía el rechazo genérico, pero no la etapa. Ninguna de esas huellas identifica qué binario atendió esa sesión. El corte v15 está documentado arriba; el ensayo v16 de la sección siguiente fue aislado.
+
+El callback local con diagnóstico por operación anuncia `X-Meta-OAuth-Diagnostic: operation-v1` en su GET público sin parámetros. El marcador no inicia el flujo, no expone una revisión de Git y sólo permite comprobar qué contrato sirve el origen autorizado. Véase [procedimiento operativo de Meta](DESPLIEGUE.md#publicidad-habilitación-y-custodia).
+
+Revisión del diagnóstico: Node `24.14.1`, **104 contratos focales aprobados** (OAuth, Graph, acceso, token manual y publicación). El documento real del callback se ejecutó con transporte sintético: operación y números preservados sin texto privado, nonce de CSP, limpieza del query, redirección local y GET sin parámetros que no intenta autenticar. No se desplegó ni se consultó una cuenta real.
+
+## Estudio de publicaciones v16 · verificación aislada
+
+- Node `24.14.1`: el grupo de generación, especificación, campaña, consumidor API, métricas, análisis, mejoras, estudio y audiencia del plan ejecutó **167 pruebas**, sin fallos ni omitidas, con SQLite descartable y transportes sintéticos. Se verificaron rollback y reapertura desde v15, privacidad por actor, dos ajustes por huella, carga sin IA, segmentación por mercado y ausencia de reenvío tras un acuse incierto.
+- `TEST_PG_GROUPS=schema,social npm run test:postgres`: **208 casos sociales y 6 de esquema**; Node informó **217 aprobadas** contando los contenedores de prueba, sin fallos ni omitidas. Base nueva `allnutrition_test`, TLS 1.3 y CA verificada; el permiso de reset solo cubrió esa base.
+- La aplicación compiló con Next `16.4.6`. Los fixtures HTTPS arrancaron con CA de ensayo verificada, bases descartables separadas, puertos locales y sin scheduler ordinario. Los transportes de publicaciones y audiencia no requieren una cuenta, sesión ni credencial de Meta real.
+- En una instancia compilada aparte se ejerció el conector firmado por el worker y los comandos reales: publicación sintética de Instagram con acuse perdido, reconciliación con un solo envío, captura y análisis; borrador de pauta validado y preparado sin activar, y programación solo después de confirmación expresa. No es una comprobación de la cuenta Meta afectada.
+- Playwright «estudio de publicaciones» sobre Next compilado por HTTPS: **10 de 10 aprobados**, cinco en Chromium de escritorio y cinco en emulación móvil, sin fallos, reintentos ni omitidos. Se comprobó la transición del estudio al guardado de oferta y foto propia, la reconciliación de Instagram sin reenviar, el cero medido, la audiencia opcional con y sin IA, la pauta en pausa y su programación tras consentimiento, el ajuste de foto vertical y la preparación de una variante desde la captura exacta sin modificar el original.
+
 ## Heka oficial · verificación local en Chromium
 
 - `node tests/heka-browser.mjs`: tres recorridos aprobados sobre rutas reales del panel en HTTPS local, con SQLite v15 y custodia separada y desechable por caso: escritorio **1440×900**, móvil **390×844** y vinculación a pedido local.

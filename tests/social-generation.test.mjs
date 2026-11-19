@@ -206,7 +206,7 @@ function contextualInput(f, review, changes = {}) {
   const { campaignId, campaignVersion, briefHash, baseAsset } = review;
   return f.input({ campaignId, campaignVersion, briefHash, baseAsset: baseAsset && { id: baseAsset.id, version: baseAsset.version, sha256: baseAsset.sha256 }, ...changes });
 }
-const createDraft = (f, fields) => saveSocialCampaign(f.store, { name: 'Dúo de prueba', mode: 'organic', platforms: ['instagram'], requestId: randomUUID(), ...fields }, f.actorId, f.options);
+const createDraft = (f, fields) => saveSocialCampaign(f.store, { name: 'Dúo de prueba', mode: 'organic', marketCountries: ['CO'], platforms: ['instagram'], requestId: randomUUID(), ...fields }, f.actorId, f.options);
 
 test('el multipart conserva hechos, correspondencia de fotos y dirección distinta para cada objetivo guardado', async t => {
   const f = await fixture(t), { urls, offerRef } = await contextualOffer(f), output = await image();

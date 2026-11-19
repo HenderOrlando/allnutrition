@@ -5,7 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { openStore } from '../lib/db/index.mjs';
 import { hash, insertRow, stamp, audit } from '../lib/business/commands.mjs';
 import { getSocialConnection } from '../lib/business/social.mjs';
-import { startSocialOAuth, consumeSocialOAuthState, completeSocialOAuth, socialOAuthDiagnostic, createBrowserSocialConnection, getSocialConnections, socialConnectionAction, previewSocialConnectionDeletion, deauthorizeSocialMeta, verifyMetaSignedRequest } from '../lib/business/social-connections.mjs';
+import { startSocialOAuth, consumeSocialOAuthState, completeSocialOAuth, socialOAuthDiagnostic, socialMetaError, createBrowserSocialConnection, getSocialConnections, socialConnectionAction, previewSocialConnectionDeletion, deauthorizeSocialMeta, verifyMetaSignedRequest } from '../lib/business/social-connections.mjs';
 import { loadCredentials, saveCredentials } from '../lib/social/credentials.mjs';
 import { META_PERMISSIONS, loadSocialRuntime } from '../lib/social/config.mjs';
 import { queueJobTx } from '../lib/business/job-leases.mjs';
@@ -14,6 +14,7 @@ import { createBusinessBasics, businessOrderInput, fixtureActor } from './busine
 import { recordExpense } from '../lib/business/expenses.mjs';
 import { configureSocialTestRuntime } from './social-runtime-fixture.mjs';
 import { GET as socialOAuthCallback } from '../app/api/admin/social/oauth/callback/route.js';
+import { projectMetaFields } from './social-meta-provider.mjs';
 
 async function envFor(store) {
   const env = { ...socialTestEnv(), APP_URL: 'https://admin.example.test', META_APP_ID: '901', META_APP_SECRET: 'SYNTHETIC-APP-SECRET', META_LOGIN_CONFIG_ID: '902' };
@@ -29,21 +30,44 @@ async function withStore(fn) {
   } finally { await store.close(); }
 }
 function provider(env) {
-  const remote = { userId: '101', businessId: '301', pageId: '201', instagramId: '401', accountId: 'act_501', valid: true, exchanges: 0, calls: [], status: 'ACTIVE', losePauseResponse: false };
+  const remote = { userId: '101', meUserId: null, appId: env.META_APP_ID, businessId: '301', pageId: '201', instagramId: '401', accountId: 'act_501', valid: true, exchanges: 0, calls: [], status: 'ACTIVE', losePauseResponse: false, scopes: [...META_PERMISSIONS], reject: new Map() };
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(input), path = url.pathname.replace(/^\/v26\.0\//, ''), body = new URLSearchParams(init.body);
     assert.equal(url.hostname, 'graph.facebook.com');
-    remote.calls.push({ path, method: init.method || 'GET' });
+    const fields = url.searchParams.get('fields'), after = url.searchParams.get('after');
+    remote.calls.push({ path, fields, after, method: init.method || 'GET' });
+    const rejection = remote.reject.get(`${path}:${fields || ''}:${after || ''}`);
+    if (rejection) return Response.json({ error: { code: 100, error_subcode: 1234, message: rejection } }, { status: 400 });
     if (path === 'oauth/access_token') {
       remote.exchanges++;
       if (url.searchParams.has('code')) assert.equal(url.searchParams.get('redirect_uri'), `${env.APP_URL}/api/admin/social/oauth/callback`);
       return Response.json({ access_token: 'TOKEN-CANARY-USER', expires_in: 5184000 });
     }
-    if (path === 'debug_token') return Response.json({ data: { app_id: env.META_APP_ID, is_valid: remote.valid, type: 'USER', user_id: remote.userId, expires_at: Math.floor(Date.now() / 1000) + 5000000, data_access_expires_at: Math.floor(Date.now() / 1000) + 5000000, scopes: META_PERMISSIONS } });
-    if (path === 'me') return Response.json({ id: remote.userId, name: 'Cuenta de prueba' });
-    if (path === 'me/permissions') return Response.json({ data: META_PERMISSIONS.map(permission => ({ permission, status: 'granted' })) });
-    if (path === 'me/accounts') return Response.json({ data: [{ id: remote.pageId, name: 'Página verificada', access_token: 'TOKEN-CANARY-PAGE', tasks: ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE'], business: { id: remote.businessId, name: 'Negocio verificado' }, instagram_business_account: { id: remote.instagramId }, whatsapp_number: '+573001234567' }] });
-    if (path === 'me/adaccounts') return Response.json({ data: [{ id: remote.accountId, name: 'Cuenta publicitaria verificada', currency: 'COP', timezone_name: 'America/Bogota', account_status: 1, user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: remote.businessId, name: 'Negocio verificado' } }] });
+    if (path === 'debug_token') return Response.json({ data: { app_id: remote.appId, is_valid: remote.valid, type: 'USER', user_id: remote.userId, expires_at: Math.floor(Date.now() / 1000) + 5000000, data_access_expires_at: Math.floor(Date.now() / 1000) + 5000000, scopes: remote.scopes } });
+    if (path === 'me') return Response.json(projectMetaFields({ id: remote.meUserId || remote.userId, name: 'Cuenta de prueba' }, fields));
+    if (path === 'me/permissions') return Response.json({ data: remote.scopes.map(permission => ({ permission, status: 'granted' })) });
+    const page = { id: remote.pageId, name: 'Página verificada', access_token: 'TOKEN-CANARY-PAGE', tasks: ['CREATE_CONTENT', 'ANALYZE', 'ADVERTISE'], business: { id: remote.businessId, name: 'Negocio verificado' }, instagram_business_account: { id: remote.instagramId }, whatsapp_number: '+573001234567' };
+    const otherPage = { id: '202', name: page.name, tasks: ['ANALYZE'], business: { id: '302', name: 'Otro negocio' } };
+    const account = { id: remote.accountId, name: 'Cuenta publicitaria verificada', currency: 'COP', timezone_name: 'America/Bogota', account_status: 1, user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: remote.businessId, name: 'Negocio verificado' } };
+    const otherAccount = { ...account, id: 'act_502', business: otherPage.business };
+    const pageFields = ['id,name,tasks,access_token', 'id,business{id,name}', 'id,instagram_business_account{id,username}'];
+    const accountFields = ['id,name,currency,timezone_name,account_status,user_tasks', 'id,business{id,name}'];
+    if (path === 'me/accounts' || path === 'me/adaccounts') {
+      const pages = path === 'me/accounts';
+      assert.ok((pages ? pageFields : accountFields).includes(fields), fields);
+      const rows = pages ? [page, otherPage] : [account, otherAccount];
+      if (fields.includes('business')) rows.reverse();
+      if (after === 'next') return Response.json({ data: [projectMetaFields(rows[1], fields)] });
+      const next = new URL(url);
+      next.searchParams.delete('appsecret_proof');
+      next.searchParams.set('access_token', 'TOKEN-CANARY-FOREIGN'); next.searchParams.set('after', 'next');
+      return Response.json({ data: [projectMetaFields(rows[0], fields)], paging: { next: next.href } });
+    }
+    if (path === remote.pageId) {
+      assert.ok([...pageFields, 'id,whatsapp_number'].includes(fields), fields);
+      return Response.json(projectMetaFields(page, fields));
+    }
+    if (path === remote.accountId) return Response.json(projectMetaFields(account, fields));
     if (path === '701') {
       if (init.method === 'POST') {
         assert.equal(body.get('status'), 'PAUSED'); remote.status = 'PAUSED';
@@ -62,12 +86,20 @@ async function connect(store, env, fixture, session = admin(), connectionId = nu
   return completeSocialOAuth(store, { code: 'SYNTHETIC-CODE', state }, session, { env, fetchImpl: fixture.fetchImpl });
 }
 
-for (const [stage, label, preceding, fields] of [
-  ['code_exchange', 'canje del código', [], { code: 100, subcode: 36009 }],
-  ['long_lived_exchange', 'canje de larga duración', ['oauth/access_token'], { code: 100, subcode: 1234 }],
-  ['validation', 'validación de la conexión', ['oauth/access_token', 'oauth/access_token', 'debug_token', 'me'], {}],
-]) {
-  test(`OAuth muestra sólo la etapa y números seguros ante un rechazo de Graph: ${stage}`, () => withStore(async store => {
+const stages = [
+  ['code_exchange', 'canje del código', 'oauth/access_token', null, { code: 100, subcode: 36009 }],
+  ['long_lived_exchange', 'canje de larga duración', 'oauth/access_token', null, { code: 100, subcode: 1234 }],
+  ['validation', 'validación de la conexión', 'debug_token', ['inspect_token', 'Inspeccionar token'], { code: 100, subcode: 1234 }],
+  ['validation', 'validación de la conexión', 'me', ['identify_user', 'Identificar usuario'], { code: 100 }],
+  ['validation', 'validación de la conexión', 'me/permissions', ['read_permissions', 'Leer permisos'], {}],
+  ['validation', 'validación de la conexión', 'me/accounts', ['list_pages', 'Enumerar páginas'], { code: 100 }, 'id,name,tasks,access_token'],
+  ['validation', 'validación de la conexión', 'me/adaccounts', ['list_ad_accounts', 'Enumerar cuentas de anuncios'], { code: 100 }, 'id,name,currency,timezone_name,account_status,user_tasks'],
+  ['validation', 'validación de la conexión', 'me/accounts', ['verify_page_business', 'Verificar empresa de la página'], { code: 100 }, 'id,business{id,name}'],
+  ['validation', 'validación de la conexión', 'me/adaccounts', ['verify_ad_account_business', 'Verificar empresa de la cuenta publicitaria'], { code: 100 }, 'id,business{id,name}'],
+  ['validation', 'validación de la conexión', 'me/accounts', ['verify_instagram', 'Verificar Instagram'], { code: 100 }, 'id,instagram_business_account{id,username}']
+];
+for (const [stage, label, failingPath, operation, fields, projection] of stages) {
+  test(`OAuth muestra etapa, operación y números seguros ante rechazo de ${operation?.[0] || stage}`, () => withStore(async store => {
     const env = await envFor(store), session = admin(), fixture = provider(env);
     const started = await startSocialOAuth(store, {}, session, { env });
     const state = new URL(started.authorizationUrl).searchParams.get('state');
@@ -76,27 +108,28 @@ for (const [stage, label, preceding, fields] of [
     const calls = [];
     let response;
     await assert.rejects(() => completeSocialOAuth(store, { state, code }, session, { env, fetchImpl: async (url, init) => {
-      calls.push(new URL(url).pathname.slice('/v26.0/'.length));
-      if (calls.length <= preceding.length) return fixture.fetchImpl(url, init);
+      const target = new URL(url), path = target.pathname.slice('/v26.0/'.length);
+      calls.push(path);
+      if (path !== failingPath || projection && target.searchParams.get('fields') !== projection || stage === 'long_lived_exchange' && calls.length === 1) return fixture.fetchImpl(url, init);
       return Response.json({ error: { code: fields.code ?? '100', error_subcode: fields.subcode ?? Number.MAX_SAFE_INTEGER + 1,
         message: canary, error_user_msg: canary, fbtrace_id: canary } }, { status: 400 });
     } }), error => {
       assert.equal(error.status, 409);
       assert.equal(error.message, 'Meta rechazó la solicitud. Revisa la configuración de la operación.');
-      response = { error: error.message, diagnostic: socialOAuthDiagnostic(error) };
-      assert.deepEqual(response.diagnostic, { stage, httpStatus: 400, ...fields });
+      response = socialMetaError(error);
+      assert.deepEqual(response.diagnostic, { stage, ...(operation ? { operation: operation[0] } : {}), httpStatus: 400, ...fields });
       return true;
     });
-    assert.deepEqual(calls, [...preceding, stage === 'validation' ? 'me/permissions' : 'oauth/access_token']);
+    assert.equal(calls.at(-1), failingPath);
     assert.deepEqual(await store.db.all(`SELECT id FROM ${store.t('social_connections')}`), []);
     assert.deepEqual(await store.db.all(`SELECT connection_id FROM ${store.t('social_credentials')}`), []);
-    assert.equal(JSON.stringify(response).includes(canary), false);
+    for (const secret of [code, state, env.META_APP_SECRET, 'TOKEN-CANARY-USER', 'https://fixture.invalid', 'PRIVATE-GRAPH-BODY']) assert.equal(JSON.stringify(response).includes(secret), false);
 
     const script = (await socialOAuthCallback().text()).match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
     const status = {};
     await runInNewContext(script, {
       URLSearchParams, window: { location: { search: `?code=${code}&state=${state}` } },
-      history: { replaceState() {} }, document: { getElementById: () => status },
+      history: { replaceState: (_, __, path) => assert.equal(path, '/api/admin/social/oauth/callback') }, document: { getElementById: () => status },
       fetch: async (path, options) => {
         assert.equal(path, '/api/admin/social/oauth/complete');
         assert.equal(options.credentials, 'same-origin');
@@ -105,11 +138,128 @@ for (const [stage, label, preceding, fields] of [
           : Response.json({ csrf: session.csrf });
       },
     });
-    const details = `Etapa: ${label} · HTTP de Meta: 400` +
-      (fields.code ? ` · Código de Meta: ${fields.code} · Subcódigo de Meta: ${fields.subcode}` : '');
-    assert.equal(status.textContent, `${response.error} ${details}.`);
+    assert.equal(status.textContent, response.error);
+    assert.match(status.textContent, new RegExp(`Etapa: ${label}.*HTTP de Meta: 400`));
+    if (operation) assert.ok(status.textContent.includes(`Operación: ${operation[1]}`));
+    if (!operation || operation[0] === 'inspect_token') assert.match(status.textContent, /Token de acceso de usuario/);
+    for (const [key, value] of Object.entries(fields)) assert.ok(status.textContent.includes(`${key === 'code' ? 'Código' : 'Subcódigo'} de Meta: ${value}`));
+    assert.ok(!status.textContent.includes(canary));
   }));
 }
+
+test('el callback renderizado abre únicamente la ficha local del alta y limpia los datos de retorno', async () => {
+  const response = socialOAuthCallback();
+  assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  assert.equal(response.headers.get('X-Meta-OAuth-Diagnostic'), 'operation-v1');
+  const nonce = response.headers.get('Content-Security-Policy').match(/'nonce-([^']+)'/)[1];
+  const html = await response.text(), code = 'SYNTHETIC-RETURN-CODE', state = 'SYNTHETIC-RETURN-STATE';
+  assert.ok(!html.includes(code) && !html.includes(state));
+  const [, htmlNonce, script] = html.match(/<script nonce="([^"]+)">([\s\S]*?)<\/script>/);
+  assert.equal(htmlNonce, nonce);
+  const valid = `/admin?section=business&tab=social&record=${randomUUID()}`;
+  for (const redirectTo of [valid, `//example.invalid/?code=${code}`]) {
+    let navigated, cleared = false;
+    const status = {};
+    await runInNewContext(script, {
+      URLSearchParams, window: { location: { search: `?code=${code}&state=${state}`, replace: url => { navigated = url; } } },
+      history: { replaceState: (_, __, path) => { cleared = path === '/api/admin/social/oauth/callback'; } },
+      document: { getElementById: () => status },
+      fetch: async (path, options) => {
+        assert.ok(cleared);
+        assert.equal(path, '/api/admin/social/oauth/complete');
+        if (options.method !== 'POST') return Response.json({ csrf: 'csrf' });
+        assert.deepEqual(JSON.parse(options.body), { code, state });
+        return Response.json({ redirectTo });
+      },
+    });
+    assert.equal(navigated, redirectTo === valid ? valid : undefined);
+    assert.ok(!status.textContent?.includes(code));
+  }
+});
+
+test('el GET anónimo sin query sólo identifica el contrato y no intenta completar OAuth', async () => {
+  const response = socialOAuthCallback();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('X-Meta-OAuth-Diagnostic'), 'operation-v1');
+  const script = (await response.text()).match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], status = {};
+  await runInNewContext(script, {
+    URLSearchParams, window: { location: { search: '' } },
+    history: { replaceState: (_, __, path) => assert.equal(path, '/api/admin/social/oauth/callback') },
+    document: { getElementById: () => status },
+    fetch: () => assert.fail('No se debe consultar la sesión sin parámetros de retorno')
+  });
+  assert.match(status.textContent, /Conectar con Facebook desde Negocio → Cuentas conectadas/);
+});
+
+test('OAuth sólo rebaja rechazos opcionales reconocibles: WhatsApp no bloquea Facebook ni otro anuncio', () => withStore(async store => {
+  const env = await envFor(store), fixture = provider(env), { connection, redirectTo } = await connect(store, env, fixture);
+  assert.equal(redirectTo, `/admin?section=business&tab=social&record=${connection.id}`);
+  assert.deepEqual(connection.resources.pages.map(page => [page.id, page.businessId]), [['201', '301'], ['202', '302']]);
+  assert.deepEqual(connection.resources.adAccounts.map(account => [account.id, account.businessId]), [['act_501', '301'], ['act_502', '302']]);
+  assert.equal(fixture.remote.calls.some(call => call.fields?.includes('whatsapp_number')), false);
+  fixture.remote.reject.set('201:id,whatsapp_number:', '(#100) The field (whatsapp_number) is not accessible for this page. PRIVATE-GRAPH-BODY');
+  const action = (type, version, identities) => socialConnectionAction(store, connection.id, type, { version, requestId: randomUUID(), identities }, fixtureActor, { env, fetchImpl: fixture.fetchImpl });
+  const selected = await action('select-assets', 1, { businessId: '301', pageId: '201', instagramId: '401', adAccountId: 'act_501' });
+  assert.deepEqual(selected.capabilities, { facebookPublish: true, instagramPublish: true, adsPublish: true, insights: true, whatsappAds: false });
+  assert.match(selected.evaluation.restrictions.join(' '), /Verificar WhatsApp.*HTTP de Meta: 400.*Código de Meta: 100/);
+  assert.ok(!JSON.stringify(selected).includes('PRIVATE-GRAPH-BODY'));
+  for (const message of ['(#100) Invalid parameter', 'Invalid appsecret_proof for whatsapp_number']) {
+    fixture.remote.reject.set('201:id,whatsapp_number:', message);
+    await assert.rejects(action('validate', selected.version), error => {
+      assert.deepEqual(socialOAuthDiagnostic(error), { stage: 'validation', operation: 'verify_whatsapp', httpStatus: 400, code: 100, subcode: 1234 });
+      return true;
+    });
+    assert.equal((await getSocialConnection(store, connection.id)).version, selected.version);
+  }
+}));
+
+test('si otra página rechaza el enriquecimiento conjunto, verifica sólo los IDs fijados y sus dueños', () => withStore(async store => {
+  const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture);
+  const selected = await socialConnectionAction(store, connection.id, 'select-assets', { version: 1, requestId: randomUUID(), identities: { businessId: '301', pageId: '201', instagramId: '401', adAccountId: 'act_501' } }, fixtureActor, { env, fetchImpl: fixture.fetchImpl });
+  fixture.remote.reject.set('me/accounts:id,business{id,name}:next', '(#100) The field (business) requires business_management on another page.');
+  fixture.remote.reject.set('me/accounts:id,instagram_business_account{id,username}:next', '(#100) The field (instagram_business_account) is not accessible on another page.');
+  fixture.remote.calls.length = 0;
+  const restored = await connect(store, env, fixture, admin(), connection.id);
+  assert.deepEqual(restored.connection.identities, selected.identities);
+  assert.deepEqual(restored.connection.capabilities, selected.capabilities);
+  assert.deepEqual(fixture.remote.calls.filter(call => /^\d+$/.test(call.path)).map(call => [call.path, call.fields]), [
+    ['201', 'id,business{id,name}'], ['201', 'id,instagram_business_account{id,username}'], ['201', 'id,whatsapp_number']
+  ]);
+  fixture.remote.reject.set('201:id,business{id,name}:', '(#100) The field (business) requires business_management.');
+  const existingCredential = await store.db.get(`SELECT * FROM ${store.t('social_credentials')} WHERE connection_id=?`, [connection.id]);
+  await assert.rejects(connect(store, env, fixture, admin(), connection.id), error => {
+    const { error: message, diagnostic } = socialMetaError(error);
+    assert.deepEqual(diagnostic, { stage: 'validation', operation: 'verify_page_business', httpStatus: 400, code: 100, subcode: 1234 });
+    assert.match(message, /Verificar empresa de la página.*administrador.*business_management.*config_id/);
+    return true;
+  });
+  assert.deepEqual(await store.db.get(`SELECT * FROM ${store.t('social_credentials')} WHERE connection_id=?`, [connection.id]), existingCredential);
+  assert.deepEqual((await getSocialConnection(store, connection.id)).identities, selected.identities);
+}));
+
+test('permisos parciales conservan la lectura, sin certificar empresa ni escritura por OAuth', () => withStore(async store => {
+  const env = await envFor(store), fixture = provider(env);
+  fixture.remote.scopes = ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts', 'read_insights'];
+  const { connection } = await connect(store, env, fixture);
+  const selected = await socialConnectionAction(store, connection.id, 'select-assets', { version: 1, requestId: randomUUID(), identities: { pageId: '201' } }, fixtureActor, { env, fetchImpl: fixture.fetchImpl });
+  assert.deepEqual(selected.capabilities, { facebookPublish: false, instagramPublish: false, adsPublish: false, insights: true, whatsappAds: false });
+  assert.ok(selected.evaluation.restrictions.some(message => /Verificar empresa de la página.*business_management.*config_id/.test(message)));
+  assert.ok(!fixture.remote.calls.some(call => call.fields?.includes('business') || call.path === 'me/adaccounts'));
+}));
+
+test('el callback no guarda credenciales si el token es de otra app o /me devuelve otro usuario', async () => {
+  for (const [patch, operation] of [[{ appId: '999' }, 'inspect_token'], [{ meUserId: '999' }, 'identify_user']]) await withStore(async store => {
+    const env = await envFor(store), fixture = provider(env);
+    Object.assign(fixture.remote, patch);
+    await assert.rejects(connect(store, env, fixture), error => {
+      assert.deepEqual(socialOAuthDiagnostic(error), { stage: 'validation', operation });
+      return true;
+    });
+    assert.deepEqual(await store.db.all(`SELECT id FROM ${store.t('social_connections')}`), []);
+    assert.deepEqual(await store.db.all(`SELECT connection_id FROM ${store.t('social_credentials')}`), []);
+  });
+});
 function signed(userId, secret, issuedAt = Math.floor(Date.now() / 1000)) {
   const payload = Buffer.from(JSON.stringify({ algorithm: 'HMAC-SHA256', user_id: userId, issued_at: issuedAt })).toString('base64url');
   return `${createHmac('sha256', secret).update(payload).digest('base64url')}.${payload}`;

@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { hash, insertRow } from '../lib/business/commands.mjs';
-import { analyzeSocialCampaign, prepareSocialAnalysisRequest, getSocialAnalysis, readSocialAnalysis, buildSocialHistoricalForecast, readSocialComparableSamplesTx } from '../lib/business/social-analysis.mjs';
+import { analyzeSocialCampaign, prepareSocialAnalysisRequest, getSocialAnalysis, readSocialAnalysis, readSocialRecommendationEvidence, buildSocialHistoricalForecast, readSocialComparableSamplesTx } from '../lib/business/social-analysis.mjs';
 import { processSocialAnalysisTurn } from '../lib/business/social-analysis-jobs.mjs';
 import { queueSocialAnalysisTx } from '../lib/business/social-analysis-queue.mjs';
 import { claimJob, finishJob } from '../lib/business/job-leases.mjs';
 import { socialCampaignAction, socialRecommendationAction, saveSocialCampaign } from '../lib/business/social.mjs';
 import { saveSocialLink, getSocialBusinessResult } from '../lib/business/social-links.mjs';
 import { getSocialLearnings } from '../lib/business/social-learnings.mjs';
+import { getSocialResults } from '../lib/business/social-metrics.mjs';
 import { createShipment, recordShipmentEvent } from '../lib/business/shipments.mjs';
 import { recordCollection } from '../lib/business/collections.mjs';
 import { recordExpense } from '../lib/business/expenses.mjs';
@@ -58,6 +59,32 @@ const cases = [
     assert.ok(history.learnings.length);
     assert.equal(await jobRow(store, f.campaignId), null);
     await assert.rejects(() => socialRecommendationAction(store, rec.id, 'duplicate-from-recommendation', { requestId: id(), version: rec.version, evidenceHash: rec.evidenceHash }, f.actorId, { now: CUT }), { status: 409 });
+  }],
+  ['exact evidence opens a historic capture independent of results filters and rejects unrelated or post-cut captures', async store => {
+    const f = await createImprovementStoreFixture(store), rec = await recommendation(f);
+    const params = { campaignId: f.campaignId, evidenceHash: rec.evidenceHash, captureId: f.measurement.id };
+    assert.ok(rec.metricIds.includes(params.captureId));
+    assert.equal(rec.primaryEvidence.periods[0].captureId, params.captureId);
+    const filtered = await getSocialResults(store, { campaignId: f.campaignId, from: '2027-01-01', asOf: CUT });
+    assert.deepEqual(filtered.measurements, []);
+    const capture = await readSocialRecommendationEvidence(store, rec.id, params, f.actorId);
+    assert.equal(capture.asOf, CUT);
+    assert.equal(capture.delivery.id, f.deliveryId);
+    assert.equal(capture.measurement.values.linkClicks.value, f.measurement.values.linkClicks.value);
+    const later = await f.addMeasurement({ fetchedAt: '2026-11-02T12:01:00.000Z', now: CUT });
+    const foreign = await createImprovementStoreFixture(store, { history: false });
+    const other = await f.addMeasurement({ fetchedAt: '2026-11-02T11:59:58.000Z', now: CUT });
+    for (const invalid of [{ ...params, campaignId: foreign.campaignId }, { ...params, evidenceHash: 'f'.repeat(64) }, { ...params, captureId: other.id }]) {
+      await assert.rejects(readSocialRecommendationEvidence(store, rec.id, invalid, f.actorId), { status: 404 });
+    }
+    await assert.rejects(readSocialRecommendationEvidence(store, rec.id, params, id()), { status: 403 });
+    await patchData(store, 'social_recommendations', rec.id, { metricIds: [...rec.metricIds, foreign.measurement.id, later.id] });
+    for (const captureId of [foreign.measurement.id, later.id]) {
+      await assert.rejects(readSocialRecommendationEvidence(store, rec.id, { ...params, captureId }, f.actorId), { status: 404 });
+    }
+    await patchData(store, 'social_campaigns', f.campaignId, { analysis: null });
+    assert.deepEqual(await readSocialRecommendationEvidence(store, rec.id, params, f.actorId), capture);
+    assert.equal(await jobRow(store, f.campaignId), null);
   }],
   ['identity is deterministic per coherent evidence and cutoff; replay does not duplicate evaluation or affect commerce', async store => {
     const f = await createImprovementStoreFixture(store), firstRequest = await prepare(f), before = await commercialFingerprint(store);

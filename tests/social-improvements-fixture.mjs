@@ -23,6 +23,7 @@ export async function patchData(store, table, id, changes) {
 export function improvementSpec(extra = {}) {
   return { mode: 'paid', objective: 'traffic', integrationMethod: 'api', assetType: 'image', assetId: 'fixture-asset', derivativeSha256: 'a'.repeat(64),
     platforms: ['facebook'], placements: ['facebook_feed'], identities: { userId: '100', businessId: '500', pageId: '200', adAccountId: 'act_400' },
+    marketCountries: ['CO'],
     audience: { countries: ['CO'], regions: [], cities: [], interests: [], ageMin: 18, ageMax: 65, genders: [] },
     caption: 'Texto original aportado por el administrador', headline: '', destinationUrl: 'https://example.test/products',
     budgetMinor: 5000000, currency: 'COP', timeZone: 'America/Bogota', startAt: START, endAt: END, publishAt: null, observationDays: 7, aiDisclosure: false, ...extra };
@@ -110,7 +111,7 @@ export async function createImprovementStoreFixture(store, { mode = 'paid', obje
   await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: 'api', state: 'connected', ...editable({ identities, currency: 'COP', timeZone: 'America/Bogota', sessionEpoch: 0, capabilities: { facebookPublish: true, adsPublish: true, insights: true } }) });
   await insertRow(store, 'social_assets', { id: assetId, state: 'ready', sha256: 'a'.repeat(64), bytes: 100, ...editable({ name: 'Pieza sintética', kind: 'image', derivativeSha256: 'a'.repeat(64) }) });
   const config = improvementSpec({ mode, objective, assetId, connectionId, ...(mode === 'organic' ? { budgetMinor: 0, startAt: null, endAt: null, publishAt: START } : {}) });
-  const saved = await saveSocialCampaign(store, { ...Object.fromEntries(['mode', 'objective', 'platforms', 'placements', 'caption', 'headline', 'destinationUrl', 'audience', 'budgetMinor', 'startAt', 'endAt', 'publishAt', 'observationDays', 'aiDisclosure'].map(key => [key, config[key]])), name: 'Campaña de mejoras sintética', connectionId, assetId, requestId: randomUUID() }, actorId, { now: '2026-10-25T05:00:00.000Z' });
+  const saved = await saveSocialCampaign(store, { ...Object.fromEntries(['mode', 'objective', 'platforms', 'placements', 'caption', 'headline', 'destinationUrl', 'marketCountries', 'audience', 'budgetMinor', 'startAt', 'endAt', 'publishAt', 'observationDays', 'aiDisclosure'].map(key => [key, config[key]])), name: 'Campaña de mejoras sintética', connectionId, assetId, requestId: randomUUID() }, actorId, { now: '2026-10-25T05:00:00.000Z' });
   const campaign = await row(store, 'social_campaigns', saved.id);
   const { spec, specHash } = buildSocialSpec(campaign, { connection: await row(store, 'social_connections', connectionId), asset: await row(store, 'social_assets', assetId), now: '2026-10-25T05:00:00.000Z' });
   const candidates = improvementCandidates(spec);

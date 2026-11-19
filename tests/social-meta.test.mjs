@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { createMetaClient, createMetaApiConnector, MetaApiError, metaBudgetUnits } from '../lib/social/meta.mjs';
+import { createMetaClient, createMetaApiConnector, metaValidationDiagnostic, MetaApiError, metaBudgetUnits } from '../lib/social/meta.mjs';
+import { projectMetaFields } from './social-meta-provider.mjs';
 
 const TOKEN = 'SYNTHETIC-USER-TOKEN-CANARY';
 const SECRET = 'SYNTHETIC-APP-SECRET-CANARY';
 const PAGE_TOKEN = 'SYNTHETIC-PAGE-TOKEN-CANARY';
 const NOW = Date.parse('2026-11-02T12:00:00Z');
 const EXPIRY = Math.floor(NOW / 1000) + 3600;
-const PERMISSIONS = ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts', 'pages_manage_engagement', 'read_insights', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights', 'ads_read', 'ads_management', 'pages_manage_ads'];
+const PERMISSIONS = ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts', 'pages_manage_engagement', 'read_insights', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights', 'ads_read', 'ads_management', 'pages_manage_ads', 'business_management'];
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 const client = fetchImpl => createMetaClient({ accessToken: TOKEN, appSecret: SECRET, fetchImpl });
 const isError = (kind, extra = {}) => error => {
@@ -30,6 +31,8 @@ function provider(options = {}) {
   const adAccounts = options.adAccounts ?? [{ id: 'act_400', name: 'Anuncios de prueba', currency: 'COP', timezone_name: 'America/Bogota', account_status: 1, user_tasks: ['ADVERTISE', 'ANALYZE'], business: { id: '500', name: 'Negocio de prueba' } }];
   const fetchImpl = async (href, init) => {
     const url = new URL(href), path = url.pathname.replace('/v26.0/', '');
+    const fields = url.searchParams.get('fields');
+    const project = row => projectMetaFields(row, fields);
     calls.push({ url, init });
     assert.equal(url.hostname, 'graph.facebook.com');
     assert.equal(init.redirect, 'manual');
@@ -39,10 +42,20 @@ function provider(options = {}) {
     if (path === 'me/permissions' && init.method === 'DELETE') return json({ success: true });
     if (path === 'me/accounts') {
       if (options.pagesDenied) return json({ error: { code: 200, message: `${TOKEN} ${SECRET}` } }, 403);
-      if (url.searchParams.has('after')) return json({ data: pages.slice(1) });
-      return json({ data: pages.slice(0, 1), ...(pages.length > 1 ? { paging: { next: `https://graph.facebook.com/v26.0/me/accounts?after=next&access_token=${PAGE_TOKEN}` } } : {}) });
+      assert.ok(['id,name,tasks,access_token', 'id,business{id,name}', 'id,instagram_business_account{id,username}'].includes(fields), fields);
+      const rows = fields.includes('business') ? [...pages].reverse() : pages;
+      if (url.searchParams.has('after')) return json({ data: rows.slice(1).map(project) });
+      const next = new URL(url);
+      next.searchParams.delete('appsecret_proof');
+      next.searchParams.set('access_token', PAGE_TOKEN); next.searchParams.set('after', 'next');
+      return json({ data: rows.slice(0, 1).map(project), ...(rows.length > 1 ? { paging: { next: next.href } } : {}) });
     }
-    if (path === 'me/adaccounts') return json({ data: adAccounts });
+    if (path === 'me/adaccounts') {
+      assert.ok(['id,name,currency,timezone_name,account_status,user_tasks', 'id,business{id,name}', 'id,currency,timezone_name,user_tasks'].includes(fields), fields);
+      return json({ data: adAccounts.map(project) });
+    }
+    const resource = [...pages, ...adAccounts].find(row => row.id === path);
+    if (resource) return json(project(resource));
     if (path === 'act_400/reachestimate') return json({ data: [options.estimate ?? { users_lower_bound: 1000, users_upper_bound: 2500, estimate_ready: true }] });
     if (path === 'search') {
       if (url.searchParams.get('type') === 'adinterest') return json({ data: [{ id: '900', name: 'Fitness', path: ['Intereses', 'Deporte'] }, { id: 'untrusted', name: 'No válido' }] });
@@ -188,10 +201,26 @@ test('Meta debug validates app, token type, user, actual expiration and data-acc
   assert.equal(result.dataAccessExpiresAt, new Date((EXPIRY + 3600) * 1000).toISOString());
   const authorization = good.calls[0].init.headers.Authorization;
   assert.equal(authorization, `Bearer 42|${SECRET}`);
+  assert.equal(good.calls[0].url.pathname, '/v26.0/debug_token');
+  assert.equal(good.calls[0].url.searchParams.get('input_token'), TOKEN);
+  assert.equal(good.calls[0].url.searchParams.has('access_token'), false);
+  assert.equal(good.calls[0].url.searchParams.get('appsecret_proof'), createHmac('sha256', SECRET).update(`42|${SECRET}`).digest('hex'));
   for (const debug of [{ is_valid: false }, { app_id: 'wrong-app' }, { type: 'PAGE' }, { user_id: '' }, { expires_at: Math.floor(NOW / 1000) }, { data_access_expires_at: Math.floor(NOW / 1000) - 1 }]) {
     await assert.rejects(() => client(provider({ debug }).fetchImpl).debugToken({ appId: '42', now: NOW }), isError('reconnect_required'));
   }
   await assert.rejects(() => client(provider().fetchImpl).debugToken({ appId: '42', expectedUserId: '101', now: NOW }), isError('account_mismatch'));
+});
+
+test('Meta debug preserves numeric evidence from documented nested errors without retaining raw data', async () => {
+  const message = 'SYNTHETIC-PRIVATE-DEBUG-DETAIL';
+  for (const [httpStatus, code, kind] of [[200, 190, 'reconnect_required'], [400, 100, 'rejected']]) {
+    const fixture = client(async () => json({ data: { is_valid: false, error: { code, error_subcode: 1234, message } } }, httpStatus));
+    await assert.rejects(() => fixture.debugToken({ appId: '42', now: NOW }), error => {
+      assert.deepEqual([error.kind, error.code, error.subcode, error.httpStatus], [kind, code, 1234, httpStatus]);
+      assert.ok(!String(error).includes(message) && !JSON.stringify(error).includes(message));
+      return true;
+    });
+  }
 });
 
 test('Meta discovers resources over every page and separates page tokens from public capabilities', async () => {
@@ -206,7 +235,7 @@ test('Meta discovers resources over every page and separates page tokens from pu
   assert.equal(result.credentials.pageTokens['200'], PAGE_TOKEN);
   const { credentials, ...dto } = result;
   for (const canary of [TOKEN, PAGE_TOKEN, SECRET]) assert.equal(JSON.stringify(dto).includes(canary), false);
-  assert.equal(calls.filter(call => call.url.pathname.endsWith('/me/accounts')).length, 2);
+  assert.equal(calls.filter(call => call.url.pathname.endsWith('/me/accounts')).length, 6);
   assert.equal(calls.find(call => call.url.searchParams.has('after')).url.searchParams.has('access_token'), false);
 });
 
@@ -220,8 +249,14 @@ test('Meta preserves independent capabilities when account, tasks or optional pe
   assert.equal(capabilities.adsPublish, true);
   const readOnly = connector({}, { userId: '100', businessId: '500', pageId: '201' });
   assert.deepEqual((await readOnly.api.validateConnection()).capabilities, { facebookPublish: false, instagramPublish: false, adsPublish: false, insights: true, whatsappAds: false });
-  const noPages = connector({ pagesDenied: true }, { userId: '100', adAccountId: '400' });
+  const noPages = connector({ permissions: PERMISSIONS.filter(scope => scope !== 'pages_show_list') }, { userId: '100', adAccountId: '400' });
   assert.deepEqual((await noPages.api.validateConnection()).capabilities, { facebookPublish: false, instagramPublish: false, adsPublish: false, insights: true, whatsappAds: false });
+  assert.ok(!noPages.calls.some(call => call.url.pathname.endsWith('/me/accounts')));
+  await assert.rejects(() => connector({ pagesDenied: true }).api.validateConnection(), error => {
+    isError('permission', { code: 200, httpStatus: 403 })(error);
+    assert.deepEqual(metaValidationDiagnostic(error), { operation: 'list_pages' });
+    return true;
+  });
 });
 
 test('Meta no acredita pauta por permiso de app si el usuario no puede anunciar en la cuenta', async () => {

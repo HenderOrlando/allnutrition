@@ -6,7 +6,7 @@ import { openPostgres } from '../lib/db/postgres.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
 import { runContracts } from './contract.mjs';
 import { resetPostgresStore, withPostgresTestDatabase } from './postgres-fixture.mjs';
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, HEKA_API_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13, migrateAdvertisingIntelligenceV14, migrateHekaApiV15 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, HEKA_API_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13, migrateAdvertisingIntelligenceV14, migrateHekaApiV15, migratePublicationStudioV16 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
 import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore,runSocialBackupContracts } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
@@ -23,6 +23,8 @@ import { runSocialAnalysisContracts } from './social-analysis-contract.mjs';
 import { runSocialLinkContracts } from './social-links-contract.mjs';
 import { runSocialImprovementContracts } from './social-improvements-contract.mjs';
 import { runSocialSettingsContracts } from './social-settings-contract.mjs';
+import { removeStudioV16, runSocialStudioContracts, runStudioMigrationContract } from './social-studio-contract.mjs';
+import { runSocialAudienceContracts } from './social-audience-contract.mjs';
 import { runShippingBridgeContracts } from './shipping-bridge-contract.mjs';
 import { runHekaImportContracts } from './heka-import-contract.mjs';
 import { runHekaApiContracts } from './heka-api-contract.mjs';
@@ -46,6 +48,7 @@ async function restoreAssistantSchema(store) {
  await migrateAssistantWorkV13(store);
  await migrateAdvertisingIntelligenceV14(store);
  await migrateHekaApiV15(store);
+ await migratePublicationStudioV16(store);
 }
 
 async function migrationRows(store,{includeInternals=false}={}) {
@@ -100,10 +103,12 @@ async function runCoreContracts(t,factory,env) {
 }
 
 async function runSchemaContracts(t,factory,env) {
+ await runStudioMigrationContract(t, factory, () => openStore(env));
  await t.test('publicidad v8 conserva negocio v7, revierte DDL y exige migración al arrancar',async()=>{
   const store=await factory();
   try{
    await createBusinessFixture(store,{year:2025,pay:true});
+   await removeStudioV16(store);
    await store.transaction(async tx=>{
     await tx.lockWrites();
     for(const table of [...HEKA_API_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
@@ -435,6 +440,8 @@ const groups = {
   await runSocialAnalysisContracts(t,factory);
   await runSocialLinkContracts(t,factory);
   await runSocialImprovementContracts(t,factory);
+  await runSocialStudioContracts(t,factory);
+  await runSocialAudienceContracts(t,factory);
  },
  assistant: runAssistantContracts,
  schema: runSchemaContracts,

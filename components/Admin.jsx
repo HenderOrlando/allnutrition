@@ -269,7 +269,11 @@ export default function Admin({csrf,user}) {
  function changeView(patch){
   if(Object.keys(patch).length===1&&Object.hasOwn(patch,'q')){setQuery(patch.q);return;}
   const resetsPage=query!==accepted.current.q||['q','status','paymentStatus','period','anchor','issue','tab','seller','platform','source','carrier','account','product','productType','category','mode','network','objective','from','to','integrationMethod','scope','dimension'].some(key=>Object.hasOwn(patch,key));
-  acceptView({...accepted.current,q:query,...patch,...(resetsPage?{page:1}:{})});
+  return acceptView({...accepted.current,q:query,...patch,...(resetsPage?{page:1}:{})});
+ }
+ function setStudioThread(id){
+  const current=accepted.current;
+  if(current.section==='advertising'&&(!current.tab||current.tab==='campaigns')&&current.record==='new')acceptView({...current,studio:id},{replace:true,check:false});
  }
  async function openEditor(kind,record){
   if(!allowExit())return false;
@@ -351,7 +355,7 @@ export default function Admin({csrf,user}) {
    {section==='orders'&&<OrdersWorkspace key={'orders:'+workspaceEpoch} api={api} resource={ordersResource} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>loadOrders(accepted.current)} onInteractionStateChange={reportWorkspaceInteraction} onCreateProduct={createProductForImport} onMutation={businessChanged} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
    {section==='reports'&&<ReportsWorkspace key={'reports:'+workspaceEpoch} api={api} view={view} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision}/>}
    {section==='cash'&&<CashWorkspace key={'cash:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
-   {section==='advertising'&&<AdvertisingWorkspace key={'advertising:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
+   {section==='advertising'&&<AdvertisingWorkspace key={'advertising:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onStudioThread={setStudioThread} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
    {section==='business'&&view.tab==='assistant'&&<AssistantSettings api={api} assistantBusy={assistantMutation} onInteractionStateChange={reportWorkspaceInteraction}/>}
    {section==='business'&&view.tab!=='assistant'&&<BusinessSettings key={'business:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onCreateOrder={()=>openEditor('orders',null)} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled}/>}
    {section==='settings'&&settings&&<StorefrontSettingsForm key="storefront-settings" settings={settings} all={all} api={api} onSettingsChange={setSettings} onSave={persistSettings} onCommitted={current=>{setSettings(current);settingsSnapshot.current=JSON.stringify(current);setNotice('Configuración guardada.');businessChanged();}} onError={message=>setError(message)} dirty={settingsDirty} busy={busy} savedPublication={savedPublication}/>}
