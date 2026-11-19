@@ -2,9 +2,15 @@
 
 La arquitectura usa **un servidor Linux con Docker Compose: Next.js + PostgreSQL 16**. La producción actual reside en una VM privada detrás del Nginx del host; staging y la topología autónoma usan Caddy HTTPS con la misma imagen runtime. SQLite local y Vercel/Supabase siguen siendo alternativas, no la topología del Compose común.
 
-La producción publicada es **https://allnutrition.wintimeapp.co**, en la VM privada `allnutrition-prod` (`amd64`) detrás del Nginx del host, según el apartado 5. Las imágenes `arm64` y resultados locales de septiembre son antecedentes, no candidatos válidos para esa VM. Cada actualización debe obtener aceptación nativa y comparar la imagen ejecutada con la evidencia aprobada; cualquier excepción autorizada al `verify:docker` completo debe quedar explícita. Los resultados vigentes, CI y límites se registran en [VERIFICACION.md](VERIFICACION.md).
+La producción publicada es **https://allnutrition.wintimeapp.co**, en la VM privada `allnutrition-prod` (`amd64`) detrás del Nginx del host, según el apartado 5. Las imágenes `arm64` y los resultados locales de septiembre son antecedentes, no candidatos de producción. Cada actualización exige aceptación nativa del plan de impacto y verificar las identidades de las imágenes ejecutadas. Los resultados, CI y límites se registran en [VERIFICACION.md](VERIFICACION.md).
 
-## Versión vigente · Publicidad v14 · 17 de noviembre de 2026 (UTC)
+## Versión vigente · Heka y Publicidad v15 · 19 de noviembre de 2026 (UTC)
+
+Producción: `e5892e9ce24e1c780309bb8313f540a76f61f748`, [deployment 7900370671](https://github.com/HenderOrlando/allnutrition/deployments/production), aceptación [44404578061](https://github.com/HenderOrlando/allnutrition/actions/runs/44404578061). Esquema **15**: marcador y tres tablas Heka con permisos de aplicación verificados. Se recrearon web, planificador, trabajador y ejecutor de navegador; PostgreSQL conservó el contenedor y la hora de inicio.
+
+Desde un checkout limpio del candidato, ejecutar `npm run deploy:production -- --dry-run <sha40>` y, si se aprueba el plan sellado, `npm run deploy:production -- <sha40>`. El operador mantiene los servicios sin impacto; una migración exige ensayo de recuperación y respaldo final cifrado fuera de la VM antes del DDL. La auditoría semanal corre en un invitado aislado los **domingos a las 03:17 hora de Bogotá (08:17 UTC)**; su estado se consulta con `npm run deploy:production -- --status`.
+
+## Antecedente · Publicidad v14 · 17 de noviembre de 2026 (UTC)
 
 Producción: **https://allnutrition.wintimeapp.co**. Aplicación `7af05b7303c38471554e33db2c39d5c5be3043c2`; suplemento de configuración `4992bba17f611096cef281e4bdb8d1103f371e6f`. Web inició `2026-11-17T02:57:47.748005221Z` (16 de noviembre, 21:57 Bogotá). Aceptación completa del suplemento: `2026-11-17T03:31:10.735Z`.
 

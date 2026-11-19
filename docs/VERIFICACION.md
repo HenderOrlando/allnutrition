@@ -10,6 +10,13 @@
 - El ejecutor hospedado de aceptación utiliza el almacén containerd. El ID de promoción es el digest del descriptor OCI (manifiesto o índice), no el digest del JSON de configuración. El sellado y el receptor comprueban el tag, el descriptor, la plataforma Linux/amd64 y el config asociado antes de aceptar imágenes; no se cambia el almacén Docker de producción.
 - Para instalar solo los wrappers en `trunk` una vez publicado el SHA de herramientas, desde un checkout de ese SHA ejecute `node scripts/release-ci.mjs trunk-wrappers <sha40-de-main> <directorio-nuevo>` y copie únicamente los dos YAML generados. La rama predeterminada no cambia y la aceptación sigue usando `--ref main`.
 
+## Evidencia productiva · v15 · 19 de noviembre de 2026 (UTC)
+
+- Primer corte por impacto: `e5892e9ce24e1c780309bb8313f540a76f61f748`, deployment `7900370671`. El plan acumulado desde el inventario v14 exigió **111 comprobaciones**; [CI 44404578061](https://github.com/HenderOrlando/allnutrition/actions/runs/44404578061) ejecutó el plan en **1 h 05 min 47 s**, selló en **66 s** y publicó en **11 s**. Como contraste, el ajuste posterior solo de herramientas [44430010688](https://github.com/HenderOrlando/allnutrition/actions/runs/44430010688) ejecutó solo `gate:harness` en **4 s**, sin imágenes, artefacto ni corte; el [wrapper trunk](https://github.com/HenderOrlando/allnutrition/actions/runs/44430015156) verificó en **6 s**, también sin artefacto.
+- El invitado acreditó los cinco IDs exactos en **14 min 54,623 s** desde el fin de la preparación del constructor. El clon restauró **71 tablas** y ensayó dos veces la migración. Pausa de escritores **00:28:29.048**, inicio de web **00:31:34.231** y verificación **00:32:28.646**: **3 min 59,598 s** de la pausa a la verificación, no el tiempo total de CI. PostgreSQL no se reinició; v15, tres tablas Heka y latidos de ambos trabajadores verificados.
+- Humo HTTPS anónimo: inicio, privacidad, salud y callback OAuth **200**; Heka y finalización OAuth sin sesión **401**. Se comprobó CSP y `no-store` del callback sin ejecutar su script. No se probó un panel autenticado, conexión real a Heka/Meta, publicación ni cargo.
+- La primera auditoría integral se inició a las **00:33:55.023 UTC**; inventario y HTTPS aprobaron y la suite aislada quedó en ejecución. El arranque no acredita aún la suite completa.
+
 ## Heka oficial · verificación local en Chromium
 
 - `node tests/heka-browser.mjs`: tres recorridos aprobados sobre rutas reales del panel en HTTPS local, con SQLite v15 y custodia separada y desechable por caso: escritorio **1440×900**, móvil **390×844** y vinculación a pedido local.
