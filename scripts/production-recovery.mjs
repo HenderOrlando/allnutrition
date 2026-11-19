@@ -75,7 +75,7 @@ function ensureBuilderImages(manifest) {
   const ids = [...new Set(Object.values(manifest.services).map(entry => entry.imageId))];
   for (const id of ids) {
     requireThat(imageId.test(id), 'ID de transferencia no válido.');
-    const save = vmArgs(`exec docker image save ${quote(id)}`, true).map(quote).join(' ');
+    const save = ['ssh', ...vmArgs(`exec docker image save ${quote(id)}`, true)].map(quote).join(' ');
     const cache = quote(join(releaseCache(), 'cache', 'images'));
     const script = `set -euo pipefail; umask 077; mkdir -p ${cache}; file=${cache}/${id.slice(7)}.tar.gz; if ! docker image inspect ${quote(id)} >/dev/null 2>&1; then if ! test -f "$file"; then tmp=$(mktemp ${cache}/.image-XXXXXX); trap 'rm -f "$tmp"' EXIT; ${save} | gzip -1 >"$tmp"; mv -T "$tmp" "$file"; fi; docker load --input "$file" >/dev/null; fi; test "$(docker image inspect --format '{{.Id}} {{.Os}} {{.Architecture}}' ${quote(id)})" = ${quote(`${id} linux amd64`)}`;
     run('ssh', builderArgs(script), { timeout: 1_200_000 });
