@@ -1,29 +1,22 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SOCIAL_COUNTRY_CODES } from '../lib/social/market-countries.mjs';
+import AdvertisingSelectionDialog from './AdvertisingSelectionDialog';
 import styles from './AdvertisingWorkspace.module.css';
 
 const names = new Intl.DisplayNames(['es'], { type: 'region' });
 export const countryLabel = code => `${names.of(code) || code} (${code})`;
-const fold = value => value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('es');
-const countryOptions = SOCIAL_COUNTRY_CODES.map(code => ({ code, label: countryLabel(code) })).sort((a, b) => a.label.localeCompare(b.label, 'es'));
+const countryOptions = SOCIAL_COUNTRY_CODES.map(value => ({ value, label: countryLabel(value) })).sort((a, b) => a.label.localeCompare(b.label, 'es'));
 export const AUDIENCE_SOURCE = { automatic: 'Definida con IA', manual: 'Definida manualmente', broad: 'Público amplio elegido por el operador' };
 
-export function MarketPicker({ value, onChange, paid, historical, inputId }) {
-  const [query, setQuery] = useState('');
-  const id = useId(), match = fold(query.trim());
-  const visible = match ? countryOptions.filter(item => fold(item.label).includes(match)) : countryOptions;
-  return <fieldset className={styles.marketPicker}>
-    <legend>¿En qué país o países quieres publicar?</legend>
+export function MarketPicker({ value, onChange, paid, historical, triggerId, disabled }) {
+  return <AdvertisingSelectionDialog triggerId={triggerId} title="¿En qué país o países quieres publicar?" triggerLabel="Elegir mercados"
+    options={countryOptions} value={value} onChange={selection => onChange([...selection].sort())} disabled={disabled}
+    emptySummary="Ningún país elegido" searchLabel="Buscar país" emptyResults="No hay países que coincidan con la búsqueda.">
     {historical && <p className={styles.warning}>Este borrador anterior no tiene mercado confirmado. La segmentación guardada no demuestra que alguien haya elegido esos países.</p>}
     <p className={styles.help}>{paid ? 'El mercado elegido limita los países que se pueden comprar. En audiencia puedes cubrir cada uno como país completo o como zonas verificadas, sin solapar.' : 'El mercado orienta el mensaje y el análisis. No restringe ni garantiza la distribución de un post en Meta.'}</p>
-    <label className="field" htmlFor={inputId}>Buscar país</label><input id={inputId} type="search" value={query} maxLength={64} onChange={event => setQuery(event.target.value)} aria-controls={`${id}-markets`}/>
-    <p role="status">{value.length ? `${value.length} ${value.length === 1 ? 'país elegido' : 'países elegidos'}` : 'Ningún país elegido'}</p>
-    {value.length > 0 && <div className="active-filters" aria-label="Países elegidos">{value.map(code => <button type="button" className="filter-chip" key={code} onClick={() => onChange(value.filter(item => item !== code))} aria-label={`Quitar mercado: ${countryLabel(code)}`}>{countryLabel(code)} <span aria-hidden="true">×</span></button>)}</div>}
-    <ul className={styles.marketOptions} id={`${id}-markets`}>{visible.map(({ code, label }) => <li key={code}><label className={styles.checkRow}><input type="checkbox" checked={value.includes(code)} onChange={event => onChange(event.target.checked ? [...value, code].sort() : value.filter(item => item !== code))}/>{label}</label></li>)}</ul>
-    {!visible.length && <p>No hay países que coincidan con la búsqueda.</p>}
-  </fieldset>;
+  </AdvertisingSelectionDialog>;
 }
 
 const statusLabels = {

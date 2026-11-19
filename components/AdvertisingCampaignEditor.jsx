@@ -6,12 +6,14 @@ import { useAssistantForm } from './AssistantBridge.jsx';
 import { socialPlacementMatches, unsupportedSocialDisclosure } from '../lib/social/piece-compatibility.mjs';
 import AdvertisingGeneration from './AdvertisingGeneration';
 import AdvertisingOfferPicker, { offerLabel, OfferSummary, readAdvertisingOffer } from './AdvertisingOfferPicker';
+import AdvertisingSelectionDialog from './AdvertisingSelectionDialog';
+import useDialog from './useDialog';
 import { AUDIENCE_SOURCE, AudienceAssistant, MarketPicker, countryLabel } from './AdvertisingMarkets';
 import styles from './AdvertisingWorkspace.module.css';
 
 const ROOT = '/api/admin/social';
 const STEPS = ['Definir publicación', 'Revisar y publicar'];
-const INSTRUCTIONS = ['Elige el mensaje, las redes y la imagen o video. Puedes guardar aunque falten datos.', 'Resuelve lo pendiente, revisa la pieza y consulta una estimación. Aprobar no publica ni activa gasto.'];
+const INSTRUCTIONS = ['Completa la idea, los destinos y la pieza en el orden que prefieras. Puedes guardar aunque falten datos.', 'Resuelve lo pendiente y verifica qué se publicaría. Aprobar no publica ni activa gasto.'];
 const OBJECTIVES = { whatsapp: 'Consultas por WhatsApp', traffic: 'Clics al sitio web', reach: 'Alcance', engagement: 'Interacción' };
 const OBJECTIVE_HELP = { whatsapp: 'Busca consultas por WhatsApp, no ventas confirmadas ni lectura de conversaciones.', traffic: 'Busca clics en el enlace, no visitas confirmadas ni ventas.', reach: 'Busca personas alcanzadas según lo informado por la red; no garantiza ventas.', engagement: 'Busca acciones sobre el contenido, no ventas confirmadas.' };
 const CALLS_TO_ACTION = { whatsapp: 'Invita a consultar por WhatsApp', traffic: 'Invita a conocer los detalles en el sitio web', reach: 'Ayuda a que más personas descubran la marca', engagement: 'Invita a comentar sobre un detalle real' };
@@ -20,6 +22,7 @@ const CONNECTION_STATES = { connected: 'Conectada', reconnect_required: 'Sesión
 const IDENTITY_LABELS = { businessId: 'Negocio', pageId: 'Página de Facebook', instagramActorId: 'Cuenta de Instagram', adAccountId: 'Cuenta de anuncios' };
 const STATES = { draft: 'Borrador', ready: 'Preparada sin gasto autorizado', scheduled: 'Programada', publishing: 'En proceso', partial: 'Publicación parcial', published: 'Publicada', in_review: 'En revisión de Meta', active: 'Activa', paused: 'Pausada', completed: 'Finalizada', failed: 'Fallida', needs_attention: 'Requiere atención', cancelled: 'Cancelada', queued: 'En cola', preparing: 'Preparando', uncertain: 'Por comprobar', blocked: 'Bloqueada', prepared: 'Intención registrada', sent: 'Enviada; falta confirmar', confirmed: 'Confirmada', retry_wait: 'En espera' };
 const PLACEMENTS = { facebook_feed: 'Facebook · Feed', facebook_reels: 'Facebook · Reels', instagram_feed: 'Instagram · Feed', instagram_reels: 'Instagram · Reels' };
+const GENDERS = [{ value: 1, label: 'Hombres' }, { value: 2, label: 'Mujeres' }];
 const METRICS = { impressions: 'Impresiones', reach: 'Alcance', linkClicks: 'Clics de enlace', conversations: 'Conversaciones', interactions: 'Interacciones', views: 'Visualizaciones', plays: 'Reproducciones' };
 const METHODS = { api: 'Conexión oficial de Meta (API)', browser: 'Acceso asistido por navegador' };
 const PENDING = ['prepared', 'sent', 'retry_wait'];
@@ -156,7 +159,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
   const [composer, setComposer] = useState(false), [imageInstructions, setImageInstructions] = useState('');
   const [learning, setLearning] = useState(null);
   const baseline = useRef(JSON.stringify(form)), current = useRef(null), requests = useRef(new Set()), rids = useRef(new Map()), sequence = useRef(0), locked = useRef(false);
-  const heading = useRef(null), errorRef = useRef(null), actionHeading = useRef(null), nextRef = useRef(null), focusTarget = useRef(null), callbacks = useRef({}), id = useId();
+  const heading = useRef(null), errorRef = useRef(null), actionDialog = useRef(null), nextRef = useRef(null), focusTarget = useRef(null), callbacks = useRef({}), id = useId();
   const saveDraftRef = useRef(null), focusSaveAfterSelection = useRef(false);
   callbacks.current = { onSaved, onNavigate, onInteractionStateChange, onMutation };
   const formDirty = JSON.stringify(form) !== baseline.current || Object.values(invalid).some(Boolean);
@@ -250,7 +253,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
     else if (awaitingPublication || paidAwaiting || confirmedResults || needsReconcile) (nextRef.current || heading.current)?.focus();
     else heading.current?.focus();
   }, [step, loading, busy, awaitingPublication, campaign?.state, activationAllowed, confirmedResults, needsReconcile]);
-  useEffect(() => { if (action) actionHeading.current?.focus(); }, [action]);
+  useDialog(actionDialog, { open: Boolean(action), busy, onClose: () => setAction(null) });
   useEffect(() => () => { for (const controller of requests.current) controller.abort(); }, []);
   const learningChannel = form.mode === 'paid' && form.platforms.length ? 'meta_ads' : form.platforms.length === 1 ? form.platforms[0] : null;
   const learningHash = offerIsSaved ? campaign?.offerHash : null;
@@ -629,9 +632,6 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
   }
   const offerSummary = displayedOffers.primary ? <><OfferSummary item={displayedOffers.primary}/><OfferSummary item={displayedOffers.gift} gift/></> : <p>Publicación de marca, sin producto.</p>;
   const declaration = <label className="field">¿La imagen o video contiene contenido generado con IA?<select id={`${id}-disclosure`} name="aiDisclosure" disabled={asset?.aiDisclosure === true} value={asset?.aiDisclosure === true ? 'true' : form.aiDisclosure === null ? '' : String(form.aiDisclosure)} onChange={event => set('aiDisclosure', event.target.value === '' ? null : event.target.value === 'true')}><option value="">Declara explícitamente</option><option value="false">No</option><option value="true">Sí; requiere divulgación verificable en la vía elegida</option></select></label>;
-  const locations = networks => Object.entries(PLACEMENTS).filter(([key]) => networks.some(network => key.startsWith(`${network}_`)) &&
-    (form.placements.includes(key) || socialPlacementMatches(key, asset?.kind, form.mode)))
-    .map(([key, label]) => check(label, form.placements.includes(key), checked => set('placements', checked ? [...form.placements, key] : form.placements.filter(value => value !== key))));
   const imageChoices = <div className={styles.actions}><button id={`${id}-asset`} type="button" className="button subtle" disabled={formLocked} aria-expanded={composer} onClick={() => setComposer(value => !value)}>{composer ? 'Cerrar estudio visual' : 'Abrir estudio visual'}</button></div>;
   const imageComposer = composer && <AdvertisingGeneration api={api} campaignId={campaign?.id ?? null} campaignVersion={campaign?.version ?? null} threadId={openedStudio ?? studioId} baseAsset={asset}
     onThreadCreated={thread => { setOpenedStudio(thread.id); if (!campaign) onStudioThread?.(thread.id); }}
@@ -673,8 +673,12 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
 
     {!frozen && <form method="post" onSubmit={save} className={styles.stack}>
       <fieldset disabled={formLocked} className="editor-fieldset" aria-labelledby={`${id}-step`}>
-        {step === 0 && <div className={styles.stack} id={`${id}-definition`}>
-          <fieldset><legend>Tipo de publicidad</legend><div className={styles.fieldGrid}>
+        <fieldset disabled={step !== 0} hidden={step !== 0} className={`editor-fieldset ${styles.editorDefinition}`}><div className={styles.stack} id={`${id}-definition`}>
+          <nav className={styles.sectionNav} aria-label="Ir a una parte de la definición">{[['content', 'Idea y oferta'], ['destinations', 'Destinos'], ['message', 'Pieza y mensaje'], ['schedule', form.mode === 'paid' ? 'Presupuesto y agenda' : 'Agenda']].map(([target, label]) => <button type="button" key={target} className="button subtle" onClick={() => findRequirement(target)?.focus()}>{label}</button>)}</nav>
+          <section className={`${styles.panel} ${styles.editorSection}`} aria-labelledby={`${id}-content`}>
+          <h4 id={`${id}-content`} tabIndex={-1}>Idea y oferta</h4>
+          {field('name', 'Nombre de la publicación', { required: true, max: 200, description: 'Nombre interno para encontrar el borrador después.' })}
+          <fieldset className={styles.modeFields}><legend>Tipo de publicidad</legend><div className={styles.fieldGrid}>
             <label className={styles.checkRow}><input type="radio" name="mode" value="organic" checked={form.mode === 'organic'} onChange={() => changeMode('organic')}/><span><strong>Publicación sin inversión</strong><br/>Comparte en tus redes sin pagar por difusión.</span></label>
             <label className={styles.checkRow}><input type="radio" name="mode" value="paid" checked={form.mode === 'paid'} onChange={() => changeMode('paid')}/><span><strong>Anuncio pagado</strong><br/>Elige a quién llegar y cuánto invertir en total.</span></label>
           </div></fieldset>
@@ -707,32 +711,50 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
               }}>Usar esta idea</button>
             </div>
           </aside>}
-          {field('name', 'Nombre de la publicación', { required: true, max: 200, description: 'Nombre interno para encontrar el borrador después.' })}
-          <section className={`${styles.card} ${styles.stack}`} aria-label="Cuenta y redes"><h4>Cuenta y redes</h4>
+          </section>
+          <section className={`${styles.panel} ${styles.editorSection}`} aria-label="Cuenta y redes">
+          <h4 id={`${id}-destinations`} tabIndex={-1}>Destinos</h4>
+          <p className={styles.help}>La cuenta de Meta se necesita para publicar, no para guardar.</p>
             <label className="field">Cuenta conectada<select id={`${id}-connection`} name="connectionId" value={form.connectionId || ''} onChange={event => selectConnection(event.target.value)}><option value="">Selecciona una cuenta conectada</option>{connections.map(item => <option key={item.id} value={item.id} disabled={item.id !== form.connectionId && disclosureIssue(item, form.platforms)}>{item.name || 'Cuenta Meta'} · {METHODS[item.integrationMethod] || item.integrationMethod} · {CONNECTION_STATES[item.state] || item.state}{disclosureIssue(item, form.platforms) ? ' · No verifica la etiqueta de IA' : ''}</option>)}{form.connectionId && !connections.some(item => item.id === form.connectionId) && <option value={form.connectionId}>Cuenta guardada · revisar disponibilidad</option>}</select></label>
-            <fieldset><legend>Redes donde saldrá</legend><div id={`${id}-networks`} tabIndex={-1}>{Object.keys(NETWORKS).map(network => {
-              const unsupported = Boolean(connection && disclosureIssue(connection, [network]));
-              return check(`${NETWORKS[network]}${networkName(network, connection) ? ` · ${networkName(network, connection)}` : ''}${unsupported ? ' · No verifica la etiqueta de IA' : ''}`, form.platforms.includes(network), enabled => changePlatforms(enabled ? [...form.platforms, network] : form.platforms.filter(value => value !== network)), unsupported && !form.platforms.includes(network));
-            })}</div></fieldset>
+            <AdvertisingSelectionDialog triggerId={`${id}-networks`} title="Redes donde saldrá" triggerLabel="Elegir redes" disabled={formLocked}
+              value={form.platforms} onChange={changePlatforms} options={Object.entries(NETWORKS).map(([value, label]) => {
+                const name = networkName(value, connection), disabled = Boolean(connection && disclosureIssue(connection, [value]));
+                const summaryLabel = name ? `${label} · ${name}` : label;
+                return { value, label: disabled ? `${summaryLabel} · No verifica la etiqueta de IA` : summaryLabel, summaryLabel, disabled };
+              })}/>
             {accountIssue && <p className={styles.warning}>{accountIssue}</p>}
             <p className={styles.help}>Si sales a Redes sociales, guarda primero los cambios que quieras conservar. No se cambiará de cuenta ni de método automáticamente.</p>
             <div className={styles.actions}>
               <button type="button" className="button subtle" onClick={() => goToConnection()}>{connection ? 'Revisar esta cuenta en Redes sociales' : 'Conectar cuenta en Redes sociales'}</button>
             </div>
+          <MarketPicker value={form.marketCountries} onChange={changeMarkets} paid={form.mode === 'paid'} historical={Boolean(campaign && !Object.hasOwn(campaign, 'marketCountries'))} triggerId={`${id}-markets`} disabled={formLocked}/>
           </section>
-          <MarketPicker value={form.marketCountries} onChange={changeMarkets} paid={form.mode === 'paid'} historical={Boolean(campaign && !Object.hasOwn(campaign, 'marketCountries'))} inputId={`${id}-markets`}/>
+          <section className={`${styles.panel} ${styles.editorSection}`} aria-labelledby={`${id}-message`}>
+          <h4 id={`${id}-message`} tabIndex={-1}>Pieza y mensaje</h4>
           <p><strong>{OBJECTIVES[form.objective]}</strong> · {CALLS_TO_ACTION[form.objective]}</p>
-          {asset && <><h4>Pieza elegida</h4><AssetPreview key={asset.id} asset={asset}/>{!contextualMatch(asset) && <p role="alert">Esta imagen corresponde a otra oferta u objetivo. Cambia el archivo.</p>}</>}
+          {asset ? <AssetPreview key={asset.id} asset={asset}/> : <p className={styles.help}>Todavía no has elegido una imagen o un video.</p>}
+          {asset && !contextualMatch(asset) && <p role="alert">Esta imagen corresponde a otra oferta u objetivo. Cambia el archivo.</p>}
           {asset && form.offerRef && !asset.alignment && <p className={styles.warning}>Esta pieza se preparó sin la ficha de la oferta. Comprueba que represente el producto, su presentación y el obsequio correctos; puedes ajustarla con los datos vigentes desde el estudio.</p>}
           {imageChoices}
+          {imageComposer && <div onKeyDown={event => { if (event.key === 'Enter' && event.target.matches('input:not([type="file"]):not([type="checkbox"]), select')) event.preventDefault(); }}>{imageComposer}</div>}
           {field('caption', 'Texto que acompaña la imagen o video', { type: 'textarea', max: 2200 })}{field('headline', 'Título o llamada a la acción', { max: 40, description: 'Ejemplo ficticio: Conoce más' })}
           <details className={styles.technicalDetails}><summary>Requisitos del archivo</summary><p>Fotos fijas JPEG/PNG/WebP hasta 10 MiB, proporción 4:5 a 1,91:1 y ancho mínimo 320 px. Videos MP4/MOV hasta 250 MiB, verticales 9:16, mínimo 540×960 y duración de 3–90 segundos. Subir y normalizar un archivo no solicita una imagen nueva.</p></details>
           {form.objective === 'traffic' && field('destinationUrl', 'URL de destino', { type: 'url', max: 2048 })}
           {form.objective === 'whatsapp' && <>{field('whatsappNumber', form.mode === 'paid' ? 'WhatsApp vinculado a la página (formato internacional +)' : 'Número de WhatsApp para el texto (opcional)', { max: 16 })}{form.mode === 'paid' && <>{field('whatsappGreeting', 'Bienvenida explícita de WhatsApp', { type: 'textarea', max: 1024 })}<p>El número debe coincidir con el recurso verificado en Meta.</p></>}</>}
           {imageInstructions && !composer && <label className="field">Orientación editable para la próxima imagen<textarea maxLength={4000} value={imageInstructions} onChange={event => setImageInstructions(event.target.value)}/></label>}
           {form.mode === 'organic' && form.platforms.includes('instagram') && ['traffic', 'whatsapp'].includes(form.objective) && <p className={styles.warning}>En Instagram sin inversión, los enlaces del texto no son llamadas a la acción clicables. No se promete medir consultas o tráfico por publicación.</p>}
-          {form.platforms.length > 0 && <fieldset id={`${id}-placements`} tabIndex={-1}><legend>Ubicaciones</legend>{locations(form.platforms)}<p className={styles.help}>Fotos en Feed y videos orgánicos en Reels.</p></fieldset>}
+          {form.platforms.length > 0 && <AdvertisingSelectionDialog triggerId={`${id}-placements`} title="Ubicaciones" triggerLabel="Elegir ubicaciones" disabled={formLocked}
+            value={form.placements} onChange={value => set('placements', value)} options={Object.entries(PLACEMENTS).flatMap(([value, label]) => {
+              if (!form.platforms.some(network => value.startsWith(`${network}_`))) return [];
+              const disabled = !socialPlacementMatches(value, asset?.kind, form.mode);
+              return !disabled || form.placements.includes(value) ? [{ value, label, disabled }] : [];
+            })}>
+            <p className={styles.help}>Fotos en Feed y videos orgánicos en Reels.</p>
+          </AdvertisingSelectionDialog>}
           {declaration}
+          </section>
+          {form.mode === 'paid' && form.marketCountries.length > 0 && <section className={`${styles.panel} ${styles.editorSection}`} aria-labelledby={`${id}-audience-title`}>
+          <h4 id={`${id}-audience-title`}>Audiencia</h4>
           {form.mode === 'paid' && form.marketCountries.length > 0 && <section className={`${styles.card} ${styles.stack}`} id={`${id}-audience`} tabIndex={-1} aria-label="Audiencia de la campaña">
             <h4>¿Cómo quieres definir la audiencia?</h4>
             {campaign?.audienceMode && <p>Audiencia guardada: {AUDIENCE_SOURCE[campaign.audienceMode]}{formDirty ? ' · cambios locales aún no guardados' : ''}.</p>}
@@ -745,10 +767,14 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
             <label className="field">País completo<select name="country" value={country} onChange={event => setCountry(event.target.value)}><option value="">Selecciona un país del mercado</option>{form.marketCountries.map(code => <option key={code} value={code}>{countryLabel(code)}</option>)}</select></label><button type="button" className="button subtle" disabled={!country} onClick={addCountry}>Añadir país completo</button>
             <ul>{form.audience.countries.map(code => <li key={code}>{countryLabel(code)} <button type="button" className="text-button" onClick={() => setAudience('countries', form.audience.countries.filter(value => value !== code))}>Quitar país {code}</button></li>)}</ul>
             <div className={styles.fieldGrid}><Field field={{ name: 'ageMin', label: 'Edad mínima (18–65)', type: 'number', min: 18 }} value={form.audience.ageMin} onChange={value => setAudience('ageMin', value)}/><Field field={{ name: 'ageMax', label: 'Edad máxima (18–65)', type: 'number', min: 18 }} value={form.audience.ageMax} onChange={value => setAudience('ageMax', value)}/></div>
-            <fieldset><legend>Géneros (ninguno seleccionado = todos)</legend>{[[1, 'Hombres'], [2, 'Mujeres']].map(([value, label]) => check(label, form.audience.genders.includes(value), checked => setAudience('genders', checked ? [...form.audience.genders, value] : form.audience.genders.filter(item => item !== value))))}</fieldset>
+            <AdvertisingSelectionDialog triggerId={`${id}-genders`} title="Géneros (ninguno seleccionado = todos)" triggerLabel="Elegir géneros" disabled={formLocked}
+              options={GENDERS} value={form.audience.genders} onChange={value => setAudience('genders', value)} emptySummary="Todos los géneros"/>
             {['regions', 'cities', 'interests'].map(group => <section key={group}><h4>{{ regions: 'Regiones verificadas', cities: 'Ciudades y radio explícito', interests: 'Intereses verificados' }[group]}</h4>{!form.audience[group].length && <p className={styles.muted}>Sin selección.</p>}{form.audience[group].map(ref => <div className={styles.card} key={ref.key}><p>{ref.label} · {ref.context.countryCode || ref.context.scope || ref.context.path?.join(' / ')} · {ref.context.region || ''}</p>{group === 'cities' && <div className={styles.fieldGrid}><label className="field">Radio explícito<input type="number" min={ref.context.distanceUnit === 'mile' ? 10 : 17} max={ref.context.distanceUnit === 'mile' ? 50 : 80} step="1" value={ref.context.radius ?? ''} onChange={event => setAudience(group, form.audience[group].map(item => item.key === ref.key ? { ...item, context: { ...item.context, radius: event.target.value === '' ? undefined : Number(event.target.value), distanceUnit: item.context.distanceUnit || 'kilometer' } } : item))}/></label><label className="field">Unidad<select value={ref.context.distanceUnit || 'kilometer'} onChange={event => setAudience(group, form.audience[group].map(item => item.key === ref.key ? { ...item, context: { ...item.context, distanceUnit: event.target.value, radius: undefined } } : item))}><option value="kilometer">Kilómetros (17–80)</option><option value="mile">Millas (10–50)</option></select></label></div>}<button type="button" className="text-button" onClick={() => setAudience(group, form.audience[group].filter(item => item.key !== ref.key))}>Quitar {ref.label}</button></div>)}</section>)}
             <p className={styles.help}>Busca y selecciona referencias oficiales debajo de este formulario. Un nombre escrito no se convierte en ID. Los candidatos nativos quedan ligados al negocio y deben coincidir inequívocamente al reabrir.</p>
           </details>}
+          </section>}
+          <section className={`${styles.panel} ${styles.editorSection}`} aria-labelledby={`${id}-schedule`}>
+          <h4 id={`${id}-schedule`} tabIndex={-1}>{form.mode === 'paid' ? 'Presupuesto y agenda' : 'Agenda de publicación'}</h4>
           <p className={styles.help}>Introduce las horas en la zona de tu dispositivo ({Intl.DateTimeFormat().resolvedOptions().timeZone}). Debajo de cada fecha verás su equivalente en Bogotá y, si es un anuncio pagado, en la zona de la cuenta.</p>
           {form.mode === 'paid' ? <>
             <Values rows={[["Moneda de la cuenta", connection?.currency || 'Selecciona una cuenta con moneda verificada'], ['Zona horaria de la cuenta', connection?.timeZone || 'Sin verificar']]}/>
@@ -758,7 +784,8 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
             {connection?.currency === 'COP' && form.budgetMinor % 100 !== 0 && <p role="alert" className={styles.error}>COP exige un total de pesos enteros representable por Meta. Corrige los centavos; no se redondeará.</p>}
             <p className={styles.help}>Guardar y preparar no activan anuncios pagados. La activación y cada reanudación requieren una aceptación separada del restante real y las fechas originales.</p>
           </> : <>{dateInput('publishAt', 'Publicación programada opcional (hora del dispositivo)')}<p>Aprobar no publica ni programa entregas. Si después autorizas publicar, se usará la fecha elegida o, si está vacía, se enviará cuando se procese en segundo plano. La agenda no garantiza una ejecución puntual.</p><details className={styles.technicalDetails}><summary>Opciones de seguimiento</summary>{field('observationDays', 'Horizonte de observación', { type: 'select', options: [7, 14, 28].map(value => ({ value, label: `${value} días` })) })}<p>Es el tiempo para observar resultados. No borra la publicación ni garantiza entrega.</p></details></>}
-        </div>}
+          </section>
+        </div></fieldset>
         {step === 1 && <div className={styles.stack}>
           {reviewIssue ? <section className={`${styles.warning} ${styles.stack}`} aria-labelledby={`${id}-review-issues`}>
             <h4 id={`${id}-review-issues`}>Qué falta antes de aprobar</h4>
@@ -777,10 +804,11 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
           <details className={styles.technicalDetails} open={!reviewIssue}><summary>Configuración que vas a revisar · {formDirty ? 'Cambios sin guardar' : 'Guardada'}</summary><Configuration spec={spec} connection={connection} asset={asset}/></details>
         </div>}
       </fieldset>
-      <div className={styles.actions}>{step === 0 && <button type="button" className="button primary" disabled={formLocked} onClick={() => stepChange(1)}>Continuar a revisión</button>}<button ref={saveDraftRef} type="submit" className={step === 1 && reviewIssue ? 'button primary' : 'button subtle'} disabled={formLocked || !form.name.trim()}>Guardar borrador</button>{step > 0 && <button type="button" className="button subtle" disabled={formLocked} onClick={() => stepChange(0)}>Editar definición</button>}</div>
-      <p className={styles.help}>Guardar borrador no publica ni autoriza gasto.</p>
+      <footer className={styles.editorFooter}>
+        <div className={styles.actions}>{step === 0 && <button type="button" className="button primary" disabled={formLocked} onClick={() => stepChange(1)}>Continuar a revisión</button>}<button ref={saveDraftRef} type="submit" className={step === 1 && reviewIssue ? 'button primary' : 'button subtle'} disabled={formLocked || !form.name.trim()}>Guardar borrador</button>{step > 0 && <button type="button" className="button subtle" disabled={formLocked} onClick={() => stepChange(0)}>Editar definición</button>}</div>
+        <p className={styles.help}>Guardar borrador no publica ni autoriza gasto.</p>
+      </footer>
     </form>}
-    {!frozen && imageComposer}
 
     {!frozen && form.mode === 'paid' && form.marketCountries.length > 0 && step === 0 && audienceMode === 'manual' && <section className={styles.panel}><h3>Búsqueda oficial de audiencia</h3>
       {connection?.integrationMethod === 'browser' && <p>Primero prepara un borrador privado en Meta; la búsqueda no usa Graph API ni publica.</p>}
@@ -844,13 +872,13 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
       {awaitingPublication && <p className={styles.notice}>Sin entregas. {hold ? 'La revisión restaurada no se puede reanudar. Duplica, vuelve a validar y aprueba el nuevo borrador.' : expiredPublication ? 'La fecha aprobada ya pasó. Duplica el borrador, reprograma y vuelve a aprobar.' : canPublish ? 'Publicar requiere autorizar el envío de esta revisión.' : publicationSettingsIssue || accountIssue || 'Para publicar, verifica el acceso a la cuenta y que la pieza siga correspondiendo a la revisión aprobada.'}</p>}
       {paidAwaiting && publicationSettingsIssue && <p className={styles.warning}>{publicationSettingsIssue} La inversión no está autorizada.</p>}
       {hold && frozen && withoutDeliveries && !awaitingPublication && <p className={styles.warning}>No hay un envío que reanudar. Duplica, vuelve a validar y aprueba el nuevo borrador.</p>}
-      {!action && <div className={styles.actions}>
+      <div className={styles.actions}>
         {needsReconcile ? <button ref={nextRef} type="button" className="button primary" disabled={busy || formDirty || !connection} onClick={() => campaignAction('reconcile')}>Comprobar en Meta sin reenviar</button>
           : canPublish ? <button ref={nextRef} type="button" className="button primary" disabled={busy || loading} onClick={() => openAction('publish-organic')}>{publishLabel}</button>
           : activationAllowed ? <button ref={nextRef} type="button" className="button primary" disabled={busy || loading} onClick={() => openAction('activate-paid')}>Autorizar inversión</button>
           : confirmedResults ? <button ref={nextRef} type="button" className="button primary" disabled={busy} onClick={() => callbacks.current.onNavigate?.({ section: 'advertising', tab: 'results', record: campaign.id })}>Ver resultados</button>
           : (awaitingPublication && !hold && !expiredPublication || paidAwaiting && publicationSettingsIssue) ? <button ref={nextRef} type="button" className="button primary" onClick={() => publicationSettingsIssue ? goToConnection(null) : goToConnection()}>{publicationSettingsIssue ? 'Abrir opciones de Meta en Redes sociales' : 'Verificar conexión'}</button> : null}
-      </div>}
+      </div>
       <div className={styles.actions}>
         <button type="button" className="button subtle" disabled={busy || formDirty} onClick={() => campaignAction('duplicate')}>Duplicar en nuevo borrador</button>
         {needsReconcile && confirmedResults && <button type="button" className="button subtle" onClick={() => callbacks.current.onNavigate?.({ section: 'advertising', tab: 'results', record: campaign.id })}>Ver resultados</button>}
@@ -865,7 +893,9 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
       <p className={styles.help}>Sin acceso vigente no se puede afirmar pausa: detén los anuncios directamente en Meta. La pausa segura no depende de una imagen o video disponible ni de habilitar nuevas publicaciones.</p>
     </section>}
 
-    {action && <section className={styles.panel} role="dialog" aria-labelledby={`${id}-action-title`}><h3 id={`${id}-action-title`} ref={actionHeading} tabIndex={-1}>{{ 'publish-organic': `${publishLabel} revisión aprobada`, 'activate-paid': 'Autorizar inversión', resume: 'Autorizar reanudación', pause: 'Solicitar pausa remota', cancel: 'Cancelar trabajo o pausar anuncios emitidos', 'resume-restored': 'Comprobar estado en Meta y aceptar recuperación', 'link-remote': 'Vincular un objeto remoto existente', 'confirm-absent': 'Confirmar ausencia y riesgo antes de reintentar' }[action.name]}</h3><form method="post" onSubmit={submitAction}><fieldset disabled={busy}><legend>Confirmación explícita de la acción</legend>
+    {action && <dialog ref={actionDialog} className={`admin-dialog ${styles.dialog}`} aria-labelledby={`${id}-action-title`}>
+      <header className={styles.dialogHeader}><h3 id={`${id}-action-title`} tabIndex={-1} data-dialog-initial-focus>{{ 'publish-organic': `${publishLabel} revisión aprobada`, 'activate-paid': 'Autorizar inversión', resume: 'Autorizar reanudación', pause: 'Solicitar pausa remota', cancel: 'Cancelar trabajo o pausar anuncios emitidos', 'resume-restored': 'Comprobar estado en Meta y aceptar recuperación', 'link-remote': 'Vincular un objeto remoto existente', 'confirm-absent': 'Confirmar ausencia y riesgo antes de reintentar' }[action.name]}</h3></header>
+      <form method="post" onSubmit={submitAction} className={styles.dialogBody}>{error && <p className={styles.error} role="alert">{error}</p>}<fieldset disabled={busy}><legend>Confirmación explícita de la acción</legend>
       {action.name === 'publish-organic' && <><Configuration spec={action.approved.spec} connection={action.connection} asset={action.asset}/><AssetPreview asset={action.asset} historical/>{check('Confirmo que quiero publicar esta revisión en los destinos y con el horario indicados.', actionForm.publishAccepted, value => setActionForm(previous => ({ ...previous, publishAccepted: value })))}</>}
       {['activate-paid', 'resume', 'resume-restored'].includes(action.name) && <>
         <Values rows={[['Total original', money(spec.budgetMinor, spec.currency)], ['Desde', date(spec.startAt, spec.timeZone)], ['Hasta', date(spec.endAt, spec.timeZone)], ['Zona de cuenta', spec.timeZone]]}/>
@@ -881,7 +911,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
       {['pause', 'cancel', 'link-remote', 'confirm-absent'].includes(action.name) && <Field field={{ name: 'reason', label: 'Motivo de la acción', type: 'textarea', max: 1000, required: ['link-remote', 'confirm-absent'].includes(action.name) }} value={actionForm.reason} onChange={value => setActionForm(previous => ({ ...previous, reason: value }))}/>}
       {action.name === 'cancel' && <p>Cancelar una agenda no enviada es local. Un anuncio emitido requiere pausa remota confirmada. El contenido publicado y su evidencia no se borran; un borrador privado en Meta puede permanecer sin ejecutor.</p>}
       <div className={styles.actions}><button type="submit" className="button primary" disabled={action.name === 'publish-organic' && (!actionForm.publishAccepted || !canPublish || loading || action.version !== campaign.version) || ['activate-paid', 'resume'].includes(action.name) && (!actionForm.investmentAccepted || !Number.isSafeInteger(actionForm.remainingBudgetMinor)) || action.name === 'resume-restored' && (!actionForm.rightsAccepted || (approved?.acceptedWarnings || []).some(key => !actionForm.acceptedWarnings?.includes(key)) || campaign.mode === 'paid' && approved && !actionForm.investmentAccepted) || action.name === 'link-remote' && (!actionForm.acceptContentVerification || !actionForm.remoteId && !actionForm.permalink) || action.name === 'confirm-absent' && (!actionForm.confirmAbsence || !actionForm.acceptDuplicateRisk)}>{action.name === 'publish-organic' ? spec.publishAt ? 'Confirmar programación' : 'Confirmar publicación' : 'Confirmar solicitud'}</button><button type="button" className="button subtle" onClick={() => setAction(null)}>Volver sin ejecutar</button></div>
-    </fieldset></form></section>}
+    </fieldset></form></dialog>}
 
     {operation && <p role="status" className={styles.notice}>Operación {operation.step || operation.kind} · {stateLabel(operation.state)} · {operation.id}{operation.nextAttemptAt ? ` · próxima ejecución ${date(operation.nextAttemptAt)}` : ''}{operation.lastError ? ` · ${errorText(operation.lastError)}` : ''}. El progreso se consulta localmente, no son nuevas llamadas a Meta.</p>}
     {campaign?.deliveries?.length > 0 && <section className={styles.panel}>

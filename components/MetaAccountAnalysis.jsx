@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import styles from './AdvertisingWorkspace.module.css';
+import accountStyles from './AdvertisingResults.module.css';
 
 const ROOT = '/api/admin/social/connections';
 const objectives = { reach: 'Alcance', engagement: 'Interacción', traffic: 'Tráfico', whatsapp: 'WhatsApp', sales: 'Ventas' };
@@ -56,39 +57,55 @@ export default function MetaAccountAnalysis({ api, connections = [], onInteracti
     finally { mutations.current.delete(controller); lock.current = false; setBusy(false); }
   }
   const analysis = report?.analysis, progress = analysis?.progress, active = ['queued', 'running', 'waiting'].includes(analysis?.state);
-  return <section className={styles.panel} aria-label="Análisis histórico de las cuentas Meta">
-    <h2>Análisis histórico y contenido actual</h2>
-    <p>Consulta automática de todos los recursos profesionales accesibles, no solo los seleccionados. Últimos 12 meses calendario y configuración actual, con capturas fechadas. Nunca publica ni cambia anuncios.</p>
+  return <section className={`${styles.panel} ${accountStyles.accountPanel}`} aria-label="Análisis histórico de las cuentas Meta">
+    <header className={accountStyles.stageTitle}><p className={styles.eyebrow}>Lectura de la cuenta</p><h3>Análisis histórico y contenido actual</h3>
+      <p>Examina los recursos profesionales accesibles de los últimos 12 meses calendario y su configuración actual. El análisis no publica ni cambia anuncios.</p>
+    </header>
     {!eligible.length ? <p>Conecta Meta mediante OAuth o token manual para iniciar el análisis de solo lectura.</p> : <>
-      <label>Conexión <select value={connectionId} disabled={busy} onChange={event => { setSelected(event.target.value); setPage(1); }}>
+      <label className="field">Conexión<select value={connectionId} disabled={busy} onChange={event => { setSelected(event.target.value); setPage(1); }}>
         {eligible.map(item => <option key={item.id} value={item.id}>{item.name || item.id}{item.authenticationMethod === 'token' || item.readOnly ? ' · Token / solo lectura' : ' · OAuth'}</option>)}
       </select></label>
       <p>Objetivo configurado: <strong>{objectives[report?.objective || objective] || 'Alcance'}</strong>. Se lee de la medición de esta conexión; cambiar el objetivo reevalúa propuestas locales sin repetir las consultas del año.</p>
       {(report?.readOnly || connection?.authenticationMethod === 'token' || connection?.readOnly) && <p className={styles.notice}>Token manual · Solo lectura. Este panel no activa ni publica contenido.</p>}
       {loading && <p role="status">{report ? 'Actualizando estado local…' : 'Consultando análisis guardado…'}</p>}
       {!loading && !analysis && !error && <p>Aún no existe un análisis guardado para esta conexión.</p>}
+      <div className={accountStyles.refreshActions}>
+        <div className={accountStyles.operation}>
+          <button type="button" className="button subtle" disabled={busy || active || connection?.state !== 'connected' || connection?.revalidationRequired} onClick={() => act('refresh')}>{analysis ? 'Actualizar análisis desde Meta' : 'Iniciar análisis desde Meta'}</button>
+          <p className={styles.help}>Solicita una nueva lectura de los recursos accesibles. Está sujeta a permisos y límites de Meta.</p>
+          {active && <button type="button" className="button subtle" disabled={busy} onClick={() => act('cancel')}>Cancelar lectura local</button>}
+        </div>
+        <div className={accountStyles.operation}>
+          <button type="button" className="button subtle" disabled={busy || loading} onClick={() => setRefresh(value => value + 1)}>Reintentar estado local</button>
+          <p className={styles.help}>Consulta el estado guardado aquí. No inicia un nuevo análisis en Meta.</p>
+        </div>
+      </div>
       {analysis && <>
-        <p role="status"><strong>{states[analysis.state] || analysis.state}</strong> · Captura {date(analysis.updatedAt)}</p>
-        <p>Periodo solicitado: {analysis.period.since} – {analysis.period.until}. El día actual es parcial; Ads usa la zona de cada cuenta. Las métricas orgánicas son lifetime del contenido accesible, no métricas del año.</p>
-        {analysis.stale && <p className={styles.warning}>El acceso, la configuración o los recursos cambiaron. Los datos son históricos locales; actualiza el análisis con una conexión válida. No se proponen optimizaciones sobre esta captura.</p>}
-        <p>Fase: {progress.phase}. Unidades completadas: {progress.completed}{progress.total === null ? ' · Total abierto mientras existan cursores o tareas por descubrir' : ` de ${progress.total}`}.</p>
-        {progress.total !== null && progress.total > 0 && <progress max={progress.total} value={progress.completed} aria-label="Unidades de lectura completadas"/>}
-        <p>{progress.resources} recursos · {progress.pages} páginas/unidades de datos consultadas · {progress.objects} objetos guardados · {progress.pendingKnownUnits} unidades conocidas pendientes.</p>
-        <p className={styles.muted}>{progress.notice}</p>
-        {analysis.retryAt && <p>Próximo reintento no antes de {date(analysis.retryAt)}. Se respeta el tiempo de espera de Meta.</p>}
-        {analysis.error && <p className={styles.warning}>{analysis.error.notice} ({analysis.error.code})</p>}
-        <p>Permisos confirmados en la última lectura: {analysis.permissions?.join(', ') || 'Sin permisos confirmados todavía'}. Ads requiere ads_read o ads_management y tareas de análisis; Facebook requiere pages_read_engagement y read_insights para métricas; Instagram requiere instagram_basic, instagram_manage_insights y pages_read_engagement. Descubrir páginas requiere pages_show_list.</p>
-        <details className={styles.detail} open><summary>Cobertura y faltantes</summary>
+        <div className={accountStyles.accountStatus}>
+          <h4>Estado de la lectura</h4>
+          <p role="status"><strong>{states[analysis.state] || analysis.state}</strong> · Captura {date(analysis.updatedAt)}</p>
+          <p>Período solicitado: {analysis.period.since} – {analysis.period.until}. El día actual es parcial; Ads usa la zona de cada cuenta. Las métricas orgánicas abarcan la vida del contenido accesible, no solo el año.</p>
+          {analysis.stale && <p className={styles.warning}>El acceso, la configuración o los recursos cambiaron. Los datos son históricos locales; actualiza el análisis con una conexión válida. No se proponen optimizaciones sobre esta captura.</p>}
+          <p>Fase: {progress.phase}. Unidades completadas: {progress.completed}{progress.total === null ? ' · Total abierto mientras existan cursores o tareas por descubrir' : ` de ${progress.total}`}.</p>
+          {progress.total !== null && progress.total > 0 && <progress max={progress.total} value={progress.completed} aria-label="Unidades de lectura completadas"/>}
+          <p>{progress.resources} recursos · {progress.pages} páginas/unidades de datos consultadas · {progress.objects} objetos guardados · {progress.pendingKnownUnits} unidades conocidas pendientes.</p>
+          <p className={styles.muted}>{progress.notice}</p>
+          {analysis.retryAt && <p>Próximo reintento no antes de {date(analysis.retryAt)}. Se respeta el tiempo de espera de Meta.</p>}
+          {analysis.error && <p className={styles.warning}>{analysis.error.notice} ({analysis.error.code})</p>}
+        </div>
+        <details className={`${styles.technicalDetails} ${accountStyles.disclosure}`}><summary>Cobertura y faltantes</summary>
+          <p>Permisos confirmados en la última lectura: {analysis.permissions?.join(', ') || 'Sin permisos confirmados todavía'}. Ads requiere ads_read o ads_management y tareas de análisis; Facebook requiere pages_read_engagement y read_insights para métricas; Instagram requiere instagram_basic, instagram_manage_insights y pages_read_engagement. Descubrir páginas requiere pages_show_list.</p>
           <ul>{analysis.coverage.map((item, index) => <li key={`${item.kind}:${item.resourceId || 'discovery'}:${index}`}><strong>{item.kind} {item.resourceId || '· Descubrimiento'}: {coverageStates[item.state] || item.state}</strong>{item.notice && <p>{item.notice}</p>}{item.missing?.length > 0 && <ul>{item.missing.map((missing, i) => <li key={i}>{missing.stage || 'Acceso'}: {missing.reason} · {missing.count || 1} incidencias{missing.sampleObjectIds?.length ? ` · Muestra: ${missing.sampleObjectIds.join(', ')}` : ''}</li>)}</ul>}</li>)}</ul>
         </details>
-        <details className={styles.detail}><summary>Reglas actuales, evidencia y límites históricos</summary>
+        <details className={`${styles.technicalDetails} ${accountStyles.disclosure}`}><summary>Reglas actuales, evidencia y límites históricos</summary>
           <p>Fuentes revisadas: {analysis.rules.sourceReviewedAt}. Captura: {date(analysis.rules.observedAt)}. API {analysis.rules.apiVersion}; no constituye certificación legal ni aprobación de Meta.</p>
           <ul>{analysis.rules.current.map(rule => <li key={rule.id}>{rule.rule} <a href={rule.source} target="_blank" rel="noreferrer">Fuente Meta</a></li>)}</ul>
           <p><strong>Histórico: no verificable.</strong> {analysis.rules.historical.notice}</p>
           <ul>{analysis.rules.limits.map(limit => <li key={limit}>{limit}</li>)}</ul>
         </details>
-        <h3>Propuestas revisables por objetivo</h3>
-        {report.proposals.map(proposal => <article key={proposal.id} className={styles.card}><h4>{proposal.title}</h4><p>{proposal.change}</p>
+        <h4>Propuestas revisables por objetivo</h4>
+        {!report.proposals.length && <p>No hay propuestas respaldadas por este análisis para el objetivo seleccionado.</p>}
+        {report.proposals.map(proposal => <article key={proposal.id} className={`${styles.card} ${accountStyles.learningCard}`}><h5>{proposal.title}</h5><p>{proposal.change}</p>
           <ul>{proposal.evidence.map((evidence, index) => <li key={`${evidence.itemId}:${index}`}>Evidencia {evidence.itemId} · {evidence.metric}: {evidence.result.value ?? 'No disponible'} {evidence.result.unit} · {evidence.result.status} · Periodo {evidence.period.type === 'range' ? `${evidence.period.since} – ${evidence.period.until}` : 'Lifetime'} · {evidence.scope}</li>)}</ul>
           <p>Comparables: {proposal.comparables.length ? proposal.comparables.join(', ') : 'Sin comparable compatible; no se declara ganador.'}</p>
           <details><summary>Configuración actual correspondiente ({proposal.configurationCoverage?.matched || 0} capturas revisadas)</summary>
@@ -100,12 +117,11 @@ export default function MetaAccountAnalysis({ api, connections = [], onInteracti
           <ul>{proposal.limitations.map(limit => <li key={limit}>{limit}</li>)}</ul>
         </article>)}
         <p className={styles.muted}>{report.evidenceCoverage?.notice} Resultados examinados: {report.evidenceCoverage?.examined || 0} de {report.evidenceCoverage?.total || 0}; pertinentes para este objetivo: {report.evidenceCoverage?.qualifying || 0}. Configuraciones actuales examinadas: {report.evidenceCoverage?.configurations?.examined || 0} de {report.evidenceCoverage?.configurations?.total || 0}.{report.evidenceCoverage?.complete === false ? ' La captura cambió durante la consulta: vuelve a consultar.' : ''}</p>
-        <details className={styles.detail}><summary>Objetos y capturas guardadas ({report.pagination.total})</summary>
-          {report.items.map(item => <article key={item.id} className={styles.card}><h4>{item.resourceKind} · {item.resourceId}</h4><p>Evidencia {item.id} · {date(item.observedAt)}</p><pre>{JSON.stringify({ period: item.period, configuration: item.configuration, dimensions: item.dimensions, values: item.values, coverage: item.coverage, metricsAvailability: item.metricsAvailability }, null, 2)}</pre></article>)}
-          <nav aria-label="Páginas del análisis"><button type="button" className="button subtle" disabled={busy || loading || page <= 1} onClick={() => setPage(value => value - 1)}>Anterior</button><span> Página {page} de {Math.max(1, Math.ceil(report.pagination.total / report.pagination.pageSize))} </span><button type="button" className="button subtle" disabled={busy || loading || page * report.pagination.pageSize >= report.pagination.total} onClick={() => setPage(value => value + 1)}>Siguiente</button></nav>
+        <details className={`${styles.technicalDetails} ${accountStyles.disclosure}`}><summary>Objetos y capturas guardadas ({report.pagination.total})</summary>
+          {report.items.map(item => <article key={item.id} className={styles.card}><h5>{item.resourceKind} · {item.resourceId}</h5><p>Evidencia {item.id} · {date(item.observedAt)}</p><pre>{JSON.stringify({ period: item.period, configuration: item.configuration, dimensions: item.dimensions, values: item.values, coverage: item.coverage, metricsAvailability: item.metricsAvailability }, null, 2)}</pre></article>)}
+          <nav className={accountStyles.pagination} aria-label="Páginas del análisis"><button type="button" className="button subtle" disabled={busy || loading || page <= 1} onClick={() => setPage(value => value - 1)}>Anterior</button><span>Página {page} de {Math.max(1, Math.ceil(report.pagination.total / report.pagination.pageSize))}</span><button type="button" className="button subtle" disabled={busy || loading || page * report.pagination.pageSize >= report.pagination.total} onClick={() => setPage(value => value + 1)}>Siguiente</button></nav>
         </details>
       </>}
-      <div className={styles.actions}><button type="button" className="button subtle" disabled={busy || active || connection?.state !== 'connected' || connection?.revalidationRequired} onClick={() => act('refresh')}>{analysis ? 'Actualizar análisis desde Meta' : 'Iniciar análisis desde Meta'}</button>{active && <button type="button" className="button subtle" disabled={busy} onClick={() => act('cancel')}>Cancelar lectura local</button>}<button type="button" className="button subtle" disabled={busy || loading} onClick={() => setRefresh(value => value + 1)}>Reintentar estado local</button></div>
     </>}
     {error && <p ref={errorRef} tabIndex={-1} className={styles.error} role="alert">{error}</p>}
   </section>;

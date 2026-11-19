@@ -1,0 +1,108 @@
+.results { min-width: 0; }
+.resultHeader, .stageTitle { display: grid; justify-items: start; gap: 4px; }
+.resultHeader > p, .stageTitle > p { max-width: 70ch; }
+.resultHeader h2 { font-size: clamp(1.4rem, 3vw, 2rem); }
+.resultHeader > :global(.text-button), .accountFooter > :global(.text-button) { padding-inline: 0; }
+.recordMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; color: var(--admin-muted); }
+.recordMeta > :first-child { color: var(--admin-ink); }
+
+.accountEntry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 20px;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-inline-start: 4px solid var(--admin-accent);
+  border-radius: 12px;
+  background: var(--admin-paper);
+}
+.accountEntry h3, .accountEntry p { margin: 0; }
+.accountEntry p { color: var(--admin-muted); }
+.accountLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  color: var(--admin-accent-hover);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: .2em;
+  overflow-wrap: anywhere;
+}
+
+.searchBar, .results .periodFields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+.results .periodFields { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; border: 0; margin: 0; padding: 0; }
+.recordList { display: grid; gap: 8px; list-style: none; padding: 0; }
+.recordButton {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, .8fr) minmax(0, 1fr) minmax(7rem, auto);
+  align-items: center;
+  gap: 8px 16px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: var(--admin-surface);
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+.recordButton:not(:disabled) { cursor: pointer; }
+.recordButton:not(:disabled):hover { border-color: var(--admin-accent); background: var(--admin-paper); }
+.recordTitle, .recordStatus, .recordEvidence { display: grid; justify-items: start; gap: 3px; min-width: 0; }
+.recordTitle strong { font-size: 1.05rem; }
+.recordButton small { color: var(--admin-muted); line-height: 1.4; }
+.recordAction { color: var(--admin-accent-hover); font-weight: 700; justify-self: end; }
+.pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; }
+
+.partNav button { background: var(--admin-surface); text-align: start; }
+.performance { border-inline-start: 4px solid var(--admin-accent); }
+.kpis, .refreshActions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 12px; min-width: 0; }
+.kpi, .operation { min-width: 0; display: grid; justify-items: start; align-content: start; gap: 8px; }
+.kpi { padding: 16px; border: 1px solid var(--admin-line); border-radius: 12px; background: var(--admin-paper); }
+.kpi a { overflow-wrap: anywhere; }
+.kpi :is(h4, p, ul), .operation p, .accountFooter p { margin: 0; }
+.kpi > strong { font-size: clamp(1.5rem, 3vw, 2rem); }
+.performance > details > ul { margin-block-start: 12px; }
+.stage { border-block-start-width: 2px; }
+.refreshActions > .operation { padding: 12px; border: 1px solid var(--admin-line); border-radius: 12px; }
+.accountFooter { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
+.disclosure { background: var(--admin-surface); }
+.disclosure > summary { align-content: center; }
+.disclosure > div, .disclosure section { min-width: 0; }
+.capture { display: grid; gap: 12px; overflow-wrap: anywhere; }
+.citationNote { margin: 0; }
+.citedCapture { gap: 8px; }
+.citedMetric { min-width: 0; }
+.citedMetric > :is(h4, p) { margin-block: 0; }
+.learningCard { display: grid; gap: 10px; }
+
+.accountPanel, .accountPanel > *, .accountPanel :is(form, fieldset, details, article) { min-width: 0; }
+.accountPanel :is(ul, ol) { padding-inline-start: 22px; }
+.accountPanel pre { overflow: auto; max-width: 100%; padding: 12px; background: var(--admin-paper); white-space: pre-wrap; overflow-wrap: anywhere; }
+.accountBlock { display: grid; align-content: start; gap: 12px; }
+.accountBlock > p, .accountStatus > :is(p, h4) { margin: 0; }
+.accountFieldset { border: 0; margin: 0; padding: 0; }
+.accountFieldset legend { font-weight: 700; margin-block-end: 8px; }
+.eventRow { align-items: end; }
+.accountStatus { display: grid; align-content: start; gap: 8px; padding: 12px; border-radius: 12px; border: 1px solid var(--admin-line); background: var(--admin-paper); }
+.accountStatus progress { max-width: 100%; }
+
+@media (max-width: 900px) {
+  .recordButton { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+@media (max-width: 600px) {
+  .accountEntry, .searchBar, .results .periodFields, .recordButton { grid-template-columns: minmax(0, 1fr); }
+  .recordAction { justify-self: start; }
+  .recordButton { gap: 6px; padding: 12px; }
+  .pagination { justify-content: flex-start; }
+  .results .partNav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .operation > button { width: 100%; }
+}

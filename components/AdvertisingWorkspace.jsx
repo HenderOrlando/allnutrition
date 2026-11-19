@@ -9,15 +9,19 @@ import AdvertisingResults from './AdvertisingResults';
 import AdvertisingGuide from './AdvertisingGuide';
 import AdvertisingGeneration from './AdvertisingGeneration';
 import AdvertisingAssetUpload from './AdvertisingAssetUpload';
+import Icon from './Icons';
+import useDialog from './useDialog';
 import { countryLabel } from './AdvertisingMarkets';
 import { offerLabel } from './AdvertisingOfferPicker';
 import MetaAccountAnalysis from './MetaAccountAnalysis';
 import AdvertisingMeasurement from './AdvertisingMeasurement';
 import { readAdminView } from '@/lib/admin-view.mjs';
 import styles from './AdvertisingWorkspace.module.css';
+import library from './AdvertisingLibrary.module.css';
 
 const ROOT = '/api/admin/social';
 const tabs = [{ id: 'campaigns', label: 'Publicaciones y campañas' }, { id: 'assets', label: 'Biblioteca' }, { id: 'results', label: 'Resultados' }];
+const journey = ['Pieza creativa', 'Tipo de publicación', 'Configuración y revisión'];
 const states = { draft: 'Borrador', ready: 'Preparada', scheduled: 'Programada', publishing: 'En preparación o publicación', partial: 'Publicación parcial', published: 'Publicada', in_review: 'En revisión de Meta', active: 'Activa', paused: 'Pausada', completed: 'Finalizada', failed: 'Falló', needs_attention: 'Requiere atención', cancelled: 'Cancelada', queued: 'En cola', preparing: 'Preparando', uncertain: 'Envío incierto: comprobar estado en Meta sin reenviar', blocked: 'Bloqueada', connected: 'Conectada', reconnect_required: 'Sesión vencida o revocada: reconectar', disconnected: 'Desconectada', login_required: 'Necesita iniciar sesión', login_in_progress: 'Acceso en curso; control exclusivo', challenge_required: 'Desafío pendiente: intervención humana', layout_changed: 'Interfaz incompatible: revalidar adaptador' };
 const ASSET_STATES = { uploading: 'Carga pendiente o en curso', processing: 'Preparando imagen o video', ready: 'Lista para revisar', failed: 'No se pudo preparar', archived: 'Archivada', missing_file: 'Archivo no disponible' };
 const objectives = { whatsapp: 'Consultas por WhatsApp', traffic: 'Clics al sitio web', reach: 'Alcance', engagement: 'Interacción' };
@@ -102,8 +106,10 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
     if ([...interaction.current.values()].some(state => state.busy)) return;
     const form = assistantBridge.snapshot().find(item => item.target === open.target && item.entityId === (open.entityId ?? null) && !item.busy);
     if (form) { onAssistantOpenHandled?.(request.requestId); return; }
-    const text = open.target === 'advertising-result-action' ? 'Abre la acción concreta de Resultados y selecciona el registro real para revisar el motivo. Ali no elige vínculos ni confirma acciones por ti.' : open.target === 'asset-metadata' ? 'La ayuda completa solo el nombre de la carga actual. Elige tú el archivo; no se cambia ni se sube un archivo guardado por chat.' : '';
-    if (text && assistantOpenNotice.current !== `${request.requestId}:${text}`) { assistantOpenNotice.current = `${request.requestId}:${text}`; setNotice(text); }
+    if (open.target === 'advertising-result-action') {
+      const text = 'Abre la acción concreta de Resultados y selecciona el registro real para revisar el motivo. Ali no elige vínculos ni confirma acciones por ti.';
+      if (assistantOpenNotice.current !== `${request.requestId}:${text}`) { assistantOpenNotice.current = `${request.requestId}:${text}`; setNotice(text); }
+    }
   }, [assistantOpenRequest, assistantOpenContext, assistantBridge, view, tab, onAssistantOpenHandled]);
   const report = useCallback((owner, state) => {
     interaction.current.set(owner, state);
@@ -126,6 +132,15 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
   const invalidate = useCallback(async () => {
     if (mounted.current) setRefresh(value => value + 1);
     try { await callbacks.current.onMutation?.(); } catch (cause) { if (mounted.current) setNotice(`Operación guardada; actualización general pendiente. ${cause.message}`); }
+  }, []);
+  const updateLibraryAsset = useCallback(asset => {
+    setInventory(previous => {
+      const index = previous.data?.assets.findIndex(item => item.id === asset.id && item.version < asset.version) ?? -1;
+      if (index < 0) return previous;
+      const assets = previous.data.assets.slice();
+      assets[index] = asset;
+      return { ...previous, data: { ...previous.data, assets } };
+    });
   }, []);
   const refreshKey = `${revision}:${refresh}`;
   const connectionRead = useRead(api, ROOT + '/connections', refreshKey);
@@ -195,16 +210,16 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
         : <AdvertisingCampaignEditor {...editorProps} campaignId={view.record}/>}
     </> : tab === 'campaigns' ? <>
       <section className={styles.startPanel} aria-labelledby="advertising-start-title">
-        <div><h2 id="advertising-start-title">Prepara tu próxima publicación</h2><p>Publica sin inversión o prepara un anuncio con presupuesto. Puedes empezar sin una cuenta conectada y guardar lo que lleves como borrador.</p></div>
+        <div><p className={styles.eyebrow}>De la idea a los resultados</p><h2 id="advertising-start-title">Prepara tu próxima publicación</h2><p>No necesitas conectar Meta para empezar. Guarda un borrador, revísalo y decide más adelante si lo publicas.</p></div>
         <button type="button" className="button primary" onClick={startStudio}>Crear publicación o campaña</button>
         <ol aria-label="Recorrido de una publicación">
-          <li><strong>1. Prepara la imagen o video</strong><span>Crea, sube o elige un archivo. Puedes hacerlo después.</span></li>
-          <li><strong>2. Define qué y dónde publicar</strong><span>Elige objetivo, mensaje, cuenta y redes.</span></li>
-          <li><strong>3. Revisa antes de enviar</strong><span>Aprobar no publica ni activa inversión.</span></li>
+          <li><strong>1. Crea</strong><span>Usa el chat creativo, sube un archivo o empieza solo con tu idea.</span></li>
+          <li><strong>2. Revisa</strong><span>Completa el mensaje y resuelve lo que falte antes de aprobar.</span></li>
+          <li><strong>3. Aprende</strong><span>Abre los resultados, comprueba la evidencia y prepara una variante.</span></li>
         </ol>
       </section>
       <section ref={queryPanel} className={styles.queryPanel} aria-label="Buscar y filtrar publicaciones">
-        <h2>Tus publicaciones y campañas</h2>
+        <div className={styles.listTitle}><h2>Tus publicaciones y campañas</h2>{currentCampaignQuery && campaignRead.data && <span className={styles.badge}>{campaignRead.data.total} {campaignRead.data.total === 1 ? 'registro' : 'registros'}</span>}</div>
         <div className={styles.filterBar}>
           <Field field={{ name: 'q', label: 'Buscar publicación', max: 100 }} value={view.q || ''} onChange={value => change({ q: value || null })}/>
           <SelectField name="mode" label="Tipo de publicación" value={view.mode} options={[{ value: '', label: 'Todas' }, { value: 'organic', label: 'Publicación sin inversión' }, { value: 'paid', label: 'Anuncio pagado' }]} onChange={value => change({ mode: value || null })}/>
@@ -220,7 +235,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
       <ReadStatus state={campaignRead} label="publicaciones" onRetry={() => setRefresh(value => value + 1)}/>
       {campaignRead.data && !currentCampaignQuery && <p role="status" className={styles.warning}>Resultados de la consulta anterior; actualizando filtros</p>}
       {campaignRead.data && <div inert={!currentCampaignQuery} aria-busy={campaignRead.loading}>
-        <div className={styles.stack}>{campaignRead.data.campaigns.map(campaign => <CampaignRow key={campaign.id} campaign={campaign} asset={inventory.data?.assets.find(item => item.id === campaign.assetId && item.state === 'ready')} onOpen={() => change({ record: campaign.id })} onResults={resultsFocus => change({ tab: 'results', record: campaign.id, resultsFocus: resultsFocus || null })}/>)}</div>
+        <div className={styles.recordGrid}>{campaignRead.data.campaigns.map(campaign => <CampaignRow key={campaign.id} campaign={campaign} asset={inventory.data?.assets.find(item => item.id === campaign.assetId && item.state === 'ready')} onOpen={() => change({ record: campaign.id })} onResults={resultsFocus => change({ tab: 'results', record: campaign.id, resultsFocus: resultsFocus || null })}/>)}</div>
         {currentCampaignQuery && !campaignRead.loading && !campaignRead.error && !campaignRead.data.campaigns.length && <div className={`admin-empty ${styles.empty}`}>
           {campaignRead.data.total > 0 ? <><h2>Esta página no tiene publicaciones</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : campaignFilters.length ? <><h2>No hay publicaciones con estos filtros</h2><button type="button" className="button subtle" onClick={clearCampaignFilters}>Limpiar filtros</button></> : <><h2>Aún no hay publicaciones</h2><p>Tus borradores y publicaciones aparecerán aquí. Si ya tienes una imagen o video guardado, puedes usarlo al crear.</p><button type="button" className="button subtle" onClick={() => change({ tab: 'assets', record: null })}>Ir a la biblioteca</button></>}
         </div>}
@@ -228,12 +243,10 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
       </div>}
       <PrivatePieces api={api} onResume={id => change({ tab: 'campaigns', record: 'new', studio: id, mode: null, objective: null })}/>
     </> : tab === 'assets' ? <>
-      <section className={styles.startPanel} aria-labelledby="advertising-library-title">
-        <div><h2 id="advertising-library-title">Biblioteca privada</h2><p>Guarda imágenes y videos para usarlos más adelante. Subir un archivo no lo publica.</p></div>
-        <button type="button" className="button primary" onClick={startStudio}>Crear imagen en el estudio</button>
-      </section>
-      <AssetsPanel api={api} view={view} inventory={inventory} change={change} report={report} onMutation={invalidate} onRetry={() => setRefresh(value => value + 1)}/>
-      <details className={styles.guide}><summary>Historial de imágenes anterior al estudio</summary><LegacyGenerationHistory api={api}/></details>
+      <AssetsPanel api={api} view={view} inventory={inventory} change={change} report={report} onMutation={invalidate}
+        onAssetChange={updateLibraryAsset} onStartStudio={startStudio} onRetry={() => setRefresh(value => value + 1)}
+        assistedUpload={!view.record && assistantOpenRequest?.open?.target === 'asset-metadata' && assistantOpenContext?.requestId === assistantOpenRequest.requestId ? assistantOpenRequest.requestId : null}/>
+      {!view.record && <details className={styles.guide}><summary>Historial de imágenes anterior al estudio</summary><LegacyGenerationHistory api={api}/></details>}
     </> : <>
       <AdvertisingResults api={api} campaignId={view.record && view.record !== 'new' ? view.record : null} view={view} onViewChange={onViewChange} onNavigate={navigate} onInteractionStateChange={resultsReport} onMutation={invalidate} revision={revision}/>
       {(!view.record || view.record === 'new') && <>
@@ -258,24 +271,24 @@ function NewPublication({ view, editorProps, onThread, onInteractionStateChange,
     if (onBack() === false) return;
     setMode(null); setSelection(undefined);
   }
-  if (mode) return <div className={styles.stack}>
-    <div className={styles.actions}><button type="button" className="button subtle" onClick={back}>Volver al estudio</button></div>
-    <AdvertisingCampaignEditor {...editorProps} campaignId="new" initialMode={mode} initialObjective={view.objective || 'engagement'} studioThread={selection || null} studioId={view.studio} onStudioThread={onThread}/>
-  </div>;
-  if (selection !== undefined) return <section className={`${styles.card} ${styles.stack}`} aria-label="Elegir tipo de publicación">
-    <header><h2 ref={heading} tabIndex={-1}>¿Qué quieres publicar?</h2>
-      <p>{selection?.selectedAsset ? <>Imagen o video elegido: <strong>{selection.selectedAsset.name}</strong>.</> : 'Puedes añadir una imagen o un video más adelante.'}</p>
-    </header>
-    <div className={styles.fieldGrid}>
-      <div className={`${styles.card} ${styles.stack}`}><p>Comparte en tus redes sin pagar por difusión.</p><button type="button" className="button subtle" onClick={() => setMode('organic')}>Publicación sin inversión</button></div>
-      <div className={`${styles.card} ${styles.stack}`}><p>Elige público, fechas y presupuesto. Activar el gasto requiere otra confirmación.</p><button type="button" className="button subtle" onClick={() => setMode('paid')}>Anuncio pagado</button></div>
-    </div>
-    <div className={styles.actions}><button type="button" className="button subtle" onClick={back}>Volver al estudio</button></div>
-  </section>;
+  const stage = mode ? 2 : selection !== undefined ? 1 : 0;
   return <div className={styles.stack}>
-    <AdvertisingGeneration api={editorProps.api} assets={editorProps.assets} threadId={view.studio} onThreadCreated={thread => onThread?.(thread.id)}
+    <ol className={styles.journey} aria-label="Etapas de creación">{journey.map((label, index) => <li key={label} aria-current={index === stage ? 'step' : undefined}><span aria-hidden="true">{index < stage ? '✓' : index + 1}</span>{label}</li>)}</ol>
+    {mode ? <>
+      <div className={styles.actions}><button type="button" className="text-button" onClick={back}>Volver al estudio</button></div>
+      <AdvertisingCampaignEditor {...editorProps} campaignId="new" initialMode={mode} initialObjective={view.objective || 'engagement'} studioThread={selection || null} studioId={view.studio} onStudioThread={onThread}/>
+    </> : selection !== undefined ? <section className={`${styles.card} ${styles.stack}`} aria-label="Elegir tipo de publicación">
+      <header><p className={styles.eyebrow}>Elige una ruta</p><h2 ref={heading} tabIndex={-1}>¿Qué quieres publicar?</h2>
+        <p>{selection?.selectedAsset ? <>Pieza elegida: <strong>{selection.selectedAsset.name}</strong>.</> : 'Puedes añadir una imagen o un video más adelante.'}</p>
+      </header>
+      <div className={styles.fieldGrid}>
+        <button type="button" className={styles.modeChoice} aria-labelledby="ad-mode-organic" aria-describedby="ad-mode-organic-help" onClick={() => setMode('organic')}><strong id="ad-mode-organic">Publicación sin inversión</strong><small id="ad-mode-organic-help">Comparte contenido en Facebook o Instagram sin pagar por distribución.</small></button>
+        <button type="button" className={styles.modeChoice} aria-labelledby="ad-mode-paid" aria-describedby="ad-mode-paid-help" onClick={() => setMode('paid')}><strong id="ad-mode-paid">Anuncio pagado</strong><small id="ad-mode-paid-help">Define público, fechas y presupuesto. Activar el gasto requiere otra confirmación.</small></button>
+      </div>
+      <div className={styles.actions}><button type="button" className="text-button" onClick={back}>Volver al estudio</button></div>
+    </section> : <AdvertisingGeneration api={editorProps.api} assets={editorProps.assets} threadId={view.studio} onThreadCreated={thread => onThread?.(thread.id)}
       onUseAsset={(_asset, thread) => setSelection(thread)} onOpenCampaign={onOpenCampaign} onInteractionStateChange={onInteractionStateChange} onMutation={editorProps.onMutation}
-      onSkip={() => { if (onBack() !== false) setSelection(null); }} onExit={onExit}/>
+      onSkip={() => { if (onBack() !== false) setSelection(null); }} onExit={onExit}/>}
   </div>;
 }
 
@@ -327,7 +340,7 @@ function CampaignRow({ campaign, asset, onOpen, onResults }) {
   const spendText = spend?.value != null && ['reported', 'estimated'].includes(spend.status)
     ? `${money(spend.value, spendSummary.currency)}${spend.precision !== 'exact' || spend.status === 'estimated' ? ' · Estimado / precisión no exacta' : ''}`
     : 'No disponible';
-  return <article className={`${styles.card} ${styles.stack}`}><header className={styles.heading}><h3>{campaign.name}</h3><span className={styles.badge}>{status}</span></header>
+  return <article className={`${styles.card} ${styles.stack} ${styles.campaignCard}`}><header className={styles.heading}><h3>{campaign.name}</h3><span className={styles.badge}>{status}</span></header>
     <div className={styles.campaignSummary}>
       {(asset?.kind === 'image' || campaign.offerSnapshot?.primary?.image) && <img className={styles.cardThumb} width={72} height={72} loading="lazy" src={asset?.kind === 'image' ? asset.previewUrl : campaign.offerSnapshot.primary.image} alt=""/>}
       <div><p><strong>{campaign.mode === 'paid' ? 'Anuncio pagado' : 'Publicación sin inversión'}</strong> · {objectives[campaign.objective]}</p>
@@ -351,66 +364,250 @@ function CampaignRow({ campaign, asset, onOpen, onResults }) {
 }
 
 
-function AssetsPanel({ api, view, inventory, change, report, onMutation, onRetry }) {
-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
-  const input = useRef(null), searchPanel = useRef(null), listHeading = useRef(null), errorRef = useRef(null), archiveFocus = useRef(null), requests = useRef(new Set()), locked = useRef(false), rid = useRequestIds();
-  const uploadReport = useCallback(state => report('assets-upload', state), [report]);
+function AssetsPanel({ api, view, inventory, change, report, onMutation, onAssetChange, onStartStudio, onRetry, assistedUpload }) {
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadInteraction, setUploadInteraction] = useState({ dirty: false, busy: false });
+  const [archive, setArchive] = useState(null), [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null), [notice, setNotice] = useState(null);
+  const operation = useRef(null), rid = useRequestIds();
+  const searchPanel = useRef(null), gallery = useRef(null), listHeading = useRef(null), detailHeading = useRef(null);
+  const previousRecord = useRef(null);
+  const uploadReport = useCallback(state => {
+    setUploadInteraction(state);
+    report('assets-upload', state);
+  }, [report]);
   const assets = inventory.data?.assets || [], stateFilter = Object.hasOwn(ASSET_STATES, view.status || '') ? view.status : '';
   const query = (view.q || '').trim().toLocaleLowerCase('es');
-  const filtered = assets.filter(asset => (!stateFilter || asset.state === stateFilter) && (!query || [asset.name, asset.originalName].some(value => (value || '').trim().toLocaleLowerCase('es').includes(query))));
+  const record = view.record || null;
+  const filtered = record ? [] : assets.filter(asset => (!stateFilter || asset.state === stateFilter) && (!query || [asset.name, asset.originalName].some(value => (value || '').trim().toLocaleLowerCase('es').includes(query))));
   const page = Number(view.page || 1), pages = Math.max(1, Math.ceil(filtered.length / 20)), visible = filtered.slice((page - 1) * 20, page * 20);
-  const selected = view.record ? assets.find(asset => asset.id === view.record) : null, quota = inventory.data?.quota;
-  useEffect(() => { report('assets', { dirty: false, busy }); }, [busy, report]);
-  useEffect(() => () => { for (const controller of requests.current) controller.abort(); report('assets', { dirty: false, busy: false }); }, [report]);
-  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
+  const selected = record ? assets.find(asset => asset.id === record) : null;
+  const selectedId = selected?.id;
+  const activeFilters = [[view.q && 'q', 'Búsqueda', view.q], [stateFilter && 'status', 'Estado', ASSET_STATES[stateFilter]]].filter(([key]) => key);
+  const readStatus = <ReadStatus state={inventory} label="imágenes, videos y espacio disponible" onRetry={onRetry}/>;
+  useEffect(() => () => { operation.current?.abort(); report('assets', { dirty: false, busy: false }); }, [report]);
+  useEffect(() => { if (assistedUpload) setUploadOpen(true); }, [assistedUpload]);
   useEffect(() => {
-    if (!archiveFocus.current || inventory.loading) return;
-    if (assets.find(asset => asset.id === archiveFocus.current)?.state !== 'archived') return;
-    if (!filtered.some(asset => asset.id === archiveFocus.current)) listHeading.current?.focus();
-    archiveFocus.current = null;
-  }, [inventory.data, inventory.loading, query, stateFilter]);
-  const focusSearch = () => requestAnimationFrame(() => searchPanel.current?.querySelector('input[name="assetQuery"]')?.focus());
-  const clearFilters = () => { change({ q: null, status: null, record: null, page: 1 }); focusSearch(); };
+    const prior = previousRecord.current;
+    previousRecord.current = record;
+    if (record !== prior) {
+      setArchive(null);
+      setUploadOpen(false);
+    }
+    if (!record && !prior) return;
+    const frame = requestAnimationFrame(() => {
+      if (record) detailHeading.current?.focus();
+      else {
+        const button = gallery.current?.querySelector(`[data-library-record="${CSS.escape(prior)}"]`);
+        (button || listHeading.current)?.focus();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [record, selectedId]);
+
+  const openUpload = event => {
+    event.currentTarget.focus({ preventScroll: true });
+    setUploadOpen(true);
+  };
+  const focusSearch = () => searchPanel.current?.querySelector('input[name="assetQuery"]')?.focus();
+  function clearFilters() {
+    if (change({ q: null, status: null, record: null, page: 1 }) !== false) focusSearch();
+  }
+  function openArchive(asset, event) {
+    event.currentTarget.focus({ preventScroll: true });
+    setError(null);
+    setArchive(asset);
+  }
   async function action(asset, actionName) {
-    if (locked.current) return;
-    if (actionName === 'archive' && !window.confirm(`¿Archivar «${asset.name}»? No se borran archivos ni historia, no se libera espacio ocupado y no se modifica contenido publicado. Una entrega pendiente puede impedirlo.`)) return;
-    locked.current = true; setBusy(true); setError(''); const controller = new AbortController(); requests.current.add(controller);
+    if (operation.current) return;
+    const controller = new AbortController(), { signal } = controller;
+    operation.current = controller; setBusy(true); setError(null); setNotice(null);
+    report('assets', { dirty: false, busy: true });
     try {
       const payload = { action: actionName, version: asset.version };
-      await api(`${ROOT}/assets/${asset.id}/actions`, { method: 'POST', body: JSON.stringify({ ...payload, requestId: rid(`${actionName}:${asset.id}`, payload) }), signal: controller.signal });
-      if (actionName === 'archive') archiveFocus.current = asset.id;
-      setNotice(actionName === 'archive' ? 'Archivo archivado; conserva archivos e historia y no libera espacio.' : 'Procesamiento encolado. Espera un archivo preparado y verificado antes de publicar.'); await onMutation();
-    } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); } finally { requests.current.delete(controller); locked.current = false; setBusy(false); }
+      const result = await api(`${ROOT}/assets/${encodeURIComponent(asset.id)}/actions`, { method: 'POST', body: JSON.stringify({ ...payload, requestId: rid(`${actionName}:${asset.id}`, payload) }), signal });
+      if (signal.aborted) return;
+      onAssetChange(result);
+      const archived = actionName === 'archive';
+      setNotice({ id: asset.id, message: archived ? 'Archivo archivado. Se conservan los archivos y el historial; no se libera espacio.' : 'Procesamiento encolado. Espera a que el archivo esté listo para revisar.' });
+      if (archived) setArchive(null);
+      requestAnimationFrame(() => detailHeading.current?.focus());
+      await onMutation();
+    } catch (cause) {
+      if (!signal.aborted) setError({ id: asset.id, action: actionName, message: cause.message });
+    } finally {
+      if (operation.current === controller) operation.current = null;
+      if (!signal.aborted) { setBusy(false); report('assets', { dirty: false, busy: false }); }
+    }
   }
-  function renderAsset(asset, detail = false) {
-    return <article className={styles.card} key={asset.id}><header className={styles.toolbar}><div><h2>{asset.name}</h2><p>{asset.kind === 'video' ? 'Video' : 'Imagen'} · {ASSET_STATES[asset.state] || asset.state}</p></div>{!detail && <button type="button" className="button subtle" disabled={busy} onClick={() => change({ record: asset.id, page })}>Ver archivo</button>}</header>
-      <p>Registrada: {date(asset.createdAt)}</p>
-      {asset.reviewRequired && <p className={styles.warning}>Comprueba producto, etiquetas, texto y derechos al revisar la pieza; no se publica automáticamente.</p>}
-      {asset.diagnostic && <p className={styles.warning}>{asset.diagnostic.message || asset.diagnostic.code}</p>}
-      {asset.state === 'uploading' && <p role="status">Reserva de carga hasta {date(asset.uploadExpiresAt)}. Si la carga quedó incompleta, espera su diagnóstico o registra un nuevo archivo; la reserva no acredita que el archivo exista.</p>}
-      {asset.state === 'processing' && <p role="status">El procesamiento en segundo plano está preparando y verificando el archivo. Todavía no está listo para usar.</p>}
-      {asset.state === 'missing_file' && <p className={styles.warning}>Falta el archivo del volumen privado. Restaura el volumen y solicita comprobación de SHA-256 al administrador del despliegue; reconectar Meta no restaura archivos. La historia se conserva y no puede republicarse.</p>}
-      {detail && ['ready', 'archived'].includes(asset.state) && asset.derivativeSha256 && <div className={styles.assetPreview}>{asset.kind === 'video' ? <video className={styles.previewVideo} controls preload="metadata" playsInline src={`${ROOT}/assets/${asset.id}/content?variant=derivative`} aria-label={`Vista previa privada de ${asset.name}`} onError={() => setError('No se pudo leer el derivado privado. Comprueba sesión y restauración/verificación del volumen; no se considera publicable un archivo ausente.')}/> : <img className={styles.previewImage} src={`${ROOT}/assets/${asset.id}/content?variant=derivative`} alt={`Derivado normalizado de ${asset.name}`} onError={() => setError('No se pudo leer la vista previa privada. Comprueba sesión y restauración/verificación del volumen.')}/>}</div>}
-      {detail && <dl className="summary-values"><div><dt>Archivo preparado</dt><dd>{asset.derivativeContentType || 'Todavía no disponible'} · {asset.width && asset.height ? `${asset.width} × ${asset.height}` : 'Dimensiones no informadas'}{asset.durationSeconds != null ? ` · ${asset.durationSeconds} s` : ''}</dd></div></dl>}
-      {detail && asset.contentType === 'image/gif' && asset.originalSha256 && <p><a href={`${ROOT}/assets/${asset.id}/content?variant=original`} target="_blank" rel="noreferrer">Ver o guardar GIF animado original</a> · La publicación utiliza el MP4 preparado, que debes revisar.</p>}
-      <details className={styles.technicalDetails}><summary>Detalles del archivo</summary><dl className="summary-values"><div><dt>Original</dt><dd>{bytes(asset.originalBytes ?? asset.expectedBytes)} · {asset.originalName || 'Nombre no informado'}</dd></div><div><dt>Archivo preparado (derivado)</dt><dd>{bytes(asset.derivativeBytes)}</dd></div><div><dt>SHA-256 del original</dt><dd>{asset.originalSha256 || 'Todavía no verificado'}</dd></div><div><dt>SHA-256 del derivado</dt><dd>{asset.derivativeSha256 || 'Todavía no verificado'}</dd></div></dl></details>
-      <div className={styles.actions}>{asset.state === 'failed' && asset.originalSha256 && asset.originalBytes > 0 && <button type="button" className="button primary" disabled={busy} onClick={() => action(asset, 'retry-processing')}>Reintentar procesamiento</button>}{['ready', 'failed'].includes(asset.state) && <button type="button" className="button subtle" disabled={busy} onClick={() => action(asset, 'archive')}>Archivar con confirmación</button>}</div>
-    </article>;
-  }
-  return <><section ref={input} className={styles.panel}><h2>Subir imágenes y videos</h2><p>Archivos propios en almacenamiento privado, independiente del catálogo. Espera a que la pieza esté lista para revisar el archivo que se podría publicar.</p>
-    <ul><li>Imágenes JPEG/PNG/WebP hasta 10 MiB, no animadas, proporción 4:5–1,91:1 y ancho mínimo 320 px.</li><li>Videos MP4/MOV hasta 250 MiB, verticales 9:16, mínimo 540 × 960 y 3–90 segundos.</li></ul>
-    <details className={styles.technicalDetails}><summary>Detalles de formatos y preparación</summary><p>Imágenes: un fotograma, hasta 40 megapíxeles; conversión a JPEG sRGB, sin ampliar y hasta 1440 px. Videos: archivo preparado H.264/AAC a 30 fps, hasta 1080 × 1920; no se inventa audio ni se recorta.</p>{quota && <p>Reservado para cargas: {bytes(quota.reservedBytes)} · Cuota total: {bytes(quota.limitBytes)}</p>}</details>
-    {quota && <p>Espacio disponible: <strong>{bytes(quota.availableBytes)}</strong> · Ocupado: <strong>{bytes(quota.usedBytes)}</strong></p>}
-    <AdvertisingAssetUpload api={api} onInteractionStateChange={uploadReport} disabled={busy} onMutation={onMutation}/>
-    {notice && <p role="status" className={styles.notice}>{notice}</p>}{error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}</section>
-    <ReadStatus state={inventory} label="imágenes, videos y espacio disponible" onRetry={onRetry}/>
-    <section ref={searchPanel} className={styles.queryPanel} aria-label="Buscar y filtrar imágenes y videos"><div className={styles.filterBar}>
-      <Field field={{ name: 'assetQuery', label: 'Buscar imagen o video', max: 100 }} value={view.q || ''} onChange={value => change({ q: value || null, page: 1 })}/>
-      <SelectField name="assetState" label="Estado del archivo" value={stateFilter} options={[{ value: '', label: 'Todos' }, ...Object.entries(ASSET_STATES).map(([value, label]) => ({ value, label }))]} onChange={value => change({ status: value || null, page: 1 })}/>
-    </div>{(view.q || stateFilter) ? <div className="active-filters" aria-label="Filtros de imágenes y videos">{[[view.q && 'q', 'Búsqueda', view.q], [stateFilter && 'status', 'Estado', ASSET_STATES[stateFilter]]].filter(([key]) => key).map(([key, label, value]) => <button key={key} type="button" className="filter-chip" aria-label={`Quitar filtro: ${label}: ${value}`} onClick={() => { change({ [key]: null, page: 1 }); focusSearch(); }}>{label}: {value} <span aria-hidden="true">×</span></button>)}<button type="button" className="text-button" onClick={clearFilters}>Limpiar filtros</button></div> : <p className={styles.help}>Se muestran todas las imágenes y videos</p>}</section>
-    {view.record && <section className={styles.detail}><button type="button" className="button subtle" disabled={busy} onClick={() => change({ record: null, page })}>Cerrar archivo</button>{selected ? renderAsset(selected, true) : inventory.data && !inventory.loading && !inventory.error && <p role="status">El archivo no aparece en la lectura actual. Reintenta la consulta; no se sustituye por otro archivo.</p>}</section>}
-    <section className={styles.stack} aria-label="Biblioteca de imágenes y videos"><h2 ref={listHeading} tabIndex={-1}>Imágenes y videos guardados</h2>{visible.map(asset => renderAsset(asset))}</section>
-    {inventory.data && !inventory.loading && !inventory.error && !visible.length && <div className={`admin-empty ${styles.empty}`}>{filtered.length ? <><h2>Esta página no tiene archivos</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : (view.q || stateFilter) ? <><h2>No hay imágenes o videos con estos filtros</h2><button type="button" className="button subtle" onClick={clearFilters}>Limpiar filtros</button></> : <><h2>Aún no hay imágenes ni videos</h2><p>Elige un archivo propio con los requisitos indicados.</p><button type="button" className="button primary" onClick={() => input.current?.querySelector('input[type="file"]')?.focus()}>Elegir archivo</button></>}</div>}
-    <Pagination page={page} pages={pages} total={filtered.length} disabled={busy || inventory.loading} onPage={value => change({ page: value, record: null })}/>
+  const actionError = name => error && error.id === record && error.action === name ? error.message : '';
+  const actionNotice = notice && (!record || notice.id === record) && <p role="status" className={styles.notice}>{notice.message}</p>;
+
+  return <>
+    {record ? <section className={library.detail} aria-label="Ficha del archivo">
+      <button type="button" className={`text-button ${library.back}`} disabled={busy} onClick={() => change({ record: null, page })}><Icon name="arrow" size={18}/>Volver a la biblioteca</button>
+      {readStatus}
+      {actionNotice}
+      {selected ? <AssetDetails key={selected.id} asset={selected} heading={detailHeading} busy={busy}
+        error={actionError('retry-processing')} onRetryProcessing={() => action(selected, 'retry-processing')}
+        onArchive={event => openArchive(selected, event)} onStartStudio={onStartStudio} onUpload={openUpload}/>
+        : <div className={`admin-empty ${styles.empty}`}><h2 ref={detailHeading} tabIndex={-1}>Archivo de la biblioteca</h2>
+          {inventory.data && !inventory.loading && !inventory.error && <><p role="status">El archivo no aparece en la lectura actual. Reintenta la consulta; no se sustituye por otro archivo.</p>
+            <button type="button" className="button subtle" onClick={onRetry}>Reintentar lectura</button></>}
+        </div>}
+    </section> : <>
+      <section className={library.heading} aria-labelledby="advertising-library-title">
+        <div><h2 id="advertising-library-title">Biblioteca privada</h2><p>Guarda imágenes y videos para tus publicaciones. Subir un archivo no lo publica.</p></div>
+        <div className={styles.actions}><button type="button" className="button primary" aria-haspopup="dialog" onClick={openUpload}><Icon name="plus" size={18}/>Subir archivo privado</button>
+          <button type="button" className="button subtle" onClick={onStartStudio}>Crear imagen en el estudio</button></div>
+      </section>
+      <section ref={searchPanel} className={library.filters} aria-label="Buscar y filtrar imágenes y videos">
+        <div className={library.filterFields}>
+          <Field field={{ name: 'assetQuery', label: 'Buscar imagen o video', max: 100 }} value={view.q || ''} onChange={value => change({ q: value || null, page: 1 })}/>
+          <SelectField name="assetState" label="Estado del archivo" value={stateFilter} options={[{ value: '', label: 'Todos' }, ...Object.entries(ASSET_STATES).map(([value, label]) => ({ value, label }))]} onChange={value => change({ status: value || null, page: 1 })}/>
+        </div>
+        {activeFilters.length > 0 && <div className="active-filters" aria-label="Filtros de imágenes y videos">
+          {activeFilters.map(([key, label, value]) => <button key={key} type="button" className="filter-chip" aria-label={`Quitar filtro: ${label}: ${value}`} onClick={() => {
+            if (change({ [key]: null, page: 1 }) !== false) focusSearch();
+          }}>{label}: {value} <span aria-hidden="true">×</span></button>)}
+          <button type="button" className="text-button" onClick={clearFilters}>Limpiar filtros</button>
+        </div>}
+      </section>
+      {readStatus}
+      {actionNotice}
+      <section ref={gallery} className={library.gallery} aria-labelledby="advertising-library-gallery">
+        <div className={library.galleryHeading}><h2 ref={listHeading} tabIndex={-1} id="advertising-library-gallery">Imágenes y videos guardados</h2>
+          {inventory.data && <span className={styles.badge}>{filtered.length} {filtered.length === 1 ? 'archivo' : 'archivos'}</span>}</div>
+        {visible.length > 0 && <div className={library.grid}>{visible.map(asset => <AssetCard key={asset.id} asset={asset} onOpen={() => change({ record: asset.id, page })}/>)}</div>}
+        {inventory.data && !inventory.loading && !inventory.error && !visible.length && <div className={`admin-empty ${styles.empty}`}>
+          {filtered.length ? <><h3>Esta página no tiene archivos</h3><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></>
+            : activeFilters.length ? <h3>No hay imágenes o videos con estos filtros</h3>
+            : <><h3>Aún no hay imágenes ni videos</h3><p>Sube tu primer archivo privado o crea una imagen en el estudio.</p></>}
+        </div>}
+        {pages > 1 && <Pagination page={page} pages={pages} total={filtered.length} disabled={inventory.loading} onPage={value => change({ page: value, record: null })}/>}
+      </section>
+    </>}
+    {uploadOpen && <AssetUploadDialog api={api} quota={inventory.data?.quota} interaction={uploadInteraction} onInteractionStateChange={uploadReport}
+      onMutation={onMutation} onClose={() => setUploadOpen(false)}/>}
+    {archive && archive.id === record && <AssetArchiveDialog asset={archive} busy={busy} error={actionError('archive')}
+      onClose={() => setArchive(null)} onConfirm={() => action(archive, 'archive')}/>}
   </>;
+}
+
+const assetKind = asset => asset.kind === 'video' ? 'Video' : 'Imagen';
+function AssetState({ asset }) {
+  return <span className={library.state} data-state={asset.state}>{ASSET_STATES[asset.state] || asset.state}</span>;
+}
+
+function AssetPreview({ asset, detail = false, onFailure }) {
+  const [failed, setFailed] = useState(false);
+  const playable = ['ready', 'archived'].includes(asset.state) && asset.derivativeSha256;
+  const video = asset.kind === 'video';
+  let media;
+  if (playable && !failed && (!video || detail)) {
+    const url = `${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=derivative`;
+    const fail = () => { setFailed(true); onFailure?.(asset.version); };
+    media = video ? <video controls preload="metadata" playsInline src={url} aria-label={`Vista previa privada de ${asset.name}`} onError={fail}/>
+      : <img src={url} alt={detail ? `Derivado normalizado de ${asset.name}` : ''} loading={detail ? undefined : 'lazy'} onError={fail}/>;
+  } else {
+    media = <div className={library.placeholder}>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="2" y="4" width="20" height="16" rx="2"/>{video ? <path d="m10 8 6 4-6 4Z"/> : <><circle cx="8" cy="9" r="1.5"/><path d="m3 17 5-4 3 3 4-5 6 6"/></>}
+      </svg>
+      <span>{!detail && !failed && video && playable ? 'Vista previa en la ficha' : 'Sin vista previa'}</span>
+    </div>;
+  }
+  return <div className={detail ? library.detailPreview : library.thumbnail}>
+    {media}
+    {detail && failed && <p role="alert" className={library.previewError}>No se pudo leer la vista previa privada. Comprueba la sesión y que el volumen esté restaurado y verificado antes de usar este archivo.</p>}
+  </div>;
+}
+
+function AssetCard({ asset, onOpen }) {
+  const title = `advertising-library-asset-${asset.id}`;
+  return <article className={library.card}>
+    <AssetPreview key={asset.version} asset={asset}/>
+    <div className={library.cardBody}><p className={styles.help}>{assetKind(asset)}</p><h3 id={title}>{asset.name}</h3><AssetState asset={asset}/>
+      <button type="button" className="button subtle" data-library-record={asset.id} aria-describedby={title} onClick={onOpen}>Ver archivo</button></div>
+  </article>;
+}
+
+function AssetDetails({ asset, heading, busy, error, onRetryProcessing, onArchive, onStartStudio, onUpload }) {
+  const [failedPreviewVersion, setFailedPreviewVersion] = useState(null);
+  const canReview = asset.state === 'ready' && asset.derivativeSha256 && failedPreviewVersion !== asset.version;
+  const canRetry = asset.state === 'failed' && asset.originalSha256 && asset.originalBytes > 0;
+  const canArchive = ['ready', 'failed'].includes(asset.state);
+  const nextStep = {
+    ready: canReview ? 'Revisa la vista previa antes de usarla. Al preparar una publicación en el estudio, elige este archivo desde la biblioteca.' : 'Comprueba la vista previa privada antes de usar el archivo en una publicación.',
+    uploading: `La reserva vence el ${date(asset.uploadExpiresAt)}. Si la carga se interrumpió, espera el diagnóstico o sube un archivo nuevo. La reserva no confirma que el archivo se haya recibido.`,
+    processing: 'Espera a que termine la preparación y verificación en segundo plano. Todavía no puedes usar el archivo.',
+    failed: canRetry ? 'El original está guardado. Reintenta el procesamiento o sube una versión corregida.' : 'No hay un original que se pueda volver a procesar. Corrige el archivo y súbelo de nuevo.',
+    archived: 'La historia se conserva. Ya no puedes seleccionar este archivo para nuevas publicaciones.',
+    missing_file: 'Pide al administrador que restaure el volumen privado y compruebe la huella SHA-256. Reconectar Meta no restaura archivos. La historia se conserva y no se puede republicar.',
+  }[asset.state];
+  return <article className={library.detailCard}>
+    <header className={library.detailHeader}><div><p className={styles.help}>{assetKind(asset)} en la biblioteca privada</p><h2 ref={heading} tabIndex={-1}>{asset.name}</h2></div><AssetState asset={asset}/></header>
+    <div className={library.detailLayout}>
+      <AssetPreview key={asset.version} asset={asset} detail onFailure={setFailedPreviewVersion}/>
+      <div className={library.nextStep}>
+        <h3>Próximo paso</h3>
+        <p role={['uploading', 'processing'].includes(asset.state) ? 'status' : undefined}>{nextStep}</p>
+        {asset.reviewRequired && <p>Comprueba producto, etiquetas, texto y derechos al revisar la pieza. No se publica automáticamente.</p>}
+        {asset.diagnostic && <p className={styles.warning}>{asset.diagnostic.message || asset.diagnostic.code}</p>}
+        <AssetActionError error={error}/>
+        {canReview && <button type="button" className="button primary" onClick={onStartStudio}>Ir al estudio</button>}
+        {canRetry && <button type="button" className="button primary" disabled={busy} onClick={onRetryProcessing}>{busy ? 'Enviando solicitud…' : 'Reintentar procesamiento'}</button>}
+        {asset.state === 'failed' && <button type="button" className={`button ${canRetry ? 'subtle' : 'primary'}`} disabled={busy} aria-haspopup="dialog" onClick={onUpload}>Subir archivo privado</button>}
+      </div>
+    </div>
+    <details className={styles.technicalDetails}><summary>Detalles técnicos del archivo</summary>
+      <dl className="summary-values">
+        <div><dt>Registrado</dt><dd>{date(asset.createdAt)}</dd></div>
+        <div><dt>Original</dt><dd>{bytes(asset.originalBytes ?? asset.expectedBytes)} · {asset.originalName || 'Nombre no informado'}</dd></div>
+        <div><dt>Archivo preparado (derivado)</dt><dd>{asset.derivativeContentType || 'Todavía no disponible'} · {bytes(asset.derivativeBytes)} · {asset.width && asset.height ? `${asset.width} × ${asset.height}` : 'Dimensiones no informadas'}{asset.durationSeconds != null ? ` · ${asset.durationSeconds} s` : ''}</dd></div>
+        <div><dt>SHA-256 del original</dt><dd>{asset.originalSha256 || 'Todavía no verificado'}</dd></div>
+        <div><dt>SHA-256 del derivado</dt><dd>{asset.derivativeSha256 || 'Todavía no verificado'}</dd></div>
+      </dl>
+      {asset.contentType === 'image/gif' && asset.originalSha256 && <p><a href={`${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=original`} target="_blank" rel="noreferrer">Ver o guardar GIF animado original</a> · La publicación utiliza el MP4 preparado, que debes revisar.</p>}
+    </details>
+    {canArchive && <footer className={library.detailFooter}><button type="button" className="button subtle" disabled={busy} aria-haspopup="dialog" onClick={onArchive}>Archivar archivo</button></footer>}
+  </article>;
+}
+
+function AssetActionError({ error }) {
+  const ref = useRef(null);
+  useEffect(() => { if (error) ref.current?.focus(); }, [error]);
+  return error ? <p ref={ref} tabIndex={-1} role="alert" className={styles.error}>{error}</p> : null;
+}
+
+function AssetUploadDialog({ api, quota, interaction, onInteractionStateChange, onMutation, onClose }) {
+  const ref = useRef(null);
+  const close = useDialog(ref, { ...interaction, onClose });
+  return <dialog ref={ref} className={`admin-dialog ${styles.dialog} ${library.uploadDialog}`} aria-labelledby="advertising-library-upload" aria-describedby="advertising-library-upload-description">
+    <header className={styles.dialogHeader}><h2 id="advertising-library-upload" tabIndex={-1} data-dialog-initial-focus>Subir archivo privado</h2>
+      <button type="button" className="button subtle" disabled={interaction.busy} onClick={close}>Cerrar carga</button></header>
+    <div className={`${styles.dialogBody} ${library.uploadBody}`}>
+      <p id="advertising-library-upload-description">Elige un archivo propio. Espera el estado «Lista para revisar» antes de usarlo.</p>
+      <AdvertisingAssetUpload api={api} onInteractionStateChange={onInteractionStateChange} onMutation={onMutation} compact/>
+      {quota && <details className={styles.technicalDetails}><summary>Espacio privado: {bytes(quota.availableBytes)} disponibles</summary>
+        <p>{bytes(quota.usedBytes)} ocupados · {bytes(quota.reservedBytes)} reservados para cargas · {bytes(quota.limitBytes)} de cuota total</p></details>}
+    </div>
+  </dialog>;
+}
+
+function AssetArchiveDialog({ asset, busy, error, onClose, onConfirm }) {
+  const ref = useRef(null);
+  const close = useDialog(ref, { busy, onClose });
+  return <dialog ref={ref} className={`admin-dialog ${styles.dialog} ${library.archiveDialog}`} aria-labelledby="advertising-library-archive" aria-describedby="advertising-library-archive-description">
+    <header className={styles.dialogHeader}><h2 id="advertising-library-archive">¿Archivar «{asset.name}»?</h2></header>
+    <div className={styles.dialogBody}>
+      <p id="advertising-library-archive-description">Ya no podrás elegir este archivo para nuevas publicaciones. No se borran los archivos ni su historial, no se libera espacio y no se modifica contenido publicado. Una entrega pendiente puede impedir el archivo.</p>
+      {busy && <p role="status">Archivando archivo…</p>}
+      <AssetActionError error={error}/>
+    </div>
+    <footer className={`${styles.dialogFooter} ${styles.actions} ${library.archiveActions}`}>
+      <button type="button" className="button subtle" data-dialog-initial-focus disabled={busy} onClick={close}>Cancelar</button>
+      <button type="button" className="button primary" disabled={busy} onClick={onConfirm}>Sí, archivar archivo</button>
+    </footer>
+  </dialog>;
 }

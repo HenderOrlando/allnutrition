@@ -1,0 +1,22 @@
+.field { display: grid; justify-items: start; gap: 8px; margin: 0; min-inline-size: 0; max-inline-size: 100%; border: 1px solid var(--admin-line); border-radius: 12px; padding: 12px; }
+.field legend { padding-inline: 6px; font-weight: 700; }
+.summary { margin: 0; overflow-wrap: anywhere; }
+.field > button, .actions > button { min-block-size: 44px; }
+
+.dialog { inline-size: min(36rem, calc(100% - 24px)); max-inline-size: calc(100% - 24px); max-block-size: min(42rem, calc(100dvh - 24px)); padding: 0; border: 1px solid var(--admin-line); border-radius: 16px; background: var(--admin-surface); color: var(--admin-ink); overflow-wrap: anywhere; }
+.dialog[open] { display: flex; flex-direction: column; }
+.dialog::backdrop { background: rgb(12 18 25 / .58); }
+.header, .footer { flex: 0 0 auto; padding: 14px clamp(12px, 4vw, 20px); }
+.header { border-block-end: 1px solid var(--admin-line); }
+.header h2 { margin: 0; font-size: 1.25rem; }
+.header label { margin: 12px 0 0; }
+.body { min-block-size: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px clamp(12px, 4vw, 20px); }
+.options { list-style: none; padding: 0; margin: 0; }
+.options li + li { border-block-start: 1px solid var(--admin-line); }
+.option { display: flex; align-items: center; gap: 10px; min-block-size: 44px; padding: 6px; cursor: pointer; }
+.option:has(input:disabled) { cursor: not-allowed; }
+.option input { flex: 0 0 auto; inline-size: 20px; block-size: 20px; margin: 0; accent-color: var(--admin-accent); }
+.empty { padding: 12px 4px; margin: 0; }
+.footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; border-block-start: 1px solid var(--admin-line); }
+.footer p { margin: 0; }
+.actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-inline-start: auto; }

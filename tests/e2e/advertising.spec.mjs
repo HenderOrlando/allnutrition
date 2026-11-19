@@ -22,6 +22,9 @@ const ROOT = '/api/admin/social';
 const controlledImages = process.env.ADVERTISING_IMAGE_E2E_URL;
 const imageProject = process.env.ADVERTISING_IMAGE_COMPOSE_PROJECT;
 
+// Catalog text is checked for phone numbers; fixture suffixes must stay alphabetic.
+const catalogTag = marker => marker.slice(-8).replace(/\d/g, digit => 'ghijklmnop'[Number(digit)]);
+
 function runGuidedFixture(script, args) {
   const project = imageProject, origin = controlledImages;
   expect(project).toMatch(/^allnutrition-guided-image-[a-z0-9-]+$/);
@@ -104,7 +107,7 @@ async function expectPreview(page, id) {
 
 async function closeAsset(page) {
   const workspace = page.getByRole('region', { name: 'Publicidad en redes sociales', exact: true });
-  await workspace.getByRole('button', { name: /^Cerrar / }).click();
+  await workspace.getByRole('button', { name: 'Volver a la biblioteca', exact: true }).click();
   await expectView(page, { record: null });
 }
 
@@ -112,6 +115,24 @@ async function beginDraft(page, mode = 'organic') {
   await page.getByRole('button', { name: 'Crear publicación o campaña', exact: true }).click();
   await page.getByRole('button', { name: 'Definir primero, sin imagen aún', exact: true }).click();
   await page.getByRole('button', { name: mode === 'paid' ? 'Anuncio pagado' : 'Publicación sin inversión', exact: true }).click();
+}
+
+async function chooseOptions(page, triggerName, title, names) {
+  await page.getByRole('button', { name: triggerName, exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: title });
+  for (const name of names) await dialog.getByRole('checkbox', { name, exact: true }).check();
+  await dialog.getByRole('button', { name: 'Aplicar', exact: true }).click();
+}
+
+async function expectNoOverflow(page) {
+  expect(await page.locator('html').evaluate(root => root.scrollWidth - root.clientWidth)).toBeLessThanOrEqual(1);
+}
+
+async function captureAdvertisingSurface(page, info, name) {
+  await expectNoOverflow(page);
+  if (process.env.ADVERTISING_UX_PROOFS) {
+    await page.screenshot({ path: join(process.env.ADVERTISING_UX_PROOFS, `${info.project.name}-${name}.png`) });
+  }
 }
 
 test('publicidad guiada: guardar y organizar sin publicar', async ({ page }, info) => {
@@ -177,7 +198,7 @@ test('publicidad guiada: guardar y organizar sin publicar', async ({ page }, inf
     await expect(requirements).toContainText(/Todavía no hay cuentas conectadas|Selecciona una cuenta de Facebook o Instagram/);
     await expect(requirements.getByRole('button', { name: /^(Conectar en Redes sociales|Elegir cuenta)$/ })).toBeVisible();
     await requirements.getByRole('button', { name: 'Elegir mercados' }).press('Enter');
-    await expect(page.getByRole('searchbox', { name: 'Buscar país' })).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Elegir mercados', exact: true })).toBeFocused();
     await expect(steps.getByRole('button').first()).toHaveAttribute('aria-current', 'step');
     await expect(nameInput).toHaveValue(name);
     await expect(page.locator('textarea[name="caption"]')).toHaveValue(caption);
@@ -256,16 +277,31 @@ test('publicidad guiada: archivo utilizable y archivo archivado son distintos', 
   const png = await sharp({ create: { width: 400, height: 500, channels: 4, background: { r: 70, g: 155, b: 90, alpha: 1 } } }).png().toBuffer();
   await navigate(page, 'Publicidad');
   await selectWorkspace(page, 'Vistas de publicidad', 'Biblioteca');
-  await page.getByLabel('Archivo de imagen o video', { exact: true }).setInputFiles({ name: originalName, mimeType: 'image/png', buffer: png });
-  await page.getByRole('textbox', { name: /^Nombre para encontrarlo después/ }).fill(name);
+  const startUpload = page.getByRole('button', { name: 'Subir archivo privado', exact: true });
+  const uploadDialog = page.getByRole('dialog', { name: 'Subir archivo privado' });
+  await startUpload.click();
+  await expect(uploadDialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(uploadDialog).not.toBeVisible();
+  await expect(startUpload).toBeFocused();
+  await startUpload.click();
+  await expect(uploadDialog.getByRole('button', { name: 'Subir archivo', exact: true })).toBeInViewport({ ratio: 1 });
+  await captureAdvertisingSurface(page, info, 'biblioteca-carga');
+  const picking = page.waitForEvent('filechooser');
+  await uploadDialog.getByRole('button', { name: 'Seleccionar archivo', exact: true }).click();
+  await (await picking).setFiles({ name: originalName, mimeType: 'image/png', buffer: png });
+  await expect(uploadDialog.getByText(originalName, { exact: true })).toBeVisible();
+  await uploadDialog.getByRole('textbox', { name: /^Nombre para encontrarlo después/ }).fill(name);
   const reserving = page.waitForResponse(response => new URL(response.url()).pathname === `${ROOT}/assets` && response.request().method() === 'POST');
   const uploading = page.waitForResponse(response => /^\/api\/admin\/social\/assets\/[^/]+\/content$/.test(new URL(response.url()).pathname) && response.request().method() === 'PUT');
-  await page.getByRole('button', { name: 'Subir archivo', exact: true }).click();
+  await uploadDialog.getByRole('button', { name: 'Subir archivo', exact: true }).click();
   const reservedResponse = await reserving;
   expect(reservedResponse.ok(), await reservedResponse.text()).toBe(true);
   const reserved = await reservedResponse.json(), uploadedResponse = await uploading;
   expect(uploadedResponse.status(), await uploadedResponse.text()).toBe(202);
   expect(['processing', 'ready']).toContain((await uploadedResponse.json()).state);
+  await uploadDialog.getByRole('button', { name: 'Cerrar carga', exact: true }).click();
+  await expect(uploadDialog).not.toBeVisible();
   // Only the real scheduler can turn the uploaded bytes into a ready derivative.
   await expect.poll(async () => {
     const current = await f.asset(reserved.id);
@@ -285,9 +321,15 @@ test('publicidad guiada: archivo utilizable y archivo archivado son distintos', 
   await state.selectOption('ready');
   await expectView(page, { tab: 'assets', q: f.marker, status: 'ready' });
   await expect(card(page, name)).toBeVisible();
+  await card(page, name).scrollIntoViewIfNeeded();
+  await captureAdvertisingSurface(page, info, 'biblioteca-galeria');
   await card(page, name).getByRole('button', { name: 'Ver archivo', exact: true }).click();
   await expectView(page, { record: ready.id, q: f.marker, status: 'ready' });
   await expectPreview(page, ready.id);
+  await expect(page.getByRole('heading', { name, exact: true })).toBeFocused();
+  await captureAdvertisingSurface(page, info, 'biblioteca-ficha');
+  await closeAsset(page);
+  await expect(card(page, name).getByRole('button', { name: 'Ver archivo', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'Limpiar filtros', exact: true }).click();
   await expectView(page, { record: null, q: null, status: null, page: null });
   await expect(search).toBeFocused();
@@ -295,12 +337,23 @@ test('publicidad guiada: archivo utilizable y archivo archivado son distintos', 
   await state.selectOption('ready');
   await expectView(page, { q: f.marker, status: 'ready' });
 
-  page.once('dialog', async dialog => { expect(dialog.type()).toBe('confirm'); await dialog.accept(); });
+  await card(page, name).getByRole('button', { name: 'Ver archivo', exact: true }).click();
+  const archiveTrigger = page.getByRole('button', { name: 'Archivar archivo', exact: true });
+  await archiveTrigger.click();
+  const archiveDialog = page.getByRole('dialog', { name: /^¿Archivar/ });
+  await expect(archiveDialog.getByRole('button', { name: 'Cancelar', exact: true })).toBeFocused();
+  await archiveDialog.getByRole('button', { name: 'Cancelar', exact: true }).click();
+  await expect(archiveTrigger).toBeFocused();
+  await archiveTrigger.click();
+  await captureAdvertisingSurface(page, info, 'biblioteca-archivar');
   const archiving = page.waitForResponse(response => new URL(response.url()).pathname === `${ROOT}/assets/${ready.id}/actions` && response.request().method() === 'POST');
-  await card(page, name).getByRole('button', { name: /^Archivar/ }).click();
+  await archiveDialog.getByRole('button', { name: 'Sí, archivar archivo', exact: true }).click();
   const archiveResponse = await archiving;
   expect(archiveResponse.ok(), await archiveResponse.text()).toBe(true);
+  await expect(archiveDialog).not.toBeVisible();
+  await closeAsset(page);
   await expect(card(page, name)).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'No hay imágenes o videos con estos filtros', exact: true })).toBeVisible();
   const archived = await f.asset(ready.id);
   expect(archived.state).toBe('archived');
   for (const key of ['bytes', 'originalBytes', 'originalSha256', 'derivativeBytes', 'derivativeSha256']) expect(archived[key]).toEqual(ready[key]);
@@ -336,7 +389,7 @@ test('publicidad guiada: archivo utilizable y archivo archivado son distintos', 
 
 test('estudio de publicaciones: oferta y foto propia sin IA en el mismo borrador', async ({ page }, info) => {
   test.setTimeout(180000);
-  const f = await advertisingFixture(page, info), tag = f.marker.slice(-8);
+  const f = await advertisingFixture(page, info), tag = catalogTag(f.marker);
   const normal = { status: 'draft', orderable: true, presentation: '500 g', price: 23000, stockQuantity: 20 };
   const title = `Suplemento ${tag}`;
   const cacao = await f.post('/api/admin/products', { ...normal, title, slug: `cacao-${tag}`, flavor: `Cacao ${tag}`, sku: `CA-${tag}` });
@@ -421,6 +474,27 @@ test('estudio de publicaciones: oferta y foto propia sin IA en el mismo borrador
   await page.getByRole('button', { name: 'Continuar a revisión', exact: true }).click();
   await expect(page.getByLabel('Presupuesto total (no diario)', { exact: false })).toHaveCount(0);
   await expect(page.getByText('Por comprobar: elige la cuenta', { exact: false })).toBeVisible();
+  await expectNoOverflow(page);
+  await page.getByRole('region', { name: 'Qué falta antes de aprobar' }).getByRole('button', { name: 'Elegir mercados', exact: true }).click();
+  const marketTrigger = page.getByRole('button', { name: 'Elegir mercados', exact: true });
+  await expect(marketTrigger).toBeFocused();
+  await expect(marketTrigger).toHaveAccessibleDescription('Ningún país elegido');
+  const market = page.getByRole('dialog', { name: '¿En qué país o países quieres publicar?' });
+  await marketTrigger.press('Enter');
+  await market.getByRole('searchbox', { name: 'Buscar país' }).fill('Mexico');
+  await market.getByRole('checkbox', { name: 'México (MX)', exact: true }).check();
+  await expectNoOverflow(page);
+  await page.keyboard.press('Escape');
+  await expect(market).toHaveCount(0);
+  await expect(marketTrigger).toBeFocused();
+  await expect(marketTrigger).toHaveAccessibleDescription('Ningún país elegido');
+  await marketTrigger.click();
+  await market.getByRole('searchbox', { name: 'Buscar país' }).fill('Mexico');
+  await market.getByRole('checkbox', { name: 'México (MX)', exact: true }).check();
+  await market.getByRole('button', { name: 'Aplicar', exact: true }).click();
+  await expect(marketTrigger).toHaveAccessibleDescription('México (MX)');
+  await page.getByRole('button', { name: 'Continuar a revisión', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Qué falta antes de aprobar' }).getByRole('button', { name: 'Elegir mercados', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Editar definición', exact: true }).click();
   await page.getByRole('radio', { name: /^Anuncio pagado/ }).check();
   await expect(page.getByLabel('Presupuesto total (no diario)', { exact: false })).toBeVisible();
@@ -449,8 +523,11 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     return response.json();
   }
   async function pickMarket(page, label) {
-    await page.getByRole('searchbox', { name: 'Buscar país' }).fill(label);
-    await page.getByRole('checkbox', { name: new RegExp(`^${label} \\(`) }).check();
+    await actionButton(page, 'Elegir mercados').click();
+    const dialog = page.getByRole('dialog', { name: '¿En qué país o países quieres publicar?' });
+    await dialog.getByRole('searchbox', { name: 'Buscar país' }).fill(label);
+    await dialog.getByRole('checkbox', { name: new RegExp(`^${label} \\(`) }).check();
+    await actionButton(dialog, 'Aplicar').click();
   }
   async function approveReview(page, id, label, action) {
     const approvals = page.getByRole('group', { name: 'Autorización de la revisión' });
@@ -494,7 +571,7 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     const example = composer.getByRole('button', { name: /^Muestra el producto sobre un fondo claro/ });
     await example.focus();
     await page.keyboard.press('Enter');
-    const idea = composer.getByRole('textbox', { name: 'Describe tu idea', exact: true });
+    const idea = chat.getByRole('textbox', { name: 'Describe tu idea', exact: true });
     await expect(idea).toBeFocused();
     await expect(idea).toHaveValue(/Muestra el producto/);
     expect(opening.writes).toEqual([]);
@@ -521,7 +598,7 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     await expect(preview.getByRole('button', { name: /^Original/ })).toBeVisible();
     const bounds = { chat: await chat.boundingBox(), preview: await preview.boundingBox() };
     if (info.project.name === 'mobile') {
-      expect(bounds.preview.y).toBeLessThan(bounds.chat.y);
+      expect(bounds.chat.y).toBeLessThan(bounds.preview.y);
       await preview.getByRole('button', { name: 'Ampliar vista previa' }).click();
       await expect(preview.getByRole('button', { name: 'Reducir vista previa' })).toBeVisible();
     } else expect(bounds.chat.x).toBeLessThan(bounds.preview.x);
@@ -535,8 +612,8 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     await page.getByRole('button', { name: 'Publicación sin inversión', exact: true }).click();
     await page.locator('input[name="name"]').fill(`${f.marker} post`);
     await page.locator('select[name="connectionId"]').selectOption(connectionId);
-    await page.getByRole('checkbox', { name: /^Cuenta profesional de Instagram(?: ·|$)/ }).check();
-    await page.getByRole('checkbox', { name: 'Instagram · Feed', exact: true }).check();
+    await chooseOptions(page, 'Elegir redes', 'Redes donde saldrá', [/^Cuenta profesional de Instagram(?: ·|$)/]);
+    await chooseOptions(page, 'Elegir ubicaciones', 'Ubicaciones', ['Instagram · Feed']);
     await pickMarket(page, 'México');
     await page.locator('textarea[name="caption"]').fill('Observa la presentación y comparte qué detalle te interesa.');
     const saved = page.waitForResponse(result => new URL(result.url()).pathname === `${ROOT}/campaigns` && result.request().method() === 'POST');
@@ -617,8 +694,8 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
       writes.stop();
       await page.locator('input[name="name"]').fill(`${f.marker} pauta`);
       await page.locator('select[name="connectionId"]').selectOption(connectionId);
-      await page.getByRole('checkbox', { name: /^Página de Facebook(?: ·|$)/ }).check();
-      await page.getByRole('checkbox', { name: 'Facebook · Feed', exact: true }).check();
+      await chooseOptions(page, 'Elegir redes', 'Redes donde saldrá', [/^Página de Facebook(?: ·|$)/]);
+      await chooseOptions(page, 'Elegir ubicaciones', 'Ubicaciones', ['Facebook · Feed']);
       await page.locator('textarea[name="caption"]').fill('Conoce la pieza de este ensayo sin cargos.');
       await page.locator('select[name="aiDisclosure"]').selectOption('false');
       await pickMarket(page, 'México');
@@ -749,14 +826,23 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
   try {
     await navigate(page, 'Publicidad');
     await selectWorkspace(page, 'Vistas de publicidad', 'Resultados');
-    await page.getByRole('textbox', { name: 'Buscar publicaciones', exact: true }).fill(f.marker);
-    await page.getByRole('button', { name: 'Buscar publicaciones', exact: true }).click();
-    const publication = page.getByRole('combobox', { name: 'Publicación o campaña', exact: true });
-    await expect(publication.locator(`option[value="${draft.id}"]`)).toHaveCount(1);
-    await publication.selectOption(draft.id);
-    await expectView(page, { record: draft.id });
+    const search = page.getByRole('textbox', { name: 'Buscar publicaciones', exact: true });
+    const submit = page.getByRole('button', { name: 'Buscar publicaciones', exact: true });
+    await search.fill(`${f.marker}-sin-coincidencias`);
+    await submit.click();
+    await expect(page.getByRole('heading', { name: 'No hay coincidencias con ese nombre' })).toBeVisible();
+    await search.fill(f.marker);
+    await submit.click();
+    await expectView(page, { q: f.marker, record: null });
+    const publication = page.getByRole('button', { name: `${f.marker} resultados`, exact: true });
+    await expect(publication).toBeVisible();
+    await publication.scrollIntoViewIfNeeded();
+    await captureAdvertisingSurface(page, info, 'resultados-lista');
+    await publication.click();
+    await expectView(page, { record: draft.id, q: f.marker });
     await expect(page.getByText(/^Borrador · Sin entregas; aún no hay rendimiento que analizar\./)).toBeVisible();
-    await openDisclosure(page, /^Medición de esta pieza y filtros$/);
+    await expect(page.getByRole('heading', { name: 'Período y filtros', exact: true })).toBeVisible();
+    await captureAdvertisingSurface(page, info, 'resultados-sin-entregas');
     const from = page.locator('input[name="from"]'), to = page.locator('input[name="to"]');
     await from.fill('2026-11-01');
     await to.fill('2026-11-07');
@@ -768,6 +854,7 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
     await page.getByRole('combobox', { name: 'Ver por', exact: true }).selectOption('daily');
     const fullQuery = { section: 'advertising', tab: 'results', record: draft.id, from: '2026-11-01', to: '2026-11-07', integrationMethod: 'browser', scope: 'paid', dimension: 'daily' };
     await expectView(page, fullQuery);
+    await captureAdvertisingSurface(page, info, 'resultados-filtros');
     const summary = page.locator('summary').filter({ hasText: /^Más filtros de resultados$/ });
     await summary.click();
     const chips = page.getByRole('button', { name: /^Quitar filtro:/ });
@@ -776,7 +863,7 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
     const savedURL = page.url();
     await page.reload();
     await expectView(page, fullQuery);
-    await openDisclosure(page, /^Medición de esta pieza y filtros$/);
+    await expect(page.getByRole('heading', { name: 'Período y filtros', exact: true })).toBeVisible();
     await expect(from).toHaveValue(fullQuery.from);
     await expect(to).toHaveValue(fullQuery.to);
     await expect(page.locator('select[name="integrationMethod"]')).toHaveValue('browser');
@@ -804,7 +891,6 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
     await expect(to).toHaveValue(fullQuery.to);
     await expect(page.locator('select[name="integrationMethod"]')).toHaveValue('browser');
     await expect(page.locator('select[name="scope"]')).toHaveValue('paid');
-    await openDisclosure(page, /^Medición de esta pieza y filtros$/);
     await expect(page.locator('select[name="dimension"]')).toHaveValue('daily');
 
     await page.getByRole('button', { name: /^Quitar filtro: Ver por:/ }).click();
@@ -842,9 +928,17 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
     expect(results.measurements).toEqual([]);
     expect(results.deliveries).toEqual([]);
     await page.getByRole('button', { name: 'Medición de la cuenta', exact: true }).click();
-    await expectView(page, { section: 'advertising', tab: 'results', record: null });
-    await expect(page.getByRole('heading', { name: 'Medición de la cuenta', exact: true })).toBeFocused();
+    await expectView(page, { section: 'advertising', tab: 'results', q: f.marker, record: null });
+    const accountHeading = page.getByRole('heading', { name: 'Medición de la cuenta', exact: true });
+    await expect(accountHeading).toBeFocused();
+    await expect(publication).toBeVisible();
+    await expect(accountHeading).toBeInViewport({ ratio: 1 });
+    await captureAdvertisingSurface(page, info, 'resultados-medicion');
     await expect(page.getByRole('heading', { name: 'Elige una publicación o campaña' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Objetivo del negocio y medición' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Análisis histórico y contenido actual' })).toBeVisible();
+    await page.getByRole('heading', { name: 'Análisis histórico y contenido actual' }).scrollIntoViewIfNeeded();
+    await captureAdvertisingSurface(page, info, 'resultados-historial');
     expect(await f.campaign(draft.id)).toEqual(baseline);
     expect(reading.writes).toEqual([]);
   } finally {
@@ -865,7 +959,7 @@ async function seedResults(f) {
     const common = { version: 1, created_at: start, updated_at: at };
     await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: 'api', state: 'connected', data: JSON.stringify({ name: 'Cuenta de ensayo', identities, capabilities: { facebookPublish: true } }), ...common });
     await insertRow(store, 'social_assets', { id: assetId, state: 'ready', sha256: 'a'.repeat(64), bytes: 100, data: JSON.stringify({ name: 'Pieza de ensayo', kind: 'image', derivativeSha256: 'a'.repeat(64) }), ...common });
-    const tag = f.marker.slice(-8), product = await f.post('/api/admin/products', { title: `Oferta de prueba ${tag}`, slug: `prueba-${tag}`, status: 'draft', orderable: true, stockQuantity: 20, price: 25000, presentation: '500 g', flavor: 'Cacao' });
+    const tag = catalogTag(f.marker), product = await f.post('/api/admin/products', { title: `Oferta de prueba ${tag}`, slug: `prueba-${tag}`, status: 'draft', orderable: true, stockQuantity: 20, price: 25000, presentation: '500 g', flavor: 'Cacao' });
     const { offer } = await f.get(`${ROOT}/offers?kind=product&id=${product.id}`);
     const offerRef = { primary: { kind: 'product', id: product.id, factsHash: offer.factsHash }, gift: null };
     const draft = await f.post(`${ROOT}/campaigns`, { name, connectionId, assetId, offerRef, mode: 'organic', objective: 'engagement', caption: 'Texto actual de la publicación', marketCountries: ['MX'], platforms: ['facebook'], placements: ['facebook_feed'], aiDisclosure: false });
@@ -929,12 +1023,25 @@ test('estudio de publicaciones · abrir la captura exacta y preparar una variant
     await page.goto(`/admin?section=advertising&tab=results&record=${record.id}&resultsFocus=recommendations`);
   await expect(page.getByRole('heading', { name: record.name, exact: true })).toBeVisible();
   await expect(page.getByText('0 reportado', { exact: true })).toBeVisible();
-  await openDisclosure(page, 'Hipótesis, limitaciones y capturas');
-  await page.getByRole('button', { name: 'Abrir captura citada', exact: true }).click();
+  await expectNoOverflow(page);
+  await openDisclosure(page, /^Métricas completas, capturas y estado por destino$/);
+  await expect(page.getByRole('heading', { name: 'Estado de publicación por red' })).toBeVisible();
+  await captureAdvertisingSurface(page, info, 'resultados-capturas');
+  const capture = page.getByRole('button', { name: 'Abrir captura citada', exact: true });
+  await capture.scrollIntoViewIfNeeded();
+  await captureAdvertisingSurface(page, info, 'resultados-recomendacion');
+  await capture.click();
   const cited = page.getByRole('dialog', { name: 'Captura exacta del análisis' });
   await expect(cited.getByText(/Lectura conservada, independiente de los filtros/)).toBeVisible();
-  await expect(cited).toContainText(record.captureId);
+  const metrics = cited.getByRole('region', { name: 'Métricas de la captura' });
+  const interactions = metrics.getByRole('heading', { name: 'Interacciones', exact: true });
+  await expect(interactions).toBeInViewport();
+  await expect(interactions.locator('..').getByText('0', { exact: true })).toBeInViewport();
+  await captureAdvertisingSurface(page, info, 'resultados-evidencia');
+  await openDisclosure(page, /^Fechas, cobertura y evidencia de la captura$/);
+  await expect(cited.getByText(record.captureId, { exact: true })).toBeVisible();
   await cited.getByRole('button', { name: 'Cerrar captura', exact: true }).click();
+  await expect(capture).toBeFocused();
   await page.getByRole('button', { name: 'Cambiar aquí · solo Facebook' }).click();
   const prepare = page.getByRole('dialog');
   await prepare.getByRole('checkbox').check();
@@ -969,6 +1076,8 @@ test('estudio de publicaciones · abrir la captura exacta y preparar una variant
   await expectView(page, { tab: 'results', record: record.id });
   await expect(page.getByRole('heading', { name: 'Qué aprendimos' })).toBeVisible();
   await expect(page.getByText('Mejoró según este criterio', { exact: true })).toBeVisible();
+  await page.getByRole('heading', { name: 'Qué aprendimos' }).scrollIntoViewIfNeeded();
+  await captureAdvertisingSurface(page, info, 'resultados-aprendizaje');
   await page.goto(`/admin?section=advertising&tab=campaigns&record=${newDraft.id}`);
   await expect(page.getByRole('heading', { name: 'Paso 1 de 2 · Definir publicación' })).toBeVisible();
   const reads = observeWrites(page);

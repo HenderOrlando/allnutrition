@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useAssistantForm } from './AssistantBridge.jsx';
 import styles from './AdvertisingWorkspace.module.css';
+import library from './AdvertisingLibrary.module.css';
 
 const ASSETS = '/api/admin/social/assets';
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -22,11 +23,12 @@ function fileError(file, accept) {
   return '';
 }
 
-export default function AdvertisingAssetUpload({ api, onBeforeUpload, onAssetReserved, onAsset, onMutation, onInteractionStateChange, accept = DEFAULT_ACCEPT, disabled = false, submitLabel = 'Subir archivo', active = true }) {
+export default function AdvertisingAssetUpload({ api, onBeforeUpload, onAssetReserved, onAsset, onMutation, onInteractionStateChange, accept = DEFAULT_ACCEPT, disabled = false, submitLabel = 'Subir archivo', active = true, compact = false }) {
   const [file, setFile] = useState(null), [name, setName] = useState(''), [slot, setSlot] = useState(null);
   const [busy, setBusy] = useState(false), [phase, setPhase] = useState(''), [error, setError] = useState('');
   const [asset, setAsset] = useState(null), [readError, setReadError] = useState(''), [revision, setRevision] = useState(0);
   const input = useRef(null), errorRef = useRef(null), mutation = useRef(null), attempt = useRef(null), selection = useRef(null), tracked = useRef(null);
+  const picker = useRef(null), fileLabelId = useId();
   const callbacks = useRef({ onBeforeUpload, onAssetReserved, onAsset, onMutation, onInteractionStateChange });
   callbacks.current = { onBeforeUpload, onAssetReserved, onAsset, onMutation, onInteractionStateChange };
   const dirty = Boolean(file || name);
@@ -125,19 +127,35 @@ export default function AdvertisingAssetUpload({ api, onBeforeUpload, onAssetRes
     }
   }
 
-  return <div hidden={!active}><div className={styles.stack}>
-    <fieldset disabled={locked} className={styles.fieldGrid}>
+  const fileLabel = imageOnly ? 'Archivo de imagen' : 'Archivo de imagen o video';
+  const formats = <>JPEG, PNG o WebP hasta 10 MiB, no animado. Para publicar tal cual: proporción 4:5–1,91:1 y ancho mínimo de 320 px.{!imageOnly && ' MP4/MOV hasta 250 MiB, vertical 9:16, mínimo 540 × 960 y 3–90 segundos.'}</>;
+  const privacy = 'El original queda guardado en privado; subirlo no lo selecciona ni lo publica.';
+  const fileSize = file && `${new Intl.NumberFormat('es-CO', { maximumFractionDigits: 1 }).format(file.size / MiB)} MiB`;
+  const fileInput = <input ref={input} type="file" accept={accept} className={compact ? library.uploadInput : undefined}
+    aria-labelledby={compact ? fileLabelId : undefined} tabIndex={compact ? -1 : undefined} onChange={event => pick(event.target.files?.[0] || null)} />;
+
+  return <div hidden={!active}><div className={compact ? library.uploadStack : styles.stack}>
+    <fieldset disabled={locked} className={compact ? library.uploadFields : styles.fieldGrid}>
       <legend>Archivo propio</legend>
-      <label className="field">{imageOnly ? 'Archivo de imagen' : 'Archivo de imagen o video'}<input ref={input} type="file" accept={accept} onChange={event => pick(event.target.files?.[0] || null)} /></label>
+      {compact ? <div>
+        <span id={fileLabelId} className={library.uploadFileLabel}>{fileLabel}</span>
+        {fileInput}
+        <div className={library.uploadFileSelection}>
+          <button ref={picker} type="button" className="button subtle" onClick={() => input.current?.click()}>Seleccionar archivo</button>
+          <p role="status" className={styles.help}>{file
+            ? <><span className={library.uploadFilename} title={file.name}>{file.name}</span>{fileSize}</>
+            : 'Ningún archivo seleccionado'}</p>
+        </div>
+      </div> : <label className="field">{fileLabel}{fileInput}</label>}
       <label className="field">Nombre para encontrarlo después<input name="assetName" value={name} maxLength={200} onChange={event => changeName(event.target.value)} /></label>
     </fieldset>
-    <p className={styles.help}>JPEG, PNG o WebP hasta 10 MiB, no animado. Para publicar tal cual: proporción 4:5–1,91:1 y ancho mínimo de 320 px.{!imageOnly && ' MP4/MOV hasta 250 MiB, vertical 9:16, mínimo 540 × 960 y 3–90 segundos.'} El original queda guardado en privado; subirlo no lo selecciona ni lo publica.</p>
-    {file && <p className={styles.help}>{file.name} · {new Intl.NumberFormat('es-CO', { maximumFractionDigits: 1 }).format(file.size / MiB)} MiB</p>}
+    {!compact && <p className={styles.help}>{formats} {privacy}</p>}
+    {!compact && file && <p className={styles.help}>{file.name} · {fileSize}</p>}
     {invalid && <p role="alert" className={styles.error}>{invalid}</p>}
     <div className={styles.actions}>
       <button type="button" className="button primary" disabled={locked || !file || !name.trim() || Boolean(invalid)} onClick={upload}>{busy ? 'Carga en curso…' : slot ? 'Revisar o reintentar esta carga' : submitLabel}</button>
       <button type="button" className="button subtle" disabled={locked} onClick={assistant.openAssistant}>Ayúdame con el nombre</button>
-      {file && <button type="button" className="button subtle" disabled={locked} onClick={() => { pick(null); if (input.current) input.current.value = ''; }}>Descartar selección local</button>}
+      {file && <button type="button" className="button subtle" disabled={locked} onClick={() => { pick(null); if (input.current) input.current.value = ''; picker.current?.focus(); }}>Descartar selección local</button>}
     </div>
     {phase && <p role="status">{phase}</p>}
     {asset?.state === 'processing' && <p role="status" className={styles.notice}>Original recibido. Preparando {asset.kind === 'video' ? 'el video' : 'la imagen'}; todavía no está lista para usar.</p>}
@@ -145,5 +163,12 @@ export default function AdvertisingAssetUpload({ api, onBeforeUpload, onAssetRes
     {asset && !['processing', 'ready'].includes(asset.state) && <p role="alert" className={styles.warning}>{asset.diagnostic?.message || 'No se pudo preparar el archivo. Revisa su estado o elige otro.'}</p>}
     {readError && <div role="alert" className={styles.error}><p>{readError}</p>{processingId && <button type="button" className="button subtle" onClick={() => setRevision(value => value + 1)}>Volver a comprobar el archivo</button>}</div>}
     {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}
+    {compact && <>
+      <p className={styles.help}>{privacy}</p>
+      <details className={styles.technicalDetails}>
+        <summary>Formatos y requisitos del archivo</summary>
+        <p className={styles.help}>{formats}</p>
+      </details>
+    </>}
   </div></div>;
 }

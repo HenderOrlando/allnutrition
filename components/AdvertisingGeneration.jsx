@@ -3,6 +3,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import AdvertisingAssetUpload from './AdvertisingAssetUpload';
 import styles from './AdvertisingWorkspace.module.css';
+import studio from './AdvertisingGeneration.module.css';
+import useDialog from './useDialog';
 
 const ROOT = '/api/admin/social/generation';
 const THREADS = '/api/admin/social/creative-threads';
@@ -16,6 +18,7 @@ const CONSENT = { version: 2, cost: true, externalProcessing: true, noCustomerDa
 const COP = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 });
 const isPending = job => ['queued', 'sending'].includes(job.state) || job.asset?.state === 'processing';
 const sourceId = source => `${source.kind}:${source.id}`;
+const isAdditionalSource = (source, baseId) => source.kind !== 'asset' || source.id !== baseId;
 const sourceTitle = source => `${source.kind === 'product' ? 'Producto' : 'Biblioteca'}: ${identity({ ...source.facts, title: source.title })}`;
 const pendingAsset = asset => ['uploading', 'processing'].includes(asset?.state);
 const editable = asset => asset?.kind === 'image' && ['image/jpeg', 'image/png', 'image/webp'].includes(asset.contentType) && (asset.state === 'ready' || asset.diagnostic?.code === 'IMAGE_GEOMETRY');
@@ -28,7 +31,7 @@ const mergeTurns = (previous, incoming) => [...new Map([...previous, ...incoming
 function OfferFacts({ item, label }) {
   if (!item) return null;
   return <div>
-    <h5>{label}: {identity(item)}</h5>
+    <h6>{label}: {identity(item)}</h6>
     {item.brand && <p>Marca: {item.brand}</p>}
     <p>Precio: {item.priceCOP == null ? 'No informado' : COP.format(item.priceCOP)}</p>
     {item.condition && <p><strong>Condición del obsequio:</strong> {item.condition}</p>}
@@ -45,7 +48,7 @@ function BriefDetails({ context, baseName, onPreviewError }) {
   const { brief: { brand, campaign, offer, general }, baseAsset, automaticSources } = context;
   const secondary = general.catalogs.length || general.hours || general.messages.some(item => item.title || item.text) || general.shipping.some(item => item.area || item.timing);
   return <div className={`${styles.card} ${styles.stack}`}>
-    <h4>Datos y fotos para preparar la imagen</h4>
+    <h5>Datos y fotos para preparar la imagen</h5>
     {brand.name || brand.tagline ? <p><strong>Identidad de marca:</strong> {[brand.name, brand.tagline].filter(Boolean).join(' · ')}</p> : null}
     {campaign && <div>
       <p><strong>Objetivo:</strong> {OBJECTIVES[campaign.objective]}</p>
@@ -88,7 +91,10 @@ function BriefDetails({ context, baseName, onPreviewError }) {
 function StudioPreview({ asset, original, onUse, onFresh, disabled, publishable }) {
   const [comparison, setComparison] = useState(false), [expanded, setExpanded] = useState(false);
   const [reviewed, setReviewed] = useState(false), [error, setError] = useState(false), [retry, setRetry] = useState(0);
-  if (!asset) return <p className={styles.help}>Todavía no hay una imagen ni un video seleccionado. Cuando añadas uno, podrás revisarlo aquí antes de usarlo.</p>;
+  if (!asset) return <div className={studio.previewEmpty}>
+    <strong>Aún no hay una pieza</strong>
+    <p className={styles.help}>Aquí podrás revisar la imagen o el video antes de usarlo.</p>
+  </div>;
   const originalAsset = comparison ? original || asset : null;
   const url = originalAsset?.originalUrl ?? asset.previewUrl ?? (editable(asset) ? asset.originalUrl : null);
   const image = originalAsset ? originalAsset.kind === 'image' || originalAsset.contentType === 'image/gif' : asset.kind === 'image';
@@ -97,7 +103,7 @@ function StudioPreview({ asset, original, onUse, onFresh, disabled, publishable 
   function observed() { if (!comparison && asset.state === 'ready') setReviewed(true); setError(false); }
   return <div className={styles.stack}>
     <strong>{asset.name}</strong>
-    {url && <figure className={expanded ? styles.studioExpanded : styles.studioMedia}>
+    {url && <figure className={expanded ? studio.previewExpanded : studio.previewMedia}>
       {image ? <img key={`${url}:${retry}`} className={styles.previewImage} {...mediaProps} alt={alt} onLoad={observed}/>
         : <video key={`${url}:${retry}`} className={styles.previewVideo} {...mediaProps} controls playsInline preload="metadata" aria-label={alt} onLoadedMetadata={observed}/>}
       <figcaption className={styles.help}>{alt}</figcaption>
@@ -108,7 +114,7 @@ function StudioPreview({ asset, original, onUse, onFresh, disabled, publishable 
     {asset.aiDisclosure && <p className={styles.help}>Generada con IA. Revisa producto, texto, derechos y divulgación antes de publicar.</p>}
     {error && <div role="alert">No se pudo comprobar el archivo. <button type="button" className="button subtle" onClick={() => setRetry(value => value + 1)}>Volver a comprobar</button></div>}
     <div className={styles.actions}>
-      {url && <button type="button" className={`button subtle ${styles.studioExpandButton}`} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Reducir vista previa' : 'Ampliar vista previa'}</button>}
+      {url && <button type="button" className={`button subtle ${studio.expandPreview}`} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Reducir vista previa' : 'Ampliar vista previa'}</button>}
       {asset.state === 'ready' && (original?.originalUrl || asset.originalUrl) && <button type="button" className="button subtle" aria-pressed={comparison} onClick={() => setComparison(value => !value)}>{comparison ? 'Volver al archivo preparado' : 'Comparar con el original'}</button>}
       {asset.state === 'ready' && onUse && <button type="button" className="button primary" disabled={disabled || comparison || !reviewed || error || !publishable} onClick={() => onUse(asset)}>Usar esta pieza y continuar</button>}
       {onFresh && <button type="button" className="button subtle" disabled={disabled} onClick={onFresh}>Crear otra pieza sin usar este archivo</button>}
@@ -116,11 +122,12 @@ function StudioPreview({ asset, original, onUse, onFresh, disabled, publishable 
   </div>;
 }
 
-function ReferencePicker({ api, base, items, onChange }) {
-  const [open, setOpen] = useState(false), [query, setQuery] = useState(''), [offset, setOffset] = useState(0), [page, setPage] = useState(null);
-  const limit = base ? 3 : 4, visible = items.filter(item => item.kind !== 'asset' || item.id !== base?.id);
+function ReferenceDialog({ api, baseId, items, id, onApply, onClose }) {
+  const dialogRef = useRef(null), dialogHeading = useRef(null), close = useDialog(dialogRef, { onClose });
+  const [draft, setDraft] = useState(items);
+  const [query, setQuery] = useState(''), [offset, setOffset] = useState(0), [page, setPage] = useState(null);
+  const limit = baseId ? 3 : 4, visible = draft.filter(item => isAdditionalSource(item, baseId));
   useEffect(() => {
-    if (!open) return;
     const controller = new AbortController(), { signal } = controller;
     const timer = setTimeout(() => {
       api(`${ROOT}/sources?${new URLSearchParams({ query, offset: String(offset), limit: String(PAGE_SIZE) })}`, { signal }).then(data => {
@@ -128,24 +135,71 @@ function ReferencePicker({ api, base, items, onChange }) {
       }, cause => { if (!signal.aborted) setPage({ error: cause.message }); });
     }, 250);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [api, open, query, offset]);
-  return <details className={styles.technicalDetails} onToggle={event => setOpen(event.currentTarget.open)}><summary>Referencias opcionales: biblioteca y productos</summary>
-    <p className={styles.help}>Elige hasta {limit} fotos locales adicionales. No se descargan enlaces externos.</p>
-    <label className="field">Buscar fotos de referencia<input value={query} maxLength={100} onChange={event => { setQuery(event.target.value); setOffset(0); }}/></label>
-    {page?.error && <p role="alert">{page.error}</p>}
-    {visible.length > 0 && <ul className={styles.choiceList} aria-label="Fotos seleccionadas para el envío">{visible.map(item => <li key={sourceId(item)} className={styles.assetPreview}>
-      <span>{sourceTitle(item)}</span><img src={item.thumbnailUrl} alt="" width={72} height={72} className={styles.previewImage}/>
-      <button type="button" className="button subtle" onClick={() => onChange(items.filter(value => value !== item))}>Quitar {sourceTitle(item)}</button>
+  }, [api, query, offset]);
+  const results = page?.data?.sources.filter(item => isAdditionalSource(item, baseId));
+  function navigate(nextQuery, nextOffset) {
+    setPage(null); setQuery(nextQuery); setOffset(nextOffset);
+  }
+  return <dialog id={id} ref={dialogRef} className={studio.referenceDialog} aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`}>
+    <header className={studio.dialogHeader}>
+      <h3 ref={dialogHeading} id={`${id}-title`} tabIndex={-1} data-dialog-initial-focus>Referencias opcionales: biblioteca y productos</h3>
+      <p id={`${id}-description`} className={styles.help}>Elige hasta {limit} fotos locales adicionales. Se añaden al aplicar; no se descargan enlaces externos.</p>
+    </header>
+    <div className={studio.dialogBody}>
+      <label className="field">Buscar fotos de referencia<input type="search" value={query} maxLength={100} onChange={event => navigate(event.target.value, 0)}/></label>
+      {visible.length > 0 && <ul role="list" className={studio.referenceSelection} aria-label="Selección provisional">{visible.map(item => <li key={sourceId(item)}>
+        <span>{sourceTitle(item)}</span>
+        <button type="button" className="button subtle" aria-label={`Quitar ${sourceTitle(item)}`} onClick={() => {
+          dialogHeading.current?.focus({ preventScroll: true });
+          setDraft(draft.filter(value => value !== item));
+        }}>Quitar</button>
+      </li>)}</ul>}
+      {!page && <p role="status">Buscando fotos de referencia…</p>}
+      {page?.error && <p role="alert">{page.error}</p>}
+      {results?.length === 0 && <p role="status">No hay fotos de referencia en esta página.</p>}
+      {results?.length > 0 && <ul role="list" className={studio.referenceResults} aria-label="Fotos de referencia disponibles">{results.map(item => {
+        const picked = visible.find(value => sourceId(value) === sourceId(item)), sameVersion = picked?.version === item.version;
+        return <li key={sourceId(item)}><label className={studio.referenceOption}>
+          <input type="checkbox" checked={sameVersion} disabled={!picked && visible.length >= limit}
+            onChange={() => setDraft(sameVersion ? draft.filter(value => value !== picked) : [...draft.filter(value => value !== picked), item])}/>
+          <img src={item.thumbnailUrl} alt="" width={56} height={56} className={studio.thumbnail}/><span>{sourceTitle(item)}</span>
+        </label></li>;
+      })}</ul>}
+      <div className={styles.actions}>
+        <button type="button" className="button subtle" disabled={!offset} onClick={() => navigate(query, Math.max(0, offset - PAGE_SIZE))}>Fuentes anteriores</button>
+        <button type="button" className="button subtle" disabled={!page?.data?.hasMore} onClick={() => navigate(query, page.data.nextOffset)}>Más fuentes</button>
+      </div>
+    </div>
+    <footer className={studio.dialogFooter}>
+      <p role="status" className={styles.help}>{visible.length} de {limit} fotos seleccionadas.</p>
+      <div className={studio.dialogActions}>
+        <button type="button" className="button subtle" onClick={close}>Cancelar</button>
+        <button type="button" className="button primary" disabled={visible.length > limit} onClick={() => onApply(draft)}>Aplicar referencias</button>
+      </div>
+    </footer>
+  </dialog>;
+}
+
+function ReferencePicker({ api, baseId, items, onChange }) {
+  const [open, setOpen] = useState(false), id = useId();
+  const visible = items.filter(item => isAdditionalSource(item, baseId));
+  function apply(draft) {
+    const unchanged = draft.length === items.length && draft.every(item => items.some(value => sourceId(value) === sourceId(item) && value.version === item.version));
+    if (!unchanged) onChange(draft);
+    setOpen(false);
+  }
+  return <div className={studio.references}>
+    <div className={studio.referenceAccess}>
+      <button type="button" className="button subtle" aria-haspopup="dialog" aria-controls={open ? id : undefined} aria-expanded={open} onClick={event => {
+        event.currentTarget.focus({ preventScroll: true }); setOpen(true);
+      }}>Referencias opcionales: biblioteca y productos</button>
+      <p className={styles.help}>{visible.length ? `${visible.length} de ${baseId ? 3 : 4} fotos añadidas` : 'Sin fotos adicionales'}</p>
+    </div>
+    {visible.length > 0 && <ul role="list" className={studio.appliedReferences} aria-label="Fotos seleccionadas para el envío">{visible.map(item => <li key={sourceId(item)}>
+      <img src={item.thumbnailUrl} alt="" width={48} height={48} className={studio.thumbnail}/><span>{sourceTitle(item)}</span>
     </li>)}</ul>}
-    <div className={styles.summaryGrid}>{page?.data?.sources.filter(item => item.kind !== 'asset' || item.id !== base?.id).map(item => {
-      const picked = visible.find(value => sourceId(value) === sourceId(item)), sameVersion = picked?.version === item.version;
-      return <label className={styles.checkRow} key={sourceId(item)}><input type="checkbox" checked={sameVersion} disabled={!picked && visible.length >= limit}
-        onChange={() => onChange(sameVersion ? items.filter(value => value !== picked) : [...items.filter(value => value !== picked), item])}/>
-        <img src={item.thumbnailUrl} alt="" width={64} height={64} className={styles.previewImage}/><span>{sourceTitle(item)}</span></label>;
-    })}</div>
-    <div className={styles.actions}><button type="button" className="button subtle" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Fuentes anteriores</button>
-      <button type="button" className="button subtle" disabled={!page?.data?.hasMore} onClick={() => setOffset(page.data.nextOffset)}>Más fuentes</button></div>
-  </details>;
+    {open && <ReferenceDialog api={api} baseId={baseId} items={items} id={id} onApply={apply} onClose={() => setOpen(false)}/>}
+  </div>;
 }
 
 export default function AdvertisingGeneration({ api, campaignId = null, campaignVersion = null, threadId = null, baseAsset = null, assets = [],
@@ -161,6 +215,7 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
   const [consent, setConsent] = useState(null), [failedPreview, setFailedPreview] = useState(null), [sources, setSources] = useState([]);
   const request = useRef(null), writer = useRef(false), creation = useRef(null), creationId = useRef(null), currentThread = useRef(null), olderLoaded = useRef(false);
   const mounted = useRef(false), callbacks = useRef(null), errorRef = useRef(null), composerRef = useRef(null), studioRef = useRef(null), headingRef = useRef(null), previewHeading = useRef(null), id = useId();
+  const transcriptRef = useRef(null), chatHeadingRef = useRef(null);
   callbacks.current = { onThreadCreated, onInteractionStateChange };
   const activeThreadId = threadId || thread?.id;
   const linked = thread?.campaignId && thread.campaignId !== campaignId ? thread.campaignId : null;
@@ -172,12 +227,13 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
   const base = editable(focusedAsset) ? focusedAsset : null, baseId = base?.id ?? null;
   const original = variants.get(turns.find(turn => turn.asset?.id === focusedAsset?.id)?.baseAssetId);
   const pending = turns.some(isPending) || thread?.attachments?.some(pendingAsset);
+  const latestTurn = turns[0];
   const scopeReady = !loading && !readError && !linked;
   const briefKey = JSON.stringify([campaignId, campaignVersion, baseId, base?.version, briefRefresh]);
   const context = review?.key === briefKey ? review.data : null;
   const briefMatches = context?.campaignId === campaignId && context?.campaignVersion === campaignVersion &&
     (context.baseAsset?.id ?? null) === baseId && (!base || context.baseAsset.version === base.version && (base.state !== 'ready' || context.baseAsset.sha256 === base.sha256));
-  const selectedSources = sources.filter(source => source.kind !== 'asset' || source.id !== baseId);
+  const selectedSources = sources.filter(source => isAdditionalSource(source, baseId));
   const requestedFormat = base ? 'png' : format, gifMs = frames * duration;
   const validFormat = requestedFormat !== 'gif' || (Number.isInteger(Number(frames)) && frames >= 2 && frames <= 16 && duration >= 20 && duration <= 2000 && duration % 10 === 0 && gifMs >= 3000 && gifMs <= 32000);
   const canConsent = scopeReady && allowGeneration && availability?.available && !contextDirty && briefMatches && failedPreview !== briefKey && (!focusedAsset || base) &&
@@ -202,6 +258,10 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
     callbacks.current.onInteractionStateChange?.(active ? { dirty, busy: locked } : { dirty: false, busy: false });
   }, [active, dirty, locked]);
   useEffect(() => { if (active && error) errorRef.current?.focus(); }, [active, error]);
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (active && transcript) transcript.scrollTop = transcript.scrollHeight;
+  }, [active, latestTurn?.id]);
   useEffect(() => {
     if (!active) return;
     // Let the enclosing workspace finish the route's focus handoff first.
@@ -339,97 +399,105 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
   function refreshBrief() { setConsent(null); setBriefRefresh(value => value + 1); }
   const refreshAll = () => { setRefresh(value => value + 1); refreshBrief(); };
   const library = assets.filter(asset => asset.state === 'ready' || editable(asset));
-  return <section ref={studioRef} className={styles.studio} hidden={!active} aria-label="Estudio visual" aria-busy={loading}>
-    <div className={styles.stack}>
-      <header className={styles.heading}><div><p className={styles.eyebrow}>Preparar la imagen o video</p><h2 ref={headingRef} tabIndex={-1}>Estudio visual</h2><p>Tu conversación es privada. Usa un archivo o crea una imagen.</p></div>
-        {onExit && <button type="button" className="text-button" disabled={locked} onClick={onExit}>Volver a publicaciones</button>}
-      </header>
-      {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}
-      {readError && <div role="alert" className={styles.error}><p>{readError}</p><button type="button" className="button subtle" onClick={refreshAll}>Volver a cargar el estudio</button></div>}
-    </div>
+  const brief = briefMatches && !contextDirty && <BriefDetails key={briefKey} context={context} baseName={base?.name} onPreviewError={() => setFailedPreview(briefKey)}/>;
+  return <section ref={studioRef} className={studio.root} hidden={!active} aria-label="Estudio visual" aria-busy={loading}>
+    <header className={styles.heading}>
+      <div><p className={styles.eyebrow}>Preparar la imagen o video</p><h2 ref={headingRef} tabIndex={-1}>Estudio visual</h2></div>
+      {onExit && <button type="button" className="text-button" disabled={locked} onClick={onExit}>Volver a publicaciones</button>}
+    </header>
+    {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}
+    {readError && <div role="alert" className={styles.error}><p>{readError}</p><button type="button" className="button subtle" onClick={refreshAll}>Volver a cargar el estudio</button></div>}
     {linked ? <div className={styles.notice}><p>Esta pieza ya tiene un borrador.</p><button type="button" className="button primary" onClick={() => onOpenCampaign?.(linked)}>Continuar borrador</button></div> : <>
-      <section className={`${styles.card} ${styles.stack}`} aria-label="Añadir una pieza">
-        <h3>Usar un archivo que ya tienes</h3>
-        <div className={styles.actions}>
-          <button type="button" className="button subtle" disabled={locked || !scopeReady} aria-expanded={choice === 'upload'} onClick={() => setChoice(value => value === 'upload' ? null : 'upload')}>Adjuntar foto o video</button>
-          <button type="button" className="button subtle" disabled={locked || !scopeReady} aria-expanded={choice === 'library'} onClick={() => setChoice(value => value === 'library' ? null : 'library')}>Elegir de biblioteca</button>
+      <section className={studio.fileAccess} aria-label="Añadir una pieza">
+        <div className={studio.fileBar}>
+          <h3>Usar un archivo que ya tienes</h3>
+          <div className={studio.fileActions}>
+            <button type="button" className="button subtle" disabled={locked || !scopeReady} aria-expanded={choice === 'upload'} aria-controls={choice === 'upload' ? `${id}-file-options` : undefined} onClick={() => setChoice(value => value === 'upload' ? null : 'upload')}>Adjuntar foto o video</button>
+            <button type="button" className="button subtle" disabled={locked || !scopeReady} aria-expanded={choice === 'library'} aria-controls={choice === 'library' ? `${id}-file-options` : undefined} onClick={() => setChoice(value => value === 'library' ? null : 'library')}>Elegir de biblioteca</button>
+            {onSkip && <button type="button" className="text-button" disabled={locked || !scopeReady} onClick={onSkip}>Definir primero, sin imagen aún</button>}
+          </div>
         </div>
-        {onSkip && <button type="button" className="text-button" disabled={locked || !scopeReady} onClick={onSkip}>Definir primero, sin imagen aún</button>}
-        {choice === 'upload' && <AdvertisingAssetUpload api={api} onBeforeUpload={ensureThread} onAssetReserved={reserveAttachment} onAsset={() => setRefresh(value => value + 1)}
-          onMutation={onMutation} onInteractionStateChange={setUploadState} disabled={busy || !scopeReady}/>}
-        {choice === 'library' && <label className="field">Archivo de biblioteca<select value="" disabled={locked || !scopeReady} onChange={event => {
-          const asset = library.find(item => item.id === event.target.value);
-          if (asset) void attach('attach', asset);
-        }}><option value="">Selecciona una imagen o video</option>{library.map(asset => <option key={asset.id} value={asset.id}>{asset.name} · {asset.kind === 'video' ? 'Video' : 'Imagen'}{asset.state !== 'ready' ? ' · Solo para ajustar' : ''}</option>)}</select></label>}
-        {choice === 'library' && !library.length && <p className={styles.help}>Todavía no hay archivos disponibles. Puedes adjuntar uno aquí{onSkip ? ' o continuar sin imagen' : ''}.</p>}
+        {choice && <div id={`${id}-file-options`} className={studio.fileOptions}>
+          {choice === 'upload' ? <AdvertisingAssetUpload api={api} onBeforeUpload={ensureThread} onAssetReserved={reserveAttachment} onAsset={() => setRefresh(value => value + 1)}
+            onMutation={onMutation} onInteractionStateChange={setUploadState} disabled={busy || !scopeReady}/>
+            : <label className="field">Archivo de biblioteca<select value="" disabled={locked || !scopeReady} onChange={event => {
+              const asset = library.find(item => item.id === event.target.value);
+              if (asset) void attach('attach', asset);
+            }}><option value="">Selecciona una imagen o video</option>{library.map(asset => <option key={asset.id} value={asset.id}>{asset.name} · {asset.kind === 'video' ? 'Video' : 'Imagen'}{asset.state !== 'ready' ? ' · Solo para ajustar' : ''}</option>)}</select></label>}
+          {choice === 'library' && !library.length && <p className={styles.help}>Todavía no hay archivos disponibles. Puedes adjuntar uno aquí{onSkip ? ' o continuar sin imagen' : ''}.</p>}
+        </div>}
       </section>
-      <section className={`${styles.studioPreview} ${styles.card} ${styles.stack}`} aria-labelledby={`${id}-preview`}>
-        <h3 id={`${id}-preview`} ref={previewHeading} tabIndex={-1}>Tu pieza</h3>
-        {thread?.selectionChanged && <p className={styles.warning}>La pieza seleccionada cambió. Vuelve a revisar la versión actual.</p>}
-        <StudioPreview key={`${focusedAsset?.id}:${focusedAsset?.version}`} asset={focusedAsset} original={original} disabled={locked || !scopeReady}
-          onUse={onUseAsset && (asset => void attach('select', asset))} publishable={!allowPublishAsset || Boolean(focusedAsset && allowPublishAsset(focusedAsset))}
-          onFresh={allowGeneration && focusedAsset ? () => inspect(false) : null}/>
-        {variants.size > 0 && <details className={styles.technicalDetails} open={variants.size < 4}><summary>Original y variantes ({variants.size})</summary>
-          <ul className={styles.choiceList}>{[...variants.values()].map((asset, index) => <li key={asset.id}>
-            <button type="button" className="button subtle" aria-pressed={focusedAsset?.id === asset.id} disabled={locked} onClick={() => inspect(asset.id, true)}>
-              {index === 0 ? 'Original' : `Variante ${index}`} · {asset.name}{asset.state !== 'ready' && editable(asset) ? ' · Solo para ajustar' : ''}
-            </button>
-          </li>)}</ul>
-        </details>}
-      </section>
-      <div className={styles.studioChat}>
-        {allowGeneration && <section className={`${styles.card} ${styles.stack}`} aria-label="Compositor">
-          <h3>{base ? 'Ajustar una imagen' : 'Crear una imagen'}</h3>
-          {!availability && <p role="status">Comprobando disponibilidad de imágenes…</p>}
-          {availability && !availability.available && <p className={styles.warning}>{availability.reason} Puedes usar un archivo propio o continuar sin imagen.</p>}
+      <div className={studio.columns}>
+        <section className={studio.chat} aria-labelledby={`${id}-chat`}>
+          <header className={studio.chatTop}>
+            <h3 id={`${id}-chat`} ref={chatHeadingRef} tabIndex={-1}>Chat creativo</h3>
+            <p className={styles.help}>Tu conversación es privada. Nada se publica desde aquí.</p>
+          </header>
+          <div className={studio.history}>
+            {loading && <p role="status">Cargando tu conversación…</p>}
+            {!turns.length && !loading && <p className={studio.emptyThread}>{allowGeneration && availability?.available ? 'Aún no hay mensajes. Escribe una idea abajo para empezar.' : 'Todavía no hay mensajes en esta conversación.'}</p>}
+            {cursor && <button type="button" className="button subtle" disabled={olderBusy} onClick={readOlder}>Cargar turnos anteriores</button>}
+            {turns.length > 0 && <ol role="list" ref={transcriptRef} className={studio.turns} tabIndex={0} aria-label="Turnos del chat">{turns.toReversed().map(turn => <li key={turn.id}>
+              <div className={studio.userMessage}><strong>Tú</strong><p>{turn.prompt}</p></div>
+              <div className={studio.turnStatus}><strong>{jobStatus(turn)}</strong>
+                {(turn.asset?.diagnostic?.message || turn.notice) && <p>{turn.asset?.diagnostic?.message || turn.notice}</p>}
+                {turn.asset && <button type="button" className="button subtle" disabled={locked} onClick={() => inspect(turn.asset.id, true)}>Ver {turn.asset.state === 'ready' ? 'variante' : 'archivo'} · {turn.asset.name}</button>}
+              </div>
+            </li>)}</ol>}
+            <span className={styles.visuallyHidden} role="status">{latestTurn ? `Último turno: ${jobStatus(latestTurn)}` : ''}</span>
+            {notice && <p className={styles.notice} role="status">{notice}</p>}
+            {pending && <button type="button" className="button subtle" onClick={refreshAll}>Actualizar progreso</button>}
+          </div>
+          {allowGeneration && <section className={studio.composer} aria-label="Compositor">
+            <h4>{base ? 'Ajustar una imagen' : 'Crear una imagen'}</h4>
+            {!availability && <p role="status">Comprobando disponibilidad de imágenes…</p>}
+            {availability && !availability.available && <p className={styles.warning}>{availability.reason}</p>}
             {contextDirty && <p>Hay cambios sin guardar. <button type="button" className="button subtle" disabled={locked} onClick={() => void task(async () => { if (await onRefreshContext?.()) refreshBrief(); })}>Guardar borrador y volver a revisar</button></p>}
             {focusedAsset && !base && <p className={styles.warning}>Este archivo no admite ajustes por indicaciones. Puedes usarlo si está listo o elegir otra foto fija.</p>}
             {!contextDirty && review?.key === briefKey && review.error && <p role="alert">{review.error} <button type="button" className="button subtle" onClick={refreshBrief}>Volver a revisar los datos</button></p>}
             {context && !briefMatches && <p role="alert">Cambió el borrador o el archivo. <button type="button" className="button subtle" onClick={refreshAll}>Volver a revisar</button></p>}
             {failedPreview === briefKey && <p role="alert">No se pudo ver una foto de referencia. <button type="button" className="button subtle" onClick={refreshBrief}>Volver a comprobar</button></p>}
-            {briefMatches && !contextDirty && <BriefDetails key={briefKey} context={context} baseName={base?.name} onPreviewError={() => setFailedPreview(briefKey)}/>}
-          {availability?.available && <>
-            <fieldset disabled={locked || !scopeReady} className={styles.connectionFieldset}>
-              <legend>{base ? 'Indica qué quieres cambiar' : 'Cuéntanos qué quieres ver'}</legend>
-              {!base && <details className={styles.technicalDetails}><summary>Opciones de formato</summary>
-                <label className="field">Formato<select value={format} onChange={event => change(setFormat, event.target.value)}><option value="png">Imagen PNG cuadrada</option><option value="gif">GIF animado vertical</option></select></label>
-                {format === 'gif' && <div className={styles.fieldGrid}>
-                  <label className="field">Fotogramas (2–16)<input type="number" min={2} max={16} value={frames} onChange={event => change(setFrames, event.target.value)}/></label>
-                  <label className="field">Milisegundos por fotograma<input type="number" min={20} max={2000} step={10} value={duration} onChange={event => change(setDuration, event.target.value)}/></label>
-                  <p className={styles.help}>Duración: {(gifMs / 1000).toFixed(2)} segundos. Debe estar entre 3 y 32 segundos. Se conserva el GIF y se prepara un MP4 vertical.</p>
-                </div>}
-              </details>}
-              {!campaignId && <ReferencePicker api={api} base={base} items={sources} onChange={value => change(setSources, value)}/>}
-              <div className={styles.actions} aria-label="Ejemplos de indicaciones">{(base ? EXAMPLES.slice(-1) : EXAMPLES.slice(0, 2)).map(example => <button type="button" className="button subtle" key={example} onClick={() => {
-                setPrompt(example); composerRef.current?.focus();
-              }}>{example}</button>)}</div>
-              <div className={styles.studioComposer}>
+            {availability?.available ? <fieldset disabled={locked || !scopeReady} className={styles.connectionFieldset}>
+              <legend className={styles.visuallyHidden}>{base ? 'Indica qué quieres cambiar' : 'Cuéntanos qué quieres ver'}</legend>
+              <div className={studio.composerFields}>
                 <label htmlFor={`${id}-prompt`} className="field">{base ? '¿Qué quieres ajustar?' : 'Describe tu idea'}</label>
-                <textarea id={`${id}-prompt`} ref={composerRef} rows={3} maxLength={4000} value={prompt} aria-describedby={`${id}-consent`} onChange={event => setPrompt(event.target.value)}
+                <textarea className={studio.prompt} id={`${id}-prompt`} ref={composerRef} rows={3} maxLength={4000} value={prompt} aria-describedby={`${id}-consent`} onChange={event => setPrompt(event.target.value)}
                   onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && checked) { event.preventDefault(); void submit(); } }}/>
+                <div className={studio.examples} role="group" aria-label="Ejemplos de indicaciones">{(base ? EXAMPLES.slice(-1) : EXAMPLES.slice(0, 2)).map(example => <button type="button" className="button subtle" key={example} onClick={() => {
+                  setPrompt(example); composerRef.current?.focus();
+                }}>{example}</button>)}</div>
+                {!base && <details className={styles.technicalDetails}><summary>Opciones de formato</summary>
+                  <label className="field">Formato<select value={format} onChange={event => change(setFormat, event.target.value)}><option value="png">Imagen PNG cuadrada</option><option value="gif">GIF animado vertical</option></select></label>
+                  {format === 'gif' && <div className={styles.fieldGrid}>
+                    <label className="field">Fotogramas (2–16)<input type="number" min={2} max={16} value={frames} onChange={event => change(setFrames, event.target.value)}/></label>
+                    <label className="field">Milisegundos por fotograma<input type="number" min={20} max={2000} step={10} value={duration} onChange={event => change(setDuration, event.target.value)}/></label>
+                    <p className={styles.help}>Duración: {(gifMs / 1000).toFixed(2)} segundos. Debe estar entre 3 y 32 segundos. Se conserva el GIF y se prepara un MP4 vertical.</p>
+                  </div>}
+                </details>}
+                {!campaignId && active && <ReferencePicker api={api} baseId={baseId} items={sources} onChange={value => change(setSources, value)}/>}
+                {brief}
                 <label id={`${id}-consent`} className={styles.checkRow}><input type="checkbox" disabled={!canConsent} checked={checked} onChange={event => setConsent(event.target.checked ? payloadKey : null)}/>
                   <span>Autorizo el envío a <strong>OpenAI</strong> de mis indicaciones, los datos y las fotos mostradas, con un posible cargo variable sin tope garantizado. No contienen datos de clientes ni información personal. Revisaré el resultado y los derechos. Nada se publica automáticamente.</span>
                 </label>
-                {availability.available && !checked && <p className={styles.help}>{!prompt.trim() ? 'Escribe una idea o usa un ejemplo para empezar.' : !validFormat ? 'Corrige la duración y los fotogramas en Opciones de formato.' : canConsent ? 'Revisa lo que se enviará antes de marcar la autorización.' : 'Aún no se puede autorizar. Revisa los datos y los avisos de esta imagen.'}</p>}
+                {!checked && <p className={styles.help}>{!prompt.trim() ? 'Escribe una idea o usa un ejemplo para empezar.' : !validFormat ? 'Corrige la duración y los fotogramas en Opciones de formato.' : canConsent ? 'Revisa lo que se enviará antes de marcar la autorización.' : 'Aún no se puede autorizar. Revisa los datos y los avisos de esta imagen.'}</p>}
                 <button type="button" className="button primary" disabled={!checked || locked} onClick={submit}>{busy ? 'Registrando turno…' : base ? 'Enviar ajuste' : 'Enviar idea'}</button>
               </div>
-            </fieldset>
-          </>}
-        </section>}
-        {notice && <p className={styles.notice} role="status">{notice}</p>}
-        <section className={`${styles.card} ${styles.stack}`} aria-label="Chat creativo">
-          <h3>Chat creativo</h3>
-          {loading && <p role="status">Cargando tu conversación…</p>}
-          {!turns.length && !loading && <p className={styles.help}>Describe una idea, adjunta una foto o elige una pieza de biblioteca. Las fotos originales se conservan.</p>}
-          {cursor && <button type="button" className="button subtle" disabled={olderBusy} onClick={readOlder}>Cargar turnos anteriores</button>}
-          {turns.length > 0 && <ol className={styles.studioTurns}>{turns.toReversed().map(turn => <li key={turn.id}>
-            <div><strong>Tú</strong><p>{turn.prompt}</p></div>
-            <div><strong>{jobStatus(turn)}</strong><p>{turn.asset?.diagnostic?.message || turn.notice}</p>
-              {turn.asset && <button type="button" className="button subtle" disabled={locked} onClick={() => inspect(turn.asset.id, true)}>Ver {turn.asset.state === 'ready' ? 'variante' : 'archivo'} · {turn.asset.name}</button>}
-            </div>
-          </li>)}</ol>}
-          <span className={styles.visuallyHidden} role="status">{turns[0] ? `Último turno: ${jobStatus(turns[0])}` : ''}</span>
-          {pending && <button type="button" className="button subtle" onClick={refreshAll}>Actualizar progreso</button>}
+            </fieldset> : brief}
+          </section>}
+        </section>
+        <section className={`${studio.preview} ${styles.card} ${styles.stack}`} aria-labelledby={`${id}-preview`}>
+          <header><h3 id={`${id}-preview`} ref={previewHeading} tabIndex={-1}>Tu pieza</h3><p className={styles.help}>Vista previa y variantes</p></header>
+          {thread?.selectionChanged && <p className={styles.warning}>La pieza seleccionada cambió. Vuelve a revisar la versión actual.</p>}
+          <StudioPreview key={`${focusedAsset?.id}:${focusedAsset?.version}`} asset={focusedAsset} original={original} disabled={locked || !scopeReady}
+            onUse={onUseAsset && (asset => void attach('select', asset))} publishable={!allowPublishAsset || Boolean(focusedAsset && allowPublishAsset(focusedAsset))}
+            onFresh={allowGeneration && focusedAsset ? () => { inspect(false); (composerRef.current || chatHeadingRef.current)?.focus(); } : null}/>
+          {variants.size > 0 && <details className={styles.technicalDetails} open={variants.size < 4}><summary>Original y variantes ({variants.size})</summary>
+            <ul className={styles.choiceList}>{[...variants.values()].map((asset, index) => <li key={asset.id}>
+              <button type="button" className="button subtle" aria-pressed={focusedAsset?.id === asset.id} disabled={locked} onClick={() => inspect(asset.id, true)}>
+                {index === 0 ? 'Original' : `Variante ${index}`} · {asset.name}{asset.state !== 'ready' && editable(asset) ? ' · Solo para ajustar' : ''}
+              </button>
+            </li>)}</ul>
+          </details>}
         </section>
       </div>
     </>}
