@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Field } from './Fields';
 import { useAssistantForm } from './AssistantBridge.jsx';
 import { socialPlacementMatches, unsupportedSocialDisclosure } from '../lib/social/piece-compatibility.mjs';
+import { selectSocialEconomicForecast } from '../lib/business/social-economics.mjs';
+import { InvestmentEstimate } from './AdvertisingEconomics';
 import AdvertisingGeneration from './AdvertisingGeneration';
 import AdvertisingOfferPicker, { offerLabel, OfferSummary, readAdvertisingOffer } from './AdvertisingOfferPicker';
 import AdvertisingSelectionDialog from './AdvertisingSelectionDialog';
@@ -129,12 +131,12 @@ function Configuration({ spec, connection, asset }) {
     ]}/></details>
   </div>;
 }
-function Forecast({ forecast }) {
+function Forecast({ forecast, includeManual = true }) {
   const audience = forecast?.audienceEstimate, ranges = Object.entries(forecast?.metricRanges || {}), manual = forecast?.manualScenario;
   return <div className={styles.stack}>
     <section className={styles.card}><h3>1. Audiencia potencial de Meta</h3><p>{audience?.status === 'reported' ? `${number(audience.lower)}–${number(audience.upper)}` : audience?.reason || 'Aún no se ha consultado una estimación para esta configuración.'}</p>{audience && <Values rows={[["Definición", audience.label || audience.definition], ['Horizonte informado por Meta', textValue(audience.horizon)], ['Fuente', audience.source], ['Consultado', date(audience.fetchedAt)], ['Versión', audience.apiVersion || audience.adapterVersion || 'No informada']]}/>}<p className={styles.help}>Tamaño potencial, alcance diario y entrega son conceptos distintos. No es alcance comprado ni una predicción de ventas.</p></section>
     <section className={styles.card}><h3>2. Rango histórico comparable</h3><p className={styles.help}>Mitad central de los resultados comparables; no es una probabilidad de éxito. La mediana es el valor central de esas muestras.</p>{ranges.length ? <div className={styles.tableWrap} role="region" aria-label="Rangos históricos comparables" tabIndex={0}><table className={styles.table}><caption>Resultados comparables, por métrica y red</caption><thead><tr><th scope="col">Métrica</th><th scope="col">Rango habitual (25 %–75 %)</th><th scope="col">Mediana (valor central)</th><th scope="col">Muestras</th></tr></thead><tbody>{ranges.map(([key, range]) => <tr key={key}><th scope="row">{METRICS[range.metric] || key} · {range.channel}</th><td>{number(range.lower)}–{number(range.upper)}</td><td>{number(range.median)}</td><td>{range.sampleCount}</td></tr>)}</tbody></table></div> : <p>Datos insuficientes: se necesitan al menos cinco publicaciones finalizadas comparables con cobertura, precisión y definición compatibles. No se inventa un rendimiento inicial.</p>}{forecast && <><p>{forecast.sampleCount ?? 0} publicaciones comparables utilizadas · {forecast.algorithmVersion} · {date(forecast.generatedAt)}</p>{forecast.unavailableReasons?.length > 0 && <details><summary>Datos faltantes por métrica</summary><ul>{forecast.unavailableReasons.map((item, i) => <li key={i}>{typeof item === 'string' ? item : `${item.metric}: ${item.sampleCount ?? 0} muestras; ${item.reason}`}</li>)}</ul></details>}<ul>{(forecast.assumptions || []).map(value => <li key={value}>{value}</li>)}</ul></>}</section>
-    <section className={styles.card}><h3>3. Mi propia hipótesis</h3>{manual ? <><p>{METRICS[manual.metric?.split('.').at(-1)] || manual.metric}: {number(manual.lower)}–{number(manual.upper)}</p><p>{manual.basis}</p></> : <p>No se declaró una hipótesis manual.</p>}<p className={styles.help}>Hipótesis del usuario, no predicción del sistema, entrenamiento ni análisis visual de la imagen o video. No se inventa una mediana para este rango.</p></section>
+    {includeManual && <section className={styles.card}><h3>3. Mi propia hipótesis</h3>{manual ? <><p>{METRICS[manual.metric?.split('.').at(-1)] || manual.metric}: {number(manual.lower)}–{number(manual.upper)}</p><p>{manual.basis}</p></> : <p>No se declaró una hipótesis manual.</p>}<p className={styles.help}>Hipótesis del usuario, no predicción del sistema, entrenamiento ni análisis visual de la imagen o video. No se inventa una mediana para este rango.</p></section>}
   </div>;
 }
 
@@ -210,6 +212,7 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
   const validation = campaign?.validation, warningList = validation?.warnings || [];
   const hasCurrentForecast = Boolean(forecast?.id && !formDirty);
   const spec = frozen ? approved?.spec || campaign : { ...form, audienceMode: formDirty ? undefined : campaign?.audienceMode, integrationMethod: connection?.integrationMethod, currency: connection?.currency, timeZone: form.mode === 'paid' ? connection?.timeZone : 'America/Bogota' };
+  const economicForecast = selectSocialEconomicForecast(campaign, { draftEdited: formDirty });
   const hold = campaign?.restore_hold || campaign?.restoreHold;
   const withoutDeliveries = campaign?.mode === 'organic' && !campaign.deliveries?.length;
   const awaitingPublication = withoutDeliveries && campaign.state === 'ready' && Boolean(approved);
@@ -810,6 +813,10 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
       </footer>
     </form>}
 
+    {!frozen && step === 1 && form.mode === 'paid' && <InvestmentEstimate title="Antes de invertir" spec={spec}
+      budget={!invalid.budgetMinor && form.budgetMinor > 0 ? form.budgetMinor : null} currency={spec.currency}
+      source="Presupuesto del borrador" forecast={economicForecast}/>}
+
     {!frozen && form.mode === 'paid' && form.marketCountries.length > 0 && step === 0 && audienceMode === 'manual' && <section className={styles.panel}><h3>Búsqueda oficial de audiencia</h3>
       {connection?.integrationMethod === 'browser' && <p>Primero prepara un borrador privado en Meta; la búsqueda no usa Graph API ni publica.</p>}
       <form method="post" onSubmit={searchAudience} className={styles.stack}><fieldset disabled={formLocked || !connection}><legend>Búsqueda oficial</legend><div className={styles.fieldGrid}><label className="field">Tipo<select name="kind" value={searchKind} onChange={event => { setSearchKind(event.target.value); setCandidates([]); }}><option value="location">Región o ciudad</option><option value="interest">Interés</option></select></label><label className="field">Buscar por nombre<input name="q" type="search" maxLength={100} minLength={2} value={search} onChange={event => setSearch(event.target.value)}/></label></div><button type="submit" className="button subtle" disabled={search.trim().length < 2 || connection?.integrationMethod === 'browser' && !campaign?.preflight?.remoteDraftRef}>Buscar candidatos verificados</button></fieldset></form>
@@ -848,7 +855,9 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
           <button type="submit" className={hasCurrentForecast ? 'button subtle' : 'button primary'} disabled={!form.name.trim()}>{hasCurrentForecast ? 'Actualizar estimación' : 'Guardar y obtener estimación'}</button>
         </fieldset>
       </form>
-      <Forecast forecast={formDirty ? null : forecast}/>
+      {form.mode === 'paid'
+        ? <details className={styles.technicalDetails}><summary>Audiencia potencial y demás métricas de la estimación</summary><Forecast forecast={economicForecast} includeManual={false}/></details>
+        : <Forecast forecast={formDirty ? null : forecast}/>}
       {hasCurrentForecast && <section className={styles.panel}><h3>Decide si lo apruebas</h3>
         {!canWriteConnection && <p className={styles.warning}>Aprobación no disponible: selecciona una conexión activa con capacidades de publicación acreditadas. Un token manual es de solo lectura.</p>}
         {form.mode === 'paid' && publicationSettingsIssue && <div className={styles.warning}><p>{publicationSettingsIssue}</p><button type="button" className="button subtle" onClick={() => goToConnection(null)}>Abrir opciones de Meta en Redes sociales</button></div>}
@@ -865,7 +874,10 @@ function CampaignEditor({ api, campaignId = null, connections = [], requirements
       </section>}
     </section>}
 
-    {frozen && <section className={styles.panel}><h3>Configuración aprobada · Solo lectura</h3><p>Versión aprobada {approved?.revision}. El método y esta revisión no se editan.</p><OfferSummary item={approved?.offerSnapshot?.primary}/><OfferSummary item={approved?.offerSnapshot?.gift} gift/><Configuration spec={spec} connection={campaign.connection} asset={campaign.asset}/><AssetPreview key={campaign.asset?.id || 'none'} asset={campaign.asset} historical/><details><summary>Estimación conservada al aprobar</summary><Forecast forecast={approved?.forecast}/></details></section>}
+    {frozen && <section className={styles.panel}><h3>Configuración aprobada · Solo lectura</h3><p>Versión aprobada {approved?.revision}. El método y esta revisión no se editan.</p><OfferSummary item={approved?.offerSnapshot?.primary}/><OfferSummary item={approved?.offerSnapshot?.gift} gift/><Configuration spec={spec} connection={campaign.connection} asset={campaign.asset}/><AssetPreview key={campaign.asset?.id || 'none'} asset={campaign.asset} historical/><details><summary>Estimación conservada al aprobar</summary><Forecast forecast={approved?.forecast} includeManual={spec.mode !== 'paid'}/></details></section>}
+    {frozen && spec.mode === 'paid' && <InvestmentEstimate title="Antes de invertir" spec={spec} budget={spec.budgetMinor}
+      currency={spec.currency} source="Presupuesto aprobado" forecast={economicForecast}
+      alreadyRan={campaign.deliveries?.some(delivery => delivery.everActivated || delivery.activatedAt)}/>}
 
     {campaign && <section className={styles.panel}><h3>Administrar publicación</h3>
       {campaign.mode === 'paid' && campaign.state === 'ready' && <p className={styles.notice}>{connection?.integrationMethod === 'browser' ? 'Borrador privado de Meta sin entrega.' : 'Objetos preparados en pausa, sin gasto autorizado.'} Preparada no significa activa; falta autorización expresa.</p>}

@@ -380,3 +380,30 @@ test('removed advertising connection tab is not a settings alias',()=>{
  assert.equal(adminHref(input),'/admin?section=advertising');
  assert.equal(adminReturnTo('/admin?section=advertising&tab=connections'),'/admin?section=advertising');
 });
+
+test('Meta detail round trips exact saved identity and keeps return-list filters, page and login destination',()=>{
+ const connection='baed49c0-bc54-4a0b-9b5b-3817184d8f39',snapshot='7707dea2-b79e-4bca-8d48-c7450eab04b4';
+ const query=new URLSearchParams({section:'advertising',tab:'campaigns',source:'meta',account:'act_9007199254740993',
+  metaCampaign:'9007199254740995',connection:connection.toUpperCase(),snapshot,allAccounts:'1',allConnections:'1',page:'3',
+  record:'new',studio:connection,q:'local',mode:'paid',status:'draft',network:'instagram',from:'2026-11-01'});
+ assert.deepEqual(readAdminView(query),{...home,section:'advertising',tab:'campaigns',page:3,source:'meta',
+  account:'act_9007199254740993',metaCampaign:'9007199254740995',connection,snapshot,allAccounts:'1',allConnections:'1'});
+ const href=adminHref(query);
+ assert.equal(adminReturnTo(`/admin?${query}#ignored`),href);
+ assert.deepEqual(readAdminView(new URL(href,'https://admin.invalid').searchParams),readAdminView(query));
+ assert.deepEqual(readAdminView({section:'advertising',source:'meta',connection,page:2}),{...home,section:'advertising',source:'meta',connection,page:2});
+});
+
+test('Meta URL keys require their remote origin and the context needed to select an exact reading',()=>{
+ const id='7707dea2-b79e-4bca-8d48-c7450eab04b4';
+ const local={section:'advertising',tab:'campaigns',record:'new',studio:id};
+ const remote={source:'meta',connection:id,account:'act_501',metaCampaign:'701',snapshot:id,allAccounts:'1',allConnections:'1'};
+ assert.equal(adminHref({...remote,...local,source:null}),`/admin?section=advertising&tab=campaigns&record=new&studio=${id}`);
+ assert.equal(adminHref({...remote,section:'advertising',tab:'results',record:id}),`/admin?section=advertising&tab=results&record=${id}`);
+ assert.equal(adminHref({...remote,section:'products'}),'/admin?section=products');
+ const meta={section:'advertising',tab:'campaigns',...remote};
+ assert.equal(adminHref({...meta,account:'501'}),`/admin?section=advertising&tab=campaigns&source=meta&connection=${id}`);
+ assert.equal(adminHref({...meta,connection:'wrong'}),'/admin?section=advertising&tab=campaigns&source=meta&account=act_501&metaCampaign=701&allAccounts=1');
+ assert.equal(adminHref({...meta,metaCampaign:'1e4'}),`/admin?section=advertising&tab=campaigns&source=meta&account=act_501&connection=${id}`);
+ assert.equal(adminHref({...meta,allAccounts:'yes',allConnections:'true'}),`/admin?section=advertising&tab=campaigns&source=meta&account=act_501&connection=${id}&metaCampaign=701&snapshot=${id}`);
+});

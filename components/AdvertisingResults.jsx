@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { Field } from './Fields';
 import useDialog from './useDialog';
 import { useAssistantForm } from './AssistantBridge.jsx';
+import { selectSocialEconomicForecast } from '../lib/business/social-economics.mjs';
+import { CommercialSummary, EconomicRecommendation, InvestmentEstimate, MetaReportedPerformance, economicPeriod } from './AdvertisingEconomics';
 import styles from './AdvertisingWorkspace.module.css';
 import resultStyles from './AdvertisingResults.module.css';
 
@@ -24,7 +26,6 @@ const windows = { cumulative: 'Acumulado', recent: 'Período reciente', recent_3
 const metricHelp = { reach: 'Personas únicas según esta consulta de la red', impressions: 'Veces que se mostró; una persona puede verlo varias veces', linkClicks: 'Clics en el enlace; no visitas ni ventas confirmadas' };
 const RESULT_FILTERS = [['integrationMethod', 'Origen de los datos', { api: 'Conexión oficial de Meta (API)', browser: 'Acceso asistido por navegador' }], ['scope', 'Tipo de resultados', scopes], ['dimension', 'Ver por', dimensions]];
 const objectives = { reach: 'Llegar a más personas', engagement: 'Conseguir interacciones', traffic: 'Llevar personas al sitio web', whatsapp: 'Conseguir consultas por WhatsApp' };
-const primaryLabels = { reach: 'Personas alcanzadas', interactions: 'Interacciones', linkClicks: 'Clics al enlace', conversations: 'Conversaciones' };
 const conclusions = { improved: 'Mejoró según este criterio', not_improved: 'No mejoró según este criterio', inconclusive: 'No se puede concluir' };
 const comparisonStates = { below: 'Debajo del rango', within: 'Dentro del rango', above: 'Encima del rango', in_progress: 'En curso: avance, no evaluación final', not_comparable: 'No comparable' };
 const campaignState = campaign => campaign.state === 'ready' && campaign.mode === 'organic'
@@ -246,7 +247,6 @@ function BusinessPanel({ business, stale, onNavigate, links, onLink }) {
   if (!business) return null;
   const financialCurrent = !stale && business.coverage?.complete === true;
   const returnKnown = financialCurrent && business.metaSpend?.currency === 'COP' && business.metaSpend?.complete === true && business.metaSpend.valueMinor > 0 && business.declaredReturn?.complete === true && business.declaredReturn.value != null;
-  const contributionKnown = !stale && business.knownContribution?.complete === true && business.metaSpend?.complete === true && business.metaSpend.currency === 'COP' && business.contributionAfterAdvertising?.complete === true;
   return <section className={styles.panel}><h3>Pedidos y gastos vinculados</h3><p><strong>Origen declarado por el administrador · acumulado de pedidos vinculados al corte {date(business.asOf)}.</strong> Independiente del filtro de fechas de las métricas sociales y del fin del anuncio; incluye devoluciones y hechos posteriores reconocidos al corte.</p>
     <p>Revisión contable de esta lectura: {business.businessRevision ?? 'Sin dato'}. No prueba causalidad, atribución de Meta ni ventas producidas por la imagen o video.</p>
     {stale && <p className={styles.warning} role="status">La evaluación comercial está obsoleta o tiene vínculos/finanzas pendientes de recalcular. No tomar el retorno ni la recomendación financiera conservada como vigentes.</p>}
@@ -254,10 +254,10 @@ function BusinessPanel({ business, stale, onNavigate, links, onLink }) {
     <h4>Cuatro magnitudes independientes</h4><div className={styles.metricGrid}><BusinessAmount title="Presupuesto total autorizado" description="Total que autorizaste, no gasto ni pago realizado." value={business.budget} currency={business.budget?.currency}/><BusinessAmount title="Gasto acumulado reportado por Meta" description="Importe informado por la plataforma." value={business.metaSpend} currency={business.metaSpend?.currency}/><BusinessAmount title="Gastos publicitarios registrados y vinculados" description="Documentos registrados en Caja." value={business.registeredAdvertising} currency="COP"/><BusinessAmount title="Pagos de esos gastos" description="Dinero pagado de esos documentos." value={business.advertisingPayments} currency="COP"/></div>
     <p className={styles.help}>No se suman ni se descuentan juntos estos cuatro importes. Sincronizar no registra gastos ni pagos; un gasto compartido no se reparte automáticamente.</p>
     <p>Gasto Meta al {date(business.metaSpend?.asOf)}, capturado {date(business.metaSpend?.fetchedAt)} · {method(business.metaSpend?.integrationMethod)}.{business.metaSpend?.newerPartial ? ' Se conserva una lectura anterior: la más reciente es parcial.' : ''}</p>
-    <div className={styles.metricGrid}><BusinessAmount title="Ventas netas de producto reconocidas" value={business.recognizedProductSales} currency="COP"/><BusinessAmount title="Contribución conocida de los pedidos" value={business.knownContribution} currency="COP"/><BusinessAmount title="Cobros de pedidos vinculados" value={business.collections} currency="COP"/></div>
-    <Facts rows={[["Retorno declarado al corte", returnKnown ? `${number(business.declaredReturn.value)} veces` : 'No disponible con la cobertura/moneda actual'], ["Contribución después de pauta", contributionKnown ? money(business.contributionAfterAdvertising.valueMinor, 'COP') : 'No disponible como resultado final']]}/>
-    <p>Retorno declarado = ventas netas de productos reconocidas / gasto Meta positivo, únicamente COP y cobertura completa; no es ROAS atribuido por Meta ni utilidad. La contribución posterior resta el gasto Meta una sola vez, sin descontar otra vez los gastos registrados vinculados.</p>
-    <Reasons values={business.declaredReturn?.reasons || []}/><Reasons values={business.contributionAfterAdvertising?.reasons || []}/><Reasons values={business.coverage?.reasons || []}/>
+    <BusinessAmount title="Cobros de pedidos vinculados" value={business.collections} currency="COP"/>
+    <Facts rows={[["Retorno declarado al corte", returnKnown ? `${number(business.declaredReturn.value)} veces` : 'No disponible con la cobertura/moneda actual']]}/>
+    <p>Retorno declarado = ventas netas de productos reconocidas / gasto Meta positivo, únicamente COP y cobertura completa; no es ROAS atribuido por Meta ni utilidad.</p>
+    <Reasons values={business.declaredReturn?.reasons || []}/><Reasons values={business.coverage?.reasons || []}/>
     <h4>Vínculos y trazabilidad</h4><div className={styles.actions}><button type="button" className="button subtle" onClick={() => onLink('order')}>Vincular pedido existente</button><button type="button" className="button subtle" onClick={() => onLink('expense')}>Vincular gasto publicitario existente</button><button type="button" className="button subtle" onClick={() => onNavigate?.({ section: 'cash', tab: 'expenses', category: 'advertising' })}>Consultar gastos en Caja</button></div>
     {['order', 'expense'].map(kind => <div key={kind}><h4>{kind === 'order' ? 'Pedidos vinculados' : 'Gastos vinculados'}</h4>{!(links?.[kind === 'order' ? 'orders' : 'expenses'] || business[kind === 'order' ? 'orders' : 'expenses'] || []).length && <p>Sin {kind === 'order' ? 'pedidos' : 'gastos'} vinculados.</p>}{(links?.[kind === 'order' ? 'orders' : 'expenses'] || business[kind === 'order' ? 'orders' : 'expenses'] || []).map(record => <article className={styles.card} key={record.id}><h5>{kind === 'order' ? `Pedido ${record.number}` : record.concept || 'Gasto publicitario'}</h5><p>{kind === 'order' ? `${states[record.status] || record.status} · ${record.pendingRecognition ? 'Reconocimiento pendiente; no es venta reconocida' : `Reconocimiento ${record.recognitionOn || 'Sin fecha'}`}` : `${money(record.amountMinor, 'COP')} · ${record.incurredOn || 'Fecha desconocida'}${record.costPending ? ' · costo pendiente' : ''}`}</p><p>Etiqueta histórica, sin atribución automática: {record.marketingCampaign || record.campaign || 'Sin etiqueta'}</p><p>Origen declarado por {record.link?.actorId || 'Sin actor'} · {date(record.link?.updatedAt || record.link?.createdAt)} · versión de vínculo {record.link?.version ?? 'Sin dato'}</p><p>Motivo: {record.link?.reason || 'Sin motivo'}</p><div className={styles.actions}><button type="button" className="button subtle" onClick={() => onNavigate?.(kind === 'order' ? { section: 'orders', record: record.id } : { section: 'cash', tab: 'expenses', record: record.id, category: 'advertising' })}>Abrir {kind === 'order' ? 'pedido' : 'gasto en Caja'}</button><button type="button" className="button subtle" disabled={!record.link?.version} onClick={() => onLink(kind, record)}>Rectificar o retirar vínculo</button></div></article>)}</div>)}
     <details className={styles.evidence}><summary>Hechos y cobertura comercial</summary><Facts rows={[["Inicio económico conocido", business.coverage?.economicStartOn], ["Corte acumulado", business.accumulatedThrough || business.coverage?.through], ["Versiones de vínculos", text(business.linkVersions)], ["Hash de hechos", business.factHash], ["Hechos de ventas", text(business.recognizedProductSales?.factIds)], ["Hechos de contribución", text(business.knownContribution?.factIds)], ["Pagos de gastos", text(business.advertisingPayments?.payments)]]}/><EvidenceIds ids={business.metaSpend?.measurementIds}/></details>
@@ -290,8 +290,8 @@ function Recommendations({ analysis, campaign, stale, onAction, onAnalyze, busy,
       </div>{!maintenance && !changeDrafts.length && item.inPlace.filter(option => !option.allowed).map(option => <p className={styles.help} key={option.deliveryId}>{channels[option.channel]}: {option.reason}</p>)}</>}
     </article>;
   };
-  return <section id="social-results-recommendations" tabIndex={-1} className={`${styles.panel} ${resultStyles.stage}`} aria-labelledby="social-results-recommendations-title">
-    <header className={resultStyles.stageTitle}><p className={styles.eyebrow}>Recomendaciones</p><h3 id="social-results-recommendations-title">Qué probar ahora</h3><p>Una observación no diagnostica la causa.</p></header>
+  return <section className={`${styles.panel} ${resultStyles.stage}`} aria-labelledby="social-results-recommendations-title">
+    <header className={resultStyles.stageTitle}><h3 id="social-results-recommendations-title">Evidencia y acciones de las recomendaciones guardadas</h3><p>Una observación no diagnostica la causa.</p></header>
     <div className={resultStyles.operation}><button type="button" className="button subtle" disabled={busy || !campaign.revisions?.length} onClick={onAnalyze}>Revisar mejoras</button><p className={styles.help}>Reevalúa la evidencia guardada aquí. No consulta a Meta, publica ni autoriza gasto.</p></div>
     {analysis?.job?.errorCode && <p className={styles.warning}>La evaluación local falló; se conserva la anterior.</p>}
     {!recommendations.length && <p>{analysis?.status === 'current' ? 'No hay un cambio justificado por ahora.' : 'Aún no hay una evaluación vigente. Comprueba la medición antes de cambiar la pieza o invertir más.'}</p>}
@@ -305,38 +305,52 @@ function Offer({ offer }) {
   return <p>{offer?.primary ? <><strong>{name(offer.primary)}</strong>{offer.gift && <> · Obsequio: {name(offer.gift)} · Condición: {offer.gift.condition || 'Sin definir'}</>}</> : 'Publicación de marca, sin oferta seleccionada'}</p>;
 }
 
-function Performance({ campaign, rows, current }) {
+function Performance({ campaign, rows = [], measurements = [], current, locked, onNavigate }) {
   const approved = campaign.revisions?.at(-1);
+  const paid = campaign.mode === 'paid';
+  const saved = campaign.metaCampaign;
   const effective = campaign.deliveries?.find(delivery => delivery.effectiveSpec && delivery.effectiveSpec.assetId !== campaign.asset?.id)?.effectiveSpec;
   const asset = effective ? { id: effective.assetId, kind: effective.assetType, state: 'ready' } : campaign.asset;
-  const unavailable = { early: 'Aún es pronto', unavailable: 'Sin dato reportado', unsupported: 'No compatible con este destino', zero: '0 reportado' };
-  return <section id="social-results-kpi" tabIndex={-1} className={`${styles.panel} ${resultStyles.performance}`} aria-labelledby="social-results-kpi-title">
-    <header className={resultStyles.stageTitle}><p className={styles.eyebrow}>Indicador principal</p><h3 id="social-results-kpi-title">¿Se logró el objetivo?</h3>{objectives[campaign.objective] && <p>Objetivo: <strong>{objectives[campaign.objective]}</strong></p>}</header>
-    {!rows?.length && <p>Sin dato para esta selección de fechas o filtros.</p>}
-    {!!rows?.length && <div className={resultStyles.kpis}>{rows.map(row => <article className={resultStyles.kpi} key={row.deliveryId}>
-      <h4>{primaryLabels[row.metric]} · {channels[row.channel]}</h4><strong className={styles.metricValue}>{unavailable[row.status] || metricValue(row.value, row.currency)}</strong>
-      {row.fetchedAt ? <p>{date(row.periodStart, row.timeZone)} — {date(row.periodEnd, row.timeZone)} · última captura {date(row.fetchedAt)} · fuente: {method(row.integrationMethod)}{row.value?.sourceMetric ? ` (${row.value.sourceMetric})` : ''}</p> : <p>Sin captura del indicador para esta selección.</p>}
-      {row.authorized != null && <p>{row.partial ? 'Gasto de la captura parcial' : 'Gasto confirmado por lectura'}: {metricValue(row.spend, row.currency)} · Presupuesto autorizado: {money(row.authorized, row.currency)}{row.costMinor != null && <> · Costo por resultado: {money(row.costMinor, row.currency)}</>}</p>}
-      {row.stale && <p className={styles.warning}>Datos desactualizados.</p>}
-      {row.newerPartial ? <p className={styles.warning}>La lectura más reciente fue parcial; se conserva la captura completa anterior.</p> : row.partial && <p className={styles.warning}>Cobertura parcial: no es un total completo.</p>}
-      {row.lastError && <p className={styles.warning}>La última lectura falló. {row.lastError.message}</p>}
-      {row.nextReadAt && <p className={styles.help}>Próxima comprobación programada: {date(row.nextReadAt)}.</p>}
-      {row.reason && <Reasons values={[row.reason]}/>}
-      {row.captureId && current && <a href={`#social-measurement-${row.captureId}`} onClick={openCaptures}>Ver evidencia de este dato</a>}
-    </article>)}</div>}
-    <details className={styles.technicalDetails}>
+  const readings = rows.filter(row => row.fetchedAt).map(row => {
+    const measurement = measurements.find(item => item.id === row.captureId), values = measurement?.values;
+    const delivery = campaign.deliveries?.find(item => item.id === row.deliveryId);
+    const spec = campaign.revisions?.find(revision => revision.revision === delivery?.revision)?.spec ?? approved?.spec;
+    const period = measurement?.evidence?.reportedPeriod;
+    const keys = [...new Set([...(paid ? ['spendMinor'] : []), row.metric, 'impressions', 'reach', 'linkClicks', 'conversations', 'interactions'].filter(key => key && (key === row.metric || key === 'spendMinor' || values?.[key]?.value != null)))];
+    return {
+      id: row.captureId || row.deliveryId, paid, channel: row.channel, account: spec?.identities?.adAccountId,
+      campaignId: delivery?.remoteRefs?.campaignId || delivery?.preparedRefs?.campaignId, currency: measurement ? measurement.currency : row.currency,
+      period: economicPeriod(period?.periodStart || row.periodStart, period?.periodEnd || row.periodEnd, period?.timeZone || row.timeZone), observedAt: row.fetchedAt,
+      partial: row.partial, newerPartial: row.newerPartial, history: row.stale || !current, source: `Fuente: ${method(row.integrationMethod)} · medición de la entrega y su revisión.`,
+      metrics: keys.map(key => [key, values?.[key] ?? (key === row.metric ? row.value : key === 'spendMinor' ? row.spend : null)]),
+      evidence: <>
+        {row.lastError && <p className={styles.warning}>La última lectura falló. {row.lastError.message}</p>}
+        {row.nextReadAt && <p className={styles.help}>Próxima comprobación programada: {date(row.nextReadAt)}.</p>}
+        {row.reason && <Reasons values={[row.reason]}/>}
+        {row.captureId && current && <a href={`#social-measurement-${row.captureId}`} onClick={openCaptures}>Ver evidencia de este dato</a>}
+      </>,
+    };
+  });
+  const paidDeliveries = campaign.deliveries?.filter(delivery => delivery.channel === 'meta_ads');
+  const paidDelivery = paidDeliveries?.length === 1 ? paidDeliveries[0] : null;
+  return <MetaReportedPerformance sectionId="social-results-kpi" readings={readings} empty="Sin datos de métricas para esta selección o entrega." context={<>
+    {objectives[campaign.objective] && <p>Objetivo: <strong>{objectives[campaign.objective]}</strong></p>}
+    {paid && !readings.length && <Facts rows={[['Cuenta publicitaria', approved?.spec?.identities?.adAccountId], ['ID de campaña', paidDelivery?.remoteRefs?.campaignId || paidDelivery?.preparedRefs?.campaignId]]}/>}
+    {saved && <div className={styles.actions}><p>También consultada en Meta el {date(saved.observedAt)}. Esa lectura de cuenta no se suma a la medición de esta entrega.</p>
+      <button type="button" className="text-button" disabled={locked} onClick={() => onNavigate?.({ section: 'advertising', tab: 'campaigns', source: 'meta', connection: saved.connectionId, account: saved.accountId, metaCampaign: saved.resourceId, snapshot: saved.snapshotId })}>Ver lectura guardada en Meta</button></div>}
+  </>}>
+    {approved && <details className={styles.technicalDetails}>
       <summary>Objetivo, pieza y destinos</summary>
       <div className={styles.campaignSummary}>
         {asset?.kind === 'image' && asset.state === 'ready' && <img className={styles.cardThumb} width="80" height="80" src={`${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=derivative`} alt="Vista previa de la pieza aprobada"/>}
         {asset?.kind === 'video' && asset.state === 'ready' && <video className={styles.cardThumb} width="160" controls preload="metadata" src={`${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=derivative`} aria-label="Vista previa de la pieza aprobada"/>}
-        <div><p><strong>Objetivo:</strong> {objectives[campaign.objective]}</p><Offer offer={approved?.offerSnapshot || (!approved ? campaign.offerSnapshot : null)}/>
-          {approved?.spec?.marketCountries?.length ? <p>Mercados elegidos: {approved.spec.marketCountries.join(', ')}{campaign.mode === 'organic' ? ' · No limitan ni garantizan la distribución.' : ''}</p> : <p>Mercado histórico sin confirmar.</p>}
+        <div><Offer offer={approved.offerSnapshot}/>
+          {approved.spec?.marketCountries?.length ? <p>Mercados elegidos: {approved.spec.marketCountries.join(', ')}{paid ? '' : ' · No limitan ni garantizan la distribución.'}</p> : <p>Mercado histórico sin confirmar.</p>}
         </div>
       </div>
       {!!campaign.deliveries?.length && <ul className={styles.deliveryStates} aria-label="Estado por destino">{campaign.deliveries.map(delivery => <li key={delivery.id}><strong>{channels[delivery.channel]}: </strong>{states[delivery.state] || delivery.state}{delivery.remoteRefs?.permalink && <> · <a href={delivery.remoteRefs.permalink} target="_blank" rel="noreferrer">Ver en Meta</a></>}{delivery.effectiveSpec && <> · Cambio confirmado en la misma entrega.</>}</li>)}</ul>}
-    </details>
-    <p className={styles.help}>{campaign.mode === 'paid' ? 'El gasto se reporta para el anuncio; autorizar ubicaciones no demuestra distribución en cada red.' : 'No se suman personas entre redes.'} Una conversación o un clic no es una venta. La previsión no es una garantía.</p>
-  </section>;
+    </details>}
+  </MetaReportedPerformance>;
 }
 
 function Learnings({ id, api, refresh, onNavigate, onEvidence }) {
@@ -348,7 +362,7 @@ function Learnings({ id, api, refresh, onNavigate, onEvidence }) {
     return () => controller.abort();
   }, [id, api, refresh, cursor]);
   const navigate = (record, tab) => onNavigate?.({ section: 'advertising', tab, record, ...(tab === 'results' ? { resultsFocus: 'learnings' } : {}) });
-  return <section id="social-results-learnings" tabIndex={-1} className={`${styles.panel} ${resultStyles.stage}`} aria-labelledby="social-results-learnings-title">
+  return <section className={`${styles.panel} ${resultStyles.stage}`} aria-labelledby="social-results-learnings-title">
     <header className={resultStyles.stageTitle}><p className={styles.eyebrow}>Aprendizajes</p><h3 id="social-results-learnings-title">Qué aprendimos</h3><p>Historial de pruebas y sus conclusiones según el criterio acordado.</p></header>
     {error && <p role="alert">{error} {data && 'Se conserva la lectura anterior.'}</p>}
     {!data && !error && <p role="status">Cargando historial de pruebas…</p>}
@@ -641,10 +655,10 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
   const analysis = results?.analysis;
   const locallyInvalid = Boolean(invalidatedAnalysis && invalidatedAnalysis.campaignId === snapshot?.campaignId && invalidatedAnalysis.evidenceHash === (analysis?.evidenceHash || null) && invalidatedAnalysis.asOf === (analysis?.asOf || null) && !(snapshot.loadedAt !== invalidatedAnalysis.loadedAt && analysis?.status === 'current' && ['succeeded', 'failed'].includes(analysis?.job?.state)));
   const analysisStale = Boolean(locallyInvalid || analysis?.stale || analysis?.status && analysis.status !== 'current' || !analysis);
-  const commercialStale = Boolean(locallyInvalid || analysis?.commercialStale || analysisStale);
+  const businessPreserved = Boolean(error || invalidatedAnalysis?.commercial && invalidatedAnalysis.campaignId === id && invalidatedAnalysis.loadedAt === snapshot?.loadedAt);
   async function saved(result, type) {
     setAction(null); reportDialog({ dirty: false, busy: false });
-    if (type === 'link') setInvalidatedAnalysis({ campaignId: id, evidenceHash: analysis?.evidenceHash || null, asOf: analysis?.asOf || null, loadedAt: snapshot?.loadedAt });
+    if (type === 'link') setInvalidatedAnalysis({ commercial: true, campaignId: id, evidenceHash: analysis?.evidenceHash || null, asOf: analysis?.asOf || null, loadedAt: snapshot?.loadedAt });
     setNotice(type === 'link' ? 'Vínculo guardado. Recalculo comercial encolado; no se han modificado pedidos, gastos ni pagos.' : type === 'dismiss' ? 'Propuesta descartada con motivo.' : 'Nuevo borrador creado, sin publicación ni gasto.');
     setRefresh(value => value + 1);
     try { await onMutation?.(); } catch (cause) { if (mounted.current) setNotice(`Guardado; actualización global pendiente: ${cause.message}`); }
@@ -710,6 +724,10 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
 
   const locked = busy || Boolean(action);
   const hasBusiness = hasDeliveries && Boolean(results.business);
+  const approved = campaign?.revisions?.at(-1), spec = approved?.spec ?? campaign;
+  const economicForecast = selectSocialEconomicForecast(campaign);
+  const validRecommendation = !analysisStale && !error && !actionError
+    ? analysis?.recommendations?.find(item => item.state === 'suggested' && item.proposedChange?.text) : null;
   const period = view.from && view.to ? `${view.from} a ${view.to}` : view.from ? `Desde ${view.from}` : view.to ? `Hasta ${view.to}` : 'Sin fechas específicas';
   const parts = [
     ...(hasDeliveries ? [['kpi', 'Rendimiento']] : []), ['detail', 'Período y filtros'],
@@ -732,10 +750,19 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
     {hasDeliveries && <nav className={`${styles.resultsNav} ${resultStyles.partNav}`} aria-label="Ir a una parte de los resultados">
       {parts.map(([key, title]) => <button type="button" key={key} className="button subtle" onClick={() => jumpToResult(`social-results-${key}`)}>{title}</button>)}
     </nav>}
-    {sameRecord && (hasDeliveries ? <Performance campaign={campaign} rows={results.performance} current={current}/> : <>
-      <p className={styles.notice}><strong>{campaignState(campaign)}</strong> · Sin entregas; aún no hay rendimiento que analizar. Guardar o aprobar no equivale a publicar.</p>
-      <ApprovedCampaign campaign={campaign} onNavigate={onNavigate}/>
-    </>)}
+    {sameRecord && <>
+      <InvestmentEstimate key={id} spec={spec} budget={approved || spec.budgetMinor > 0 ? spec.budgetMinor : null} currency={spec.currency}
+        source={approved ? 'Presupuesto aprobado' : 'Presupuesto del borrador'} forecast={economicForecast}
+        alreadyRan={campaign.deliveries?.some(delivery => delivery.everActivated || delivery.activatedAt) || results.performance?.some(row => row.channel === 'meta_ads' && row.spend?.value > 0)}/>
+      <Performance campaign={campaign} rows={results.performance} measurements={results.measurements} current={current && !error} locked={locked} onNavigate={onNavigate}/>
+      <CommercialSummary business={results.business} preserved={businessPreserved}/>
+      <EconomicRecommendation recommendation={validRecommendation} business={results.business} spec={spec} unpublished={!hasDeliveries}
+        measurementsAvailable={current && !error && results.performance?.some(row => row.value?.value != null && !row.stale && !row.newerPartial && !row.partial)}/>
+      {!hasDeliveries && <>
+        <p className={styles.notice}><strong>{campaignState(campaign)}</strong> · Sin entregas; aún no hay rendimiento que analizar. Guardar o aprobar no equivale a publicar.</p>
+        <ApprovedCampaign campaign={campaign} onNavigate={onNavigate}/>
+      </>}
+    </>}
     {sameRecord && <section id="social-results-detail" tabIndex={-1} className={`${styles.panel} ${resultStyles.stage}`} aria-labelledby="social-results-period-title">
       <header className={resultStyles.stageTitle}><h3 id="social-results-period-title">Período y filtros</h3><p>Las fechas seleccionan capturas compatibles. Solo el desglose diario filtra días.</p></header>
       <form method="post" onSubmit={applyPeriod}>
@@ -758,14 +785,16 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
           <button type="button" className="button subtle" disabled={loading || locked} onClick={() => setRefresh(value => value + 1)}>Actualizar vista</button>
           <p className={styles.help}>Vuelve a leer los datos guardados. La vista también se actualiza automáticamente cada {pending ? '5 segundos mientras hay trabajo pendiente' : '60 segundos mientras está visible'}.</p>
         </div>
-        {hasDeliveries && <div className={resultStyles.operation}>
-          <button type="button" className="button subtle" disabled={locked || !current} onClick={() => campaignAction('sync')}>Actualizar desde Meta</button>
-          <p className={styles.help}>Solicita una consulta al proveedor. Depende de los permisos y puede demorar; no publica ni activa nada.</p>
-        </div>}
-        {campaign.operations?.some(op => op.step.startsWith('amend:') && ['sent', 'uncertain'].includes(op.state)) && <div className={resultStyles.operation}>
-          <button type="button" className="button subtle" disabled={locked || !current} onClick={() => campaignAction('reconcile')}>Comprobar el cambio sin reenviar</button>
-          <p className={styles.help}>Comprueba en Meta si se aplicó el cambio pendiente sin volver a enviarlo.</p>
-        </div>}
+        {hasDeliveries && <details className={styles.technicalDetails}><summary>Operaciones de la entrega</summary>
+          <div className={resultStyles.operation}>
+            <button type="button" className="button subtle" disabled={locked || !current} onClick={() => campaignAction('sync')}>Actualizar desde Meta</button>
+            <p className={styles.help}>Solicita una consulta al proveedor. Depende de los permisos y puede demorar; no publica ni activa nada.</p>
+          </div>
+          {campaign.operations?.some(op => op.step.startsWith('amend:') && ['sent', 'uncertain'].includes(op.state)) && <div className={resultStyles.operation}>
+            <button type="button" className="button subtle" disabled={locked || !current} onClick={() => campaignAction('reconcile')}>Comprobar el cambio sin reenviar</button>
+            <p className={styles.help}>Comprueba en Meta si se aplicó el cambio pendiente sin volver a enviarlo.</p>
+          </div>}
+        </details>}
       </div>
       <div className={resultStyles.accountFooter}>
         <p className={styles.help}>¿Necesitas comprobar los permisos o la fuente?</p>
@@ -784,9 +813,13 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
         <details className={styles.technicalDetails}><summary>Comparar con la estimación y mi meta de costo</summary><Comparisons analysis={analysis} currency={campaign.currency} stale={analysisStale}/><UserCostTarget campaign={campaign} measurements={results.measurements || []}/></details>
         <ApprovedCampaign campaign={campaign} onNavigate={onNavigate}/>
     </div></details>}
-    {hasDeliveries && <Recommendations analysis={analysis} campaign={campaign} stale={analysisStale || !current || Boolean(error || actionError)} busy={locked || !current} onAnalyze={() => campaignAction('analyze')} onAction={recommendationAction} onEvidence={openEvidence}/>}
-    {hasDeliveries && <Learnings id={id} key={id} api={api} refresh={snapshot.loadedAt} onNavigate={onNavigate} onEvidence={openEvidence}/>}
-    {hasBusiness && <details id="social-results-business" className={`${styles.technicalDetails} ${resultStyles.disclosure}`}><summary>Pedidos y gastos vinculados (separados de Meta)</summary><div inert={!current}><BusinessPanel business={results.business} stale={commercialStale} links={snapshot.links} onNavigate={onNavigate} onLink={(kind, record) => { if (!locked && current) setAction({ type: 'link', kind, record }); }}/></div></details>}
+    {hasDeliveries && <details id="social-results-recommendations" className={`${styles.technicalDetails} ${resultStyles.disclosure}`}><summary>Evidencia y acciones de las recomendaciones</summary>
+      <Recommendations analysis={analysis} campaign={campaign} stale={analysisStale || !current || Boolean(error || actionError)} busy={locked || !current} onAnalyze={() => campaignAction('analyze')} onAction={recommendationAction} onEvidence={openEvidence}/>
+    </details>}
+    {hasDeliveries && <details id="social-results-learnings" className={`${styles.technicalDetails} ${resultStyles.disclosure}`}><summary>Historial de pruebas y aprendizajes</summary>
+      <Learnings id={id} key={id} api={api} refresh={snapshot.loadedAt} onNavigate={onNavigate} onEvidence={openEvidence}/>
+    </details>}
+    {hasBusiness && <details id="social-results-business" className={`${styles.technicalDetails} ${resultStyles.disclosure}`}><summary>Pedidos y gastos vinculados (separados de Meta)</summary><div inert={!current}><BusinessPanel business={results.business} stale={businessPreserved} links={snapshot.links} onNavigate={onNavigate} onLink={(kind, record) => { if (!locked && current) setAction({ type: 'link', kind, record }); }}/></div></details>}
     {action && current && <ResultActionDialog action={action} campaignId={id} api={api} requestIds={requestIds} onClose={() => setAction(null)} onSaved={saved} onInteractionStateChange={reportDialog}/>}
     {evidence && <EvidenceDialog key={evidence.captureId} evidence={evidence} api={api} onClose={() => setEvidence(null)}/>}
   </section>;

@@ -326,6 +326,29 @@ test('intercambio fuera de transacción, tokens en custodia y reconexión con id
   assert.equal(restored.connection.id, connection.id); assert.equal(restored.connection.version, 2);
 }));
 
+test('el listado conserva solo el estado público de una desconexión asistida pendiente', () => withStore(async store => {
+  const env = await envFor(store);
+  const requestedAt = new Date().toISOString(), receiptId = randomUUID();
+  const pending = { state: 'waiting_for_pause', action: 'delete-platform-data', requestedAt, receiptId, requestId: randomUUID(), actorId: fixtureActor, deliveryIds: [randomUUID()] };
+  const connection = await socialConnection(store, { method: 'browser', data: { disconnectPending: pending } });
+  const read = async () => (await getSocialConnections(store, { env, client: { health: async () => false } })).connections.find(item => item.id === connection.id);
+  const expected = { state: pending.state, action: pending.action, requestedAt, receiptId };
+  const waiting = await read();
+  assert.deepEqual(waiting.disconnectStatus, expected);
+  const table = store.t('social_connections');
+  const row = await store.db.get(`SELECT data FROM ${table} WHERE id=?`, [connection.id]);
+  const data = JSON.parse(row.data);
+  data.disconnectPending.state = 'needs_confirmation';
+  data.disconnectPending.errorCode = 'SPEC_MISMATCH';
+  await store.db.run(`UPDATE ${table} SET data=?,version=version+1 WHERE id=?`, [JSON.stringify(data), connection.id]);
+  const confirmation = await read();
+  assert.deepEqual(confirmation.disconnectStatus, { ...expected, state: 'needs_confirmation', errorCode: 'SPEC_MISMATCH' });
+  for (const result of [waiting, confirmation]) {
+    assert.equal(Object.hasOwn(result, 'disconnectPending'), false);
+    assert.doesNotMatch(JSON.stringify(result), /requestId|actorId|deliveryIds/);
+  }
+}));
+
 test('selección verifica pertenencia y no cambia assets después de aprobación', () => withStore(async store => {
   const env = await envFor(store), fixture = provider(env), { connection } = await connect(store, env, fixture);
   await assert.rejects(() => socialConnectionAction(store, connection.id, 'select-assets', { version: 1, requestId: randomUUID(), identities: { pageId: '999' } }, fixtureActor, { env, fetchImpl: fixture.fetchImpl }), { status: 400 });

@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { test, expect } from '@playwright/test';
-import { login, navigate, openConfigurationTask, openDisclosure } from './helpers.mjs';
+import { login, navigate, openConfigurationTask, openDisclosure, selectWorkspace } from './helpers.mjs';
 import { hekaSnapshot } from '../heka-fixtures.mjs';
 import { formatMoneyMinor } from '../../lib/business/money.mjs';
+import { databaseConfig } from '../../lib/db/config.mjs';
+import { openPostgres } from '../../lib/db/postgres.mjs';
+import { Store } from '../../lib/store.mjs';
+import { insertRow } from '../../lib/business/commands.mjs';
+import { testDatabaseEnv } from '../postgres-fixture.mjs';
 
 const SETTINGS = '/api/admin/social/settings';
 const formFor = page => page.getByRole('form', { name: 'Opciones de Meta', exact: true });
@@ -26,6 +31,16 @@ async function settingsFixture(page) {
   await navigate(page, 'Configuración');
   await openConfigurationTask(page, 'social');
   await expect(page).toHaveURL(url => url.searchParams.get('section') === 'business' && url.searchParams.get('tab') === 'social');
+  const add = page.getByRole('button', { name: 'Conectar otra cuenta', exact: true });
+  const wizard = page.getByRole('heading', { name: 'Alta guiada de Meta', exact: true });
+  await expect(add.or(wizard)).toBeVisible();
+  if (await add.isVisible()) await add.click();
+  const prepare = page.getByRole('button', { name: 'Configurar la aplicación', exact: true });
+  await expect(page.getByRole('button', { name: 'Conectar con Facebook', exact: true })).toBeVisible();
+  if (await prepare.isVisible()) {
+    await expect(page.locator('[aria-current="step"]')).toContainText('Preparar la aplicación');
+    await prepare.click();
+  } else await openDisclosure(page, /^Opciones de Meta$/);
   await expect(formFor(page)).toBeVisible();
   return { get, put };
 }
@@ -80,10 +95,13 @@ test('redes sociales: configuración dinámica, custodia, CAS y navegación sin 
     expect(saved).not.toHaveProperty('appSecret');
     expect(saved).not.toHaveProperty('keys');
     expect(saved).not.toHaveProperty('app_secret_ciphertext');
+    await expect(page.getByRole('button', { name: 'Conectar con Facebook', exact: true })).toBeEnabled();
     await expect(form.locator('input[name="appSecret"]')).toHaveValue('');
     await expect(form.getByText(saved.callbackUrl, { exact: true })).toBeVisible();
     await expect(form.getByText(saved.dataDeletionUrl, { exact: true })).toBeVisible();
     await page.reload();
+    await openDisclosure(page, /^Opciones de Meta$/);
+    await openDisclosure(page, /^Otras formas de conexión$/);
     await expect(form.getByRole('checkbox', { name: 'Habilitar publicación y activación', exact: true })).not.toBeChecked();
     await expect(form.locator('input[name="appSecret"]')).toHaveValue('');
     await expect(page.getByRole('button', { name: 'Crear conexión y abrir acceso', exact: true })).toBeDisabled();
@@ -124,6 +142,7 @@ test('redes sociales: configuración dinámica, custodia, CAS y navegación sin 
     await page.getByRole('button', { name: 'Publicación sin inversión', exact: true }).click();
     await page.getByRole('button', { name: 'Conectar cuenta en Redes sociales', exact: true }).click();
     await expect(page).toHaveURL(url => url.searchParams.get('section') === 'business' && url.searchParams.get('tab') === 'social');
+    await openDisclosure(page, /^Opciones de Meta$/);
     await expect(form).toBeVisible();
     await expect(form.getByRole('checkbox', { name: 'Habilitar publicación y activación', exact: true })).not.toBeChecked();
     for (const request of writes) {
@@ -135,6 +154,192 @@ test('redes sociales: configuración dinámica, custodia, CAS y navegación sin 
     expect(current.publishingEnabled).toBe(false);
     expect(current.browserEnabled).toBe(false);
   } finally { page.off('request', watch); }
+});
+
+async function seedConnectionHistory() {
+  const env = testDatabaseEnv(), host = new URL(env.DATABASE_URL).hostname;
+  if (!['db', 'localhost', '127.0.0.1'].includes(host) || env.DB_SSL !== 'verify' || !(env.DB_CA_CERT || env.DB_CA_CERT_FILE)) throw new Error('La ficha sintética requiere PostgreSQL local con TLS verificado.');
+  const store = new Store(await openPostgres(databaseConfig(env)));
+  let committed = false;
+  try {
+    if ((await store.db.get('SELECT current_database() AS name')).name !== 'allnutrition_test') throw new Error('La conexión real no corresponde al fixture allnutrition_test.');
+    const actor = await store.db.get(`SELECT id FROM ${store.t('users')} WHERE email=?`, ['e2e@example.test']);
+    const at = new Date(Date.now() - 60000).toISOString();
+    const publishedAt = '2025-08-03T15:00:00.000Z';
+    const period = { type: 'range', since: '2025-08-01', until: '2025-08-07', timeZone: 'America/Bogota' };
+    const [first, second, waiting] = ['Alfa', 'Beta', 'En pausa'].map(label => {
+      const id = randomUUID(), prefix = BigInt(`0x${id.replaceAll('-', '')}`).toString().slice(0, 18);
+      return { id, name: `${label} ${id.slice(0, 8)}`, pageId: `${prefix}01`, instagramId: `${prefix}02`, adAccountId: `act_${prefix}03`, postId: `${prefix}01_${prefix}04`, mediaId: `${prefix}05`, campaignId: `${prefix}06`, analysisId: randomUUID() };
+    });
+    const evidence = (tx, connection, kind, resourceId, data, id = randomUUID()) => insertRow(tx, 'social_account_analysis_items', {
+      id, analysis_id: connection.analysisId, resource_kind: kind, resource_id: resourceId, created_at: at, updated_at: at,
+      data: JSON.stringify({ observedAt: at, ...data })
+    });
+    const metric = (value, unit = 'count') => ({ value, unit, status: value == null ? 'unavailable' : 'reported', precision: 'provider_decimal_string' });
+    const sample = (value, ownerId, channel, contentId) => ({
+      ownerId, contentId, scope: 'organic', dimensions: { level: 'content', channel, breakdowns: [] },
+      period: { type: 'lifetime', publishedAt }, values: { views: metric(value), reach: metric('0') }
+    });
+    await store.transaction(async tx => {
+      for (const [index, item] of [first, second, waiting].entries()) {
+        const { id, name, pageId, instagramId, adAccountId, postId, mediaId, campaignId, analysisId } = item;
+        const pending = item === waiting, token = item === second;
+        await insertRow(tx, 'social_connections', { id, provider: 'meta', integration_method: 'api', state: pending ? 'connected' : token ? 'reconnect_required' : 'connected',
+          version: 1, created_at: at, updated_at: at, data: JSON.stringify({
+            name, authenticationMethod: token ? 'token' : 'oauth', readOnly: token, validatedAt: at, currency: 'COP', timeZone: 'America/Bogota',
+            identities: { pageId, ...(token ? {} : { instagramId, adAccountId }) }, capabilities: { facebookPublish: true, insights: true },
+            resources: { pages: [{ id: pageId, name: `Página ${name}`, instagramId, instagramName: `Instagram ${name}` }], adAccounts: [{ id: adAccountId, name: `Anuncios ${name}`, currency: 'COP', timeZone: 'America/Bogota' }] },
+            ...(pending ? { disconnectPending: { state: 'waiting_for_pause', action: 'disconnect', requestedAt: at, requestId: randomUUID(), actorId: actor.id, deliveryIds: [randomUUID()] } } : {})
+          }) });
+        if (pending) continue;
+        await insertRow(tx, 'social_account_analyses', { id: analysisId, connection_id: id, actor_id: actor.id, state: 'completed', version: 1, created_at: at, updated_at: at,
+          data: JSON.stringify({ period, phase: 'completed', stats: { completedUnits: 4, resources: 3, pages: 1, objects: 3 }, work: [], permissions: ['ads_read'], coverage: {
+            page: { kind: 'facebook', resourceId: pageId, state: 'accessible_complete', missing: [] },
+            ig: { kind: 'instagram', resourceId: instagramId, state: 'accessible_complete', missing: [] },
+            ads: { kind: 'ad_account', resourceId: adAccountId, state: 'accessible_complete', missing: [] }
+          } }) });
+        const postMetricsId = randomUUID(), mediaMetricsId = randomUUID();
+        await evidence(tx, item, 'facebook_post', postId, { ownerId: pageId, configuration: { assetType: 'photo' }, period: { type: 'current_snapshot', publishedAt }, metricsItemIds: [postMetricsId], metricsAvailability: 'available' });
+        await evidence(tx, item, 'instagram_media', mediaId, { ownerId: instagramId, configuration: { mediaType: 'IMAGE' }, period: { type: 'current_snapshot', publishedAt }, metricsItemIds: [mediaMetricsId], metricsAvailability: 'available' });
+        await evidence(tx, item, 'organic_metrics', `facebook:${postId}:0`, sample(index ? '7654321' : '137531', pageId, 'facebook', postId), postMetricsId);
+        await evidence(tx, item, 'organic_metrics', `instagram:${mediaId}:0`, sample(index ? '9876542' : '246812', instagramId, 'instagram', mediaId), mediaMetricsId);
+        await evidence(tx, item, 'campaigns', campaignId, { accountId: adAccountId, configuration: { status: 'PAUSED', objective: 'OUTCOME_SALES' }, period: { type: 'current_snapshot', at } });
+        await evidence(tx, item, 'ads_campaign', campaignId, {
+          accountId: adAccountId, period, dimensions: { level: 'campaign', breakdowns: [] }, currency: 'COP', scope: 'paid',
+          values: { impressions: metric('9007199254740993'), clicks: metric('0'), reach: metric(null), spend: metric('1000.25', 'account_currency_decimal') }
+        });
+      }
+    });
+    committed = true;
+    return { first, second, waiting, async cleanup() {
+      try {
+        await store.transaction(async tx => {
+          const ids = [first.id, second.id, waiting.id];
+          await tx.db.run(`DELETE FROM ${tx.t('business_requests')} WHERE scope=?`, [`social:connection:${first.id}:disconnect`]);
+          await tx.db.run(`DELETE FROM ${tx.t('business_audit')} WHERE entity_type='social_connection' AND entity_id IN (?,?,?)`, ids);
+          await tx.db.run(`DELETE FROM ${tx.t('social_account_analyses')} WHERE id IN (?,?)`, [first.analysisId, second.analysisId]);
+          await tx.db.run(`DELETE FROM ${tx.t('social_connections')} WHERE id IN (?,?,?)`, ids);
+        });
+      } finally { await store.close(); }
+    } };
+  } finally { if (!committed) await store.close(); }
+}
+
+test('redes sociales: configuración dinámica y datos consultados por conexión', async ({ page }, info) => {
+  test.setTimeout(180000);
+  const fixture = await seedConnectionHistory(), { first, second, waiting } = fixture;
+  const root = '/admin?section=business&tab=social';
+  const writes = [], reads = [];
+  const watch = request => {
+    const url = new URL(request.url());
+    if (!url.pathname.startsWith('/api/admin/social')) return;
+    if (['GET', 'HEAD'].includes(request.method())) reads.push(url);
+    else writes.push(request);
+  };
+  const data = page.getByRole('region', { name: 'Datos consultados', exact: true });
+  const record = id => `${root}&record=${id}`;
+  const expectRecord = id => expect(page).toHaveURL(url => url.searchParams.get('section') === 'business' && url.searchParams.get('tab') === 'social' && url.searchParams.get('record') === id);
+  page.on('request', watch);
+  try {
+    await login(page);
+    await page.goto(record(second.id));
+    await expectRecord(second.id);
+    await expect(page.getByRole('heading', { name: second.name, exact: true })).toBeFocused();
+    await expect(page.getByText(`Página ${second.name}`, { exact: true })).toBeVisible();
+    await expect(data.getByText('7654321', { exact: true })).toBeVisible();
+    await expect(data.getByText('137531', { exact: true })).toHaveCount(0);
+    await expect(data.locator('pre')).toHaveCount(0);
+    await expect(page.getByText('Sin Instagram profesional', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Volver a autorizar con Facebook', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Conectar un token nuevo', exact: true })).toBeVisible();
+    await expect(data.getByText(/Histórico guardado/)).toBeVisible();
+    await expect(data.getByText(/Última consulta:/)).toBeVisible();
+
+    await selectWorkspace(data, 'Contenido consultado', 'Facebook');
+    await expect(data.getByRole('heading', { name: `Facebook · Publicación ${second.postId}`, exact: true })).toBeVisible();
+    await expect(data.getByText('7654321', { exact: true })).toBeVisible();
+    await expect(data.getByText(/Desde que se publicó/)).toBeVisible();
+    await selectWorkspace(data, 'Contenido consultado', 'Instagram');
+    await expect(data.getByRole('heading', { name: `Instagram · Publicación ${second.mediaId}`, exact: true })).toBeVisible();
+    await expect(data.getByText('9876542', { exact: true })).toBeVisible();
+    await expect(data.getByText(/Publicada:/)).toBeVisible();
+    await selectWorkspace(data, 'Contenido consultado', 'Campañas');
+    await expect(data.getByRole('heading', { name: `Campaña ${second.campaignId}`, exact: true })).toBeVisible();
+    for (const text of ['9007199254740993', '1000.25 COP', '0', 'Sin dato']) await expect(data.getByText(text, { exact: true })).toBeVisible();
+    await expect(data.getByText(/2025-08-01 a 2025-08-07 · COP/)).toBeVisible();
+    await expectRecord(second.id);
+    expect(reads.filter(url => /\/connections\/[^/]+\/analysis$/.test(url.pathname)).every(url => url.pathname.includes(second.id) && url.searchParams.has('content'))).toBe(true);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+    const screenshot = info.outputPath('ficha-meta-con-datos.png');
+    await page.screenshot({ path: screenshot, fullPage: true });
+    await info.attach('Ficha Meta con datos', { path: screenshot, contentType: 'image/png' });
+
+    await page.getByRole('button', { name: 'Ver mis conexiones', exact: true }).click();
+    await expectRecord(null);
+    const manage = item => page.getByRole('button', { name: `Administrar ${item.name}`, exact: true });
+    await manage(first).click();
+    await expectRecord(first.id);
+    await expect(data.getByText('137531', { exact: true })).toBeVisible();
+    await expect(data.getByText('7654321', { exact: true })).toHaveCount(0);
+    await page.reload();
+    await expect(data.getByText('137531', { exact: true })).toBeVisible();
+    await page.goBack();
+    await expectRecord(null);
+    await page.goBack();
+    await expectRecord(second.id);
+    await expect(data.getByText('7654321', { exact: true })).toBeVisible();
+    await page.goForward();
+    await expectRecord(null);
+    await page.goForward();
+    await expectRecord(first.id);
+    await expect(data.getByText('137531', { exact: true })).toBeVisible();
+    expect(writes).toHaveLength(0);
+
+    await openDisclosure(page, /^Desconectar o eliminar datos locales$/);
+    const disconnect = page.getByRole('button', { name: 'Desconectar cuenta', exact: true });
+    await disconnect.click();
+    const dialog = page.getByRole('dialog', { name: `Desconectar cuenta · ${first.name}`, exact: true });
+    await dialog.getByRole('button', { name: 'Cancelar', exact: true }).click();
+    await expect(disconnect).toBeFocused();
+    expect(writes).toHaveLength(0);
+    await disconnect.click();
+    const post = page.waitForResponse(response => new URL(response.url()).pathname === `/api/admin/social/connections/${first.id}/actions` && response.request().method() === 'POST');
+    await dialog.getByRole('button', { name: 'Pausar y desconectar', exact: true }).click();
+    const result = await post;
+    expect(result.ok()).toBe(true);
+    expect((await result.json()).remoteSpendStopped).toBe(false);
+    await expect(page.getByText(/La desconexión local no confirma/)).toBeVisible();
+    await page.reload();
+    await expect(page.getByText('Desconectada', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Verificar conexión', exact: true })).toHaveCount(0);
+    await expect(data.getByText('137531', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Ver mis conexiones', exact: true }).click();
+    await manage(waiting).click();
+    await expect(page.getByText(/Pausas pendientes de confirmar/)).toBeVisible();
+    await page.reload();
+    await expectRecord(waiting.id);
+    await expect(page.getByText(/Pausas pendientes de confirmar/)).toBeVisible();
+    await openDisclosure(page, /^Desconectar o eliminar datos locales$/);
+    await expect(disconnect).toBeDisabled();
+
+    const unknown = randomUUID();
+    await page.goto(record(unknown));
+    await expect(page.getByRole('heading', { name: 'No se encontró esta conexión' })).toBeVisible();
+    expect(reads.some(url => url.pathname.includes(unknown))).toBe(false);
+    await page.getByRole('button', { name: 'Ver mis conexiones', exact: true }).click();
+    await manage(second).click();
+    await page.getByRole('button', { name: 'Preparar publicación o campaña', exact: true }).click();
+    await expect(page).toHaveURL(url => url.searchParams.get('section') === 'advertising' && url.searchParams.get('tab') === 'campaigns' && url.searchParams.get('record') === 'new');
+    await expect(page.getByRole('button', { name: 'Definir primero, sin imagen aún', exact: true })).toBeVisible();
+    expect(writes.map(request => ({ path: new URL(request.url()).pathname, action: request.postDataJSON().action }))).toEqual([
+      { path: `/api/admin/social/connections/${first.id}/actions`, action: 'disconnect' }
+    ]);
+  } finally {
+    page.off('request', watch);
+    await fixture.cleanup();
+  }
 });
 
 async function openShippingSettings(page) {

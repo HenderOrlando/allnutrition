@@ -1,5 +1,12 @@
 # Cambios — administración v3 y antecedentes
 
+## Publicidad · conexiones guiadas, inventario de Meta y ficha económica
+
+- **Redes sociales** abre el listado de conexiones, el alta guiada o la ficha enlazada por UUID. La ficha muestra el histórico guardado de esa cuenta, la cobertura y el estado real de la conexión. **Consultar anuncios por fecha** no guarda sus resultados.
+- **Publicaciones y campañas** separa **Creadas en All Nutrition** de **Consultadas en Meta**. El inventario remoto usa lecturas guardadas, admite filtros y detalle por captura y muestra los conjuntos dentro de su campaña. La coincidencia comprobada enlaza a la ficha propia sin duplicar la campaña ni habilitar acciones remotas.
+- La ficha económica distingue la simulación sin guardar, el rendimiento reportado por Meta y las ventas y la contribución de los pedidos vinculados. Las ventanas, las monedas y el corte comercial se mantienen separados.
+- Verificación local: 123 pruebas Node y 8 recorridos Playwright en Chromium de escritorio y móvil, con PostgreSQL desechable y TLS verificado. Sin cambios de esquema o migraciones, uso de cuentas reales de Meta ni despliegue.
+
 ## Heka · API oficial en el panel
 
 - Conexión mediante llave cifrada del servidor y entorno explícito. Pedidos ofrece ciudades, bodegas, plantillas, cotización, emisión y búsqueda de guías, historial y calificación de destinatarios, novedades y etiquetas PDF. La solución de novedades requiere rol `seller` en Heka.

@@ -10,6 +10,7 @@ import { claimJob } from '../lib/business/job-leases.mjs';
 import { metaHistoryPeriod, currentHistoryRules } from '../lib/social/meta-account-history.mjs';
 import { queueMetaAccountAnalysisTx, processMetaAccountAnalysisTurn, getMetaAccountAnalysis, metaAccountAnalysisAction, buildMetaAccountProposals } from '../lib/business/social-account-analysis.mjs';
 import { projectMetaFields } from './social-meta-provider.mjs';
+import './social-meta-campaigns-contract.mjs';
 
 const NOW = '2026-11-16T12:00:00.000Z', ACTOR = 'social-fixture-admin';
 const TOKEN = 'SYNTHETIC-HISTORY-TOKEN', PII = 'PERSON-AND-LEAD-CANARY';
@@ -141,6 +142,99 @@ test('all discovered resources, not selection, persist cursors and paginated evi
   const data = JSON.parse(connectionRow.data); data.measurementConfig = { objective: 'sales', source: 'none' };
   await store.db.run(`UPDATE ${store.t('social_connections')} SET data=?,version=version+1 WHERE id=?`, [JSON.stringify(data), id]);
   const sales = await get(); assert.equal(sales.objective, 'sales'); assert.equal(sales.proposals[0].type, 'measurement'); assert.equal(remote.calls.length, calls);
+}));
+
+test('local content paginates objects, resolves only matching metrics, and preserves exact campaign evidence', () => fixture(async ({ store, queue, drain, get, remote }) => {
+  const empty = await get({ content: 'all' });
+  assert.deepEqual(empty, { analysis: null, snapshot: null, items: [], pagination: { page: 1, pageSize: 10, total: 0 } });
+  await assert.rejects(get({ content: 'constructor' }), { status: 400 });
+  await assert.rejects(get({ content: ['all', 'facebook'] }), { status: 400 });
+  await assert.rejects(get({ content: 'all', pageSize: 51 }), { status: 400 });
+  const { id } = await queue();
+  await drain();
+  const table = store.t('social_account_analysis_items');
+  const metric = await store.db.get(`SELECT id,data FROM ${table} WHERE analysis_id=? AND resource_kind='organic_metrics' AND resource_id LIKE 'facebook:%' LIMIT 1`, [id]);
+  const post = await store.db.get(`SELECT id,data FROM ${table} WHERE analysis_id=? AND resource_kind='facebook_post'`, [id]);
+  const foreignId = randomUUID(), postData = JSON.parse(post.data);
+  await store.db.run(`INSERT INTO ${table}(id,analysis_id,resource_kind,resource_id,data,created_at,updated_at) VALUES(?,?,'organic_metrics',?,?,?,?)`, [foreignId, id, 'facebook:wrong-owner:0', JSON.stringify({ ...JSON.parse(metric.data), ownerId: '202' }), NOW, NOW]);
+  postData.metricsItemIds.push(foreignId);
+  await store.db.run(`UPDATE ${table} SET data=? WHERE id=?`, [JSON.stringify(postData), post.id]);
+  const row = await store.db.get(`SELECT id,data FROM ${table} WHERE analysis_id=? AND resource_kind='ads_campaign' AND resource_id='702'`, [id]);
+  const evidence = JSON.parse(row.data);
+  evidence.values.spend.value = '0';
+  evidence.values.clicks.value = null;
+  await store.db.run(`UPDATE ${table} SET data=? WHERE id=?`, [JSON.stringify(evidence), row.id]);
+  const calls = remote.calls.length;
+  for (const [content, ownerId, resourceId] of [['facebook', '201', '201_401'], ['instagram', '301', '601']]) {
+    const result = await get({ content, pageSize: 1 });
+    assert.deepEqual(Object.keys(result).sort(), ['analysis', 'items', 'pagination', 'snapshot']);
+    assert.equal(result.pagination.total, 1);
+    const [item] = result.items;
+    assert.equal(item.kind, content);
+    assert.equal(item.resourceId, resourceId);
+    assert.equal(item.ownerId, ownerId);
+    assert.ok(item.metrics.length);
+    assert.ok(item.metrics.every(metric => metric.ownerId === ownerId && metric.contentId === resourceId && metric.period.type === 'lifetime'));
+    assert.ok(!item.metrics.some(metric => metric.id === foreignId));
+    if (content === 'facebook') assert.deepEqual(Object.fromEntries(item.metrics.map(metric => [metric.scope, metric.values.views.value])), { mixed: '11', organic: '8' });
+    assert.equal((await get({ content, page: 2, pageSize: 1 })).pagination.total, 1);
+  }
+  const campaigns = [];
+  for (let page = 1; page <= 5; page++) {
+    const result = await get({ content: 'campaigns', page, pageSize: 1 });
+    assert.equal(result.pagination.total, 4);
+    campaigns.push(...result.items);
+  }
+  assert.equal(campaigns.length, 4);
+  const one = campaigns.filter(item => item.resourceId === '701');
+  assert.equal(one.length, 1);
+  assert.equal(one[0].object.resourceKind, 'campaigns');
+  assert.equal(one[0].metrics[0].values.impressions.value, '9007199254740993');
+  assert.equal(one[0].metrics[0].values.spend.value, '1000.25');
+  assert.equal(one[0].metrics[0].currency, 'COP');
+  const onlyMetrics = campaigns.find(item => item.resourceId === '702');
+  assert.equal(onlyMetrics.object, null);
+  assert.equal(onlyMetrics.metrics[0].values.spend.value, '0');
+  assert.equal(onlyMetrics.metrics[0].values.clicks.value, null);
+  assert.equal(campaigns.find(item => item.resourceId === '711').metrics[0].currency, 'USD');
+  assert.equal((await get({ content: 'all' })).pagination.total, 6);
+  assert.equal(remote.calls.length, calls);
+}));
+
+test('an active empty category falls back only within the connection, not after it becomes terminal', () => fixture(async ({ store, id, queue, drain, get, remote }) => {
+  const first = await queue();
+  const saved = await drain();
+  const calls = remote.calls.length;
+  const next = await queue({ force: true, now: '2026-11-17T12:00:00.000Z' });
+  const active = await get({ content: 'facebook' });
+  assert.equal(active.analysis.id, next.id);
+  assert.deepEqual(active.snapshot, { id: first.id, updatedAt: saved.analysis.updatedAt, stale: true });
+  assert.equal(active.items[0].resourceId, '201_401');
+  const table = store.t('social_account_analysis_items');
+  await store.db.run(`INSERT INTO ${table}(id,analysis_id,resource_kind,resource_id,data,created_at,updated_at)
+    VALUES(?,?,'campaigns','710',?,?,?)`, [randomUUID(), next.id, JSON.stringify({ accountId: 'act_501', observedAt: NOW }), NOW, NOW]);
+  const all = await get({ content: 'all' });
+  assert.equal(all.snapshot.id, next.id);
+  assert.deepEqual(all.items.map(item => [item.kind, item.resourceId]), [['campaigns', '710']]);
+  assert.equal((await get({ content: 'facebook' })).snapshot.id, first.id);
+  const beyond = await get({ content: 'campaigns', page: 2, pageSize: 1 });
+  assert.equal(beyond.snapshot.id, next.id);
+  assert.deepEqual(beyond.items, []);
+  const other = randomUUID(), analyses = store.t('social_account_analyses'), connections = store.t('social_connections');
+  await store.db.run(`INSERT INTO ${connections}(id,provider,integration_method,state,data,version,created_at,updated_at)
+    SELECT ?,provider,integration_method,state,data,version,created_at,updated_at FROM ${connections} WHERE id=?`, [other, id]);
+  const otherSnapshot = randomUUID();
+  await store.db.run(`INSERT INTO ${analyses}(id,connection_id,actor_id,state,data,version,created_at,updated_at)
+    SELECT ?,?,actor_id,state,data,version,created_at,updated_at FROM ${analyses} WHERE id=?`, [otherSnapshot, other, next.id]);
+  const unrelated = await getMetaAccountAnalysis(store, other, { content: 'facebook' }, ACTOR);
+  assert.equal(unrelated.snapshot.id, otherSnapshot);
+  assert.deepEqual(unrelated.items, []);
+  await store.db.run(`UPDATE ${analyses} SET state='partial' WHERE id=?`, [next.id]);
+  const terminal = await get({ content: 'facebook' });
+  assert.equal(terminal.snapshot.id, next.id);
+  assert.deepEqual(terminal.items, []);
+  assert.equal(terminal.pagination.total, 0);
+  assert.equal(remote.calls.length, calls);
 }));
 
 test('OAuth and manual token perform the same read-only history operations', async () => {

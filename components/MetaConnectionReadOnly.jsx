@@ -19,28 +19,29 @@ export function MetaEvaluation({ evaluation }) {
   </section>;
 }
 
-export function ManualMetaConnection({ api, requirement, report, onMutation }) {
-  const [name, setName] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+export function ManualMetaConnection({ api, requirement, issues, report, onMutation, onCreated }) {
+  const [name, setName] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const token = useRef(null), request = useRef(null), locked = useRef(false), retry = useRef(null), errorRef = useRef(null);
   const [hasToken, setHasToken] = useState(false);
   useEffect(() => { report('manual-token', { dirty: Boolean(name || hasToken), busy }); }, [name, hasToken, busy, report]);
   useEffect(() => () => { request.current?.abort(); if (token.current) token.current.value = ''; retry.current = null; report('manual-token', { dirty: false, busy: false }); }, [report]);
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
   async function submit(event) {
-    event.preventDefault(); if (locked.current) return; locked.current = true; setBusy(true); setError(''); setNotice('');
+    event.preventDefault(); if (locked.current) return; locked.current = true; setBusy(true); setError('');
     const controller = new AbortController(); request.current = controller;
     if (!retry.current) retry.current = crypto.randomUUID();
     try {
-      await api('/api/admin/social/connections', { method: 'POST', signal: controller.signal, body: JSON.stringify({ integrationMethod: 'api', authenticationMethod: 'token', name: name.trim(), accessToken: token.current.value.trim(), requestId: retry.current }) });
-      token.current.value = ''; setHasToken(false); setName(''); retry.current = null; setNotice('Token guardado de forma cifrada. Selecciona y valida la cuenta para consultar publicidad.'); await onMutation();
+      const connection = await api('/api/admin/social/connections', { method: 'POST', signal: controller.signal, body: JSON.stringify({ integrationMethod: 'api', authenticationMethod: 'token', name: name.trim(), accessToken: token.current.value.trim(), requestId: retry.current }) });
+      token.current.value = ''; setHasToken(false); setName(''); retry.current = null;
+      void onMutation(); report('manual-token', { dirty: false, busy: false }); onCreated(connection);
     } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); }
     finally { if (token.current) token.current.value = ''; setHasToken(false); locked.current = false; setBusy(false); }
   }
   const available = requirement?.configured && requirement.enabled;
   return <article id="meta-manual-connection" className={styles.card}><h2>Token de acceso manual · Solo lectura</h2><p>Usa un token de acceso vigente emitido para la misma app de Meta; no uses el secreto de app ni un token de página. Para consultar publicidad, el token necesita ads_read o ads_management y acceso de lectura a la cuenta publicitaria.</p><p>Este método no permite publicar, activar, pausar ni modificar anuncios. El token se conserva cifrado en el servidor y puede revocarse.</p>
-    {!requirement ? <p>Consultando requisitos del token…</p> : <><p>{available ? 'Token manual configurado y habilitado.' : 'Token manual no disponible: requiere configuración o habilitación.'}</p>{!!requirement.missing?.length && <p>Requisitos faltantes: {requirement.missing.join(', ')}</p>}{!!requirement.invalid?.length && <p>Requisitos inválidos: {requirement.invalid.join(', ')}</p>}<p>Requiere App ID, App Secret y clave de cifrado de tokens; no requiere Login Config ID.</p></>}
+    {!requirement ? <p>Consultando requisitos del token…</p> : <><p>{available ? 'Token manual configurado y habilitado.' : 'Token manual no disponible: requiere configuración o habilitación.'}</p>{!!issues.length && <p>Por revisar: {issues.join(' · ')}.</p>}<p>Requiere el ID y el secreto de la app, y custodia configurada en el servidor. No requiere ID de configuración de inicio de sesión.</p></>}
     <form method="post" onSubmit={submit}><fieldset disabled={busy}><label>Nombre de la conexión<input name="manualMetaName" required maxLength={200} value={name} onChange={event => { setName(event.target.value); retry.current = null; }}/></label><label>Token de acceso<input ref={token} name="manualMetaToken" type="password" required autoComplete="off" spellCheck={false} onChange={event => { setHasToken(Boolean(event.target.value)); retry.current = null; }}/></label><button type="submit" className="button primary" disabled={!available || !name.trim() || !hasToken}>{busy ? 'Guardando…' : 'Conectar token de solo lectura'}</button></fieldset></form>
-    {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}{notice && <p role="status">{notice}</p>}
+    {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}
   </article>;
 }
 
@@ -51,7 +52,7 @@ export function MetaAdvertisingRead({ api, connection, report, blocked }) {
   const accountId = connection.identities?.adAccountId;
   const confirmed = connection.evaluation?.permissions?.some(item => ['ads_read', 'ads_management'].includes(item.name) && item.status === 'granted');
   const eligible = connection.state === 'connected' && !connection.revalidationRequired && !connection.disconnectStatus && Boolean(accountId) && confirmed && connection.capabilities?.insights === true;
-  const identity = JSON.stringify([connection.id, accountId, connection.state, connection.revalidationRequired, connection.disconnectStatus, connection.readOnly, connection.capabilities?.insights, connection.evaluation?.permissions, blocked]);
+  const identity = JSON.stringify([connection.id, accountId, eligible]);
   useEffect(() => { generation.current++; request.current?.abort(); locked.current = false; setBusy(false); setResult(null); setError(''); return () => { generation.current++; request.current?.abort(); }; }, [identity]);
   const owner = `advertising-read:${connection.id}`;
   useEffect(() => { report(owner, { dirty: Boolean(result && (from !== result.from || to !== result.to)), busy }); }, [report, owner, from, to, result, busy]);
@@ -71,9 +72,14 @@ export function MetaAdvertisingRead({ api, connection, report, blocked }) {
     finally { if (generation.current === current) { locked.current = false; setBusy(false); } }
   }
   const visible = result?.identity === identity ? result : null;
-  return <section aria-label="Consulta de publicidad"><h3>Publicidad y métricas · solo lectura</h3><p>Cuenta seleccionada: {accountId || 'Ninguna'}. Consulta explícita, sin actualización automática de Meta.</p>{!eligible && <p className={styles.warning}>Se necesita conexión activa, cuenta seleccionada y permiso ads_read o ads_management confirmado.</p>}{blocked && <p>Guarda los cambios de recursos antes de consultar.</p>}
-    <form onSubmit={query}><fieldset disabled={busy || blocked || !eligible}><label>Desde<input type="date" required value={from} max={to} onChange={event => setFrom(event.target.value)}/></label><label>Hasta<input type="date" required min={from} value={to} onChange={event => setTo(event.target.value)}/></label><button type="submit" className="button subtle">Consultar publicidad</button></fieldset></form>
+  return <section className={styles.panel} aria-label="Consultar anuncios por fecha"><h3>Consultar anuncios por fecha</h3><p>Esta consulta por fecha no se guarda. Cuenta seleccionada: {accountId || 'Ninguna'}.</p>{!eligible && <p className={styles.warning}>Se necesita conexión activa, cuenta seleccionada y permiso ads_read o ads_management confirmado.</p>}{blocked && <p>Termina la operación o guarda tus cambios antes de consultar.</p>}
+    <form onSubmit={query}><fieldset className={styles.fieldGrid} disabled={busy || blocked || !eligible}><legend>Período de la consulta</legend><label className="field">Desde<input type="date" required value={from} max={to} onChange={event => setFrom(event.target.value)}/></label><label className="field">Hasta<input type="date" required min={from} value={to} onChange={event => setTo(event.target.value)}/></label><button type="submit" className="button subtle">Consultar publicidad</button></fieldset></form>
     {busy && <p role="status">Consultando publicidad…</p>}{error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}
-    {visible && <><p>Período aplicado: {visible.from} a {visible.to} · Cuenta: {visible.accountId} · Moneda: {visible.currency || 'Desconocida'} · Consultado: {date(visible.fetchedAt)}</p>{(from !== visible.from || to !== visible.to) && <p>El formulario cambió; las filas corresponden únicamente al período aplicado indicado.</p>}<p>Gasto en unidades mayores de la moneda informada por Meta, sin conversión. El alcance no se suma. «Sin dato» no equivale a cero.</p><div style={{ overflowX: 'auto' }}><table><thead><tr>{['Campaña', 'Impresiones', 'Clics', 'Alcance', 'Gasto'].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{(visible.rows || []).map((row, index) => <tr key={`${row.campaignId}-${index}`}><th scope="row">{row.campaignName || row.campaignId || 'Sin nombre'}</th>{['impressions', 'clicks', 'reach', 'spend'].map(key => <td key={key}>{row[key] ?? 'Sin dato'}</td>)}</tr>)}</tbody></table></div>{!visible.rows?.length && <p>No hay campañas reportadas para este período.</p>}<MetaEvaluation evaluation={visible.evaluation}/></>}
+    {visible && <><p>Período aplicado: {visible.from} a {visible.to} · Cuenta: {visible.accountId} · Moneda: {visible.currency || 'No informada'} · Consultado: {date(visible.fetchedAt)}</p>
+      {(from !== visible.from || to !== visible.to) && <p>El formulario cambió; las filas corresponden únicamente al período aplicado indicado.</p>}
+      {visible.rows?.length ? <div className={styles.tableWrap} tabIndex={0} role="region" aria-label="Campañas consultadas por fecha"><table><thead><tr>{['Campaña', 'Impresiones', 'Clics', 'Alcance', 'Gasto'].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{visible.rows.map((row, index) => <tr key={`${row.campaignId}-${index}`}><th scope="row">{row.campaignName ? `${row.campaignName}${row.campaignId ? ` · ${row.campaignId}` : ''}` : row.campaignId || 'Sin nombre'}</th>{['impressions', 'clicks', 'reach', 'spend'].map(key => <td key={key}>{row[key] ?? 'Sin dato'}</td>)}</tr>)}</tbody></table></div> : <p>No hay campañas reportadas para este período.</p>}
+      <p>Gasto en la moneda informada por Meta, sin conversión. El alcance no se suma. «Sin dato» no equivale a cero.</p>
+      <details className={styles.technicalDetails}><summary>Límites y permisos de esta consulta</summary><MetaEvaluation evaluation={visible.evaluation}/></details>
+    </>}
   </section>;
 }

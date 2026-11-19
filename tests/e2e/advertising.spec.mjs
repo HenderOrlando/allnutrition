@@ -650,18 +650,22 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     const readOnly = observeWrites(page);
     await actionButton(page, 'Ver resultados').click();
     await expectView(page, { tab: 'results', record: campaign.id });
-    await expect(page.getByRole('heading', { name: '¿Se logró el objetivo?' })).toBeVisible();
-    await expect(page.getByText('0 reportado', { exact: true })).toHaveCount(0);
+    const metaPerformance = page.getByRole('region', { name: 'Rendimiento reportado por Meta', exact: true });
+    await expect(metaPerformance).toBeVisible();
+    await expect(metaPerformance.getByText('0', { exact: true })).toHaveCount(0);
     expect(readOnly.writes).toEqual([]);
     readOnly.stop();
+    await openDisclosure(page, /^Operaciones de la entrega$/);
     await submit(page, `${ROOT}/campaigns/${campaign.id}/actions`, actionButton(page, 'Actualizar desde Meta'), 'sync');
     const measured = remote('measure', campaign.id);
     expect(measured.measurementId).toEqual(expect.any(String));
     await page.reload();
-    await expect(page.getByText('0 reportado', { exact: true })).toBeVisible();
+    await expect(metaPerformance.getByText('0', { exact: true }).first()).toBeVisible();
+    await openDisclosure(page, /^Evidencia y acciones de las recomendaciones$/);
     await submit(page, `${ROOT}/campaigns/${campaign.id}/actions`, actionButton(page, 'Revisar mejoras'), 'analyze');
     remote('analyze', campaign.id);
     await page.reload();
+    await openDisclosure(page, /^Evidencia y acciones de las recomendaciones$/);
     await expect(page.getByRole('heading', { name: 'Falta evidencia suficiente' })).toBeVisible();
     const originalPost = await f.campaign(campaign.id);
     expect(originalPost.revisions).toEqual(approved.revisions);
@@ -946,6 +950,220 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
   }
 });
 
+test('publicidad guiada: campañas consultadas y ficha económica', async ({ page }, info) => {
+  test.setTimeout(180000);
+  const f = await advertisingFixture(page, info), seeded = await seedMetaInventory(f);
+  const { connectionId, accountId, campaignId, oldSnapshot, local, draft } = seeded;
+  const reading = observeWrites(page), remoteReads = [];
+  const track = request => remoteReads.push(new URL(request.url()).pathname);
+  page.on('request', track);
+  try {
+    const linkedBaseline = await f.campaign(local.id), draftBaseline = await f.campaign(draft.id);
+    const linkedOrdersBefore = (await f.get(`${ROOT}/results?campaignId=${local.id}`)).business.orders;
+    await page.goto(`/admin?section=business&tab=social&record=${connectionId}`);
+    const consulted = page.getByRole('region', { name: 'Datos consultados', exact: true });
+    await expect(consulted.getByRole('heading', { name: `Campaña ${campaignId}`, exact: true })).toBeVisible();
+    await expect(page.getByText('Esta consulta por fecha no se guarda.', { exact: false })).toBeVisible();
+    await expectView(page, { section: 'business', tab: 'social', record: connectionId, source: null });
+    remoteReads.length = 0;
+    await page.getByRole('button', { name: 'Ver campañas consultadas en Publicidad', exact: true }).click();
+    await expectView(page, { section: 'advertising', tab: 'campaigns', source: 'meta', connection: connectionId, record: null, account: null });
+    const inventory = page.getByRole('region', { name: 'Campañas consultadas en Meta', exact: true });
+    await expect(inventory.getByText('26 campañas', { exact: true })).toBeVisible();
+    const row = inventory.getByRole('row').filter({ hasText: `Campaña ${campaignId}` });
+    await expect(row.getByText('También creada en All Nutrition', { exact: true })).toBeVisible();
+    await expect(row.getByText('Configuración disponible · Sin métricas', { exact: true })).toBeVisible();
+    await expect(inventory.getByText('También creada en All Nutrition', { exact: true })).toHaveCount(1);
+    await captureAdvertisingSurface(page, info, 'consultadas-en-meta-lista');
+
+    const listPages = inventory.getByRole('navigation', { name: 'Páginas de campañas consultadas' });
+    await listPages.getByRole('button', { name: 'Siguiente' }).click();
+    await expectView(page, { page: '2', connection: connectionId, account: null });
+    await expect(listPages).toContainText('Página 2 de 3');
+    const secondPage = inventory.getByRole('button', { name: /^Ver detalle:/ }).first();
+    const secondLabel = await secondPage.getAttribute('aria-label');
+    await secondPage.click();
+    await expectView(page, { page: '2', connection: connectionId, account: accountId });
+    await page.reload();
+    await page.getByRole('button', { name: 'Volver a campañas consultadas', exact: true }).click();
+    await expectView(page, { page: '2', connection: connectionId, account: null, metaCampaign: null });
+    await expect(inventory.getByRole('button', { name: secondLabel, exact: true })).toBeFocused();
+    await listPages.getByRole('button', { name: 'Anterior' }).click();
+    await row.getByRole('button', { name: /^Ver detalle:/ }).click();
+    await expectView(page, { metaCampaign: campaignId, account: accountId, record: null });
+
+    const detail = page.getByRole('region', { name: 'Detalle de campaña consultada' });
+    const estimate = detail.getByRole('region', { name: 'Estimación antes de invertir' });
+    const meta = detail.getByRole('region', { name: 'Rendimiento reportado por Meta' });
+    const trade = detail.getByRole('region', { name: 'Resultado comercial en All Nutrition' });
+    for (const block of [estimate, meta, trade]) await expect(block).toBeVisible();
+    await expect(meta).toContainText('Configuración disponible · Sin métricas');
+    await expect(trade).toContainText('Sin pedidos vinculados');
+    await expect(detail.getByRole('button', { name: /^(Editar|Aprobar|Pausar|Activar|Autorizar inversión|Publicar|Vincular)/i })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Crear publicación o campaña', exact: true })).toHaveCount(0);
+    await openDisclosure(detail, /^Conjuntos de anuncios \(12\)$/);
+    const children = detail.getByRole('navigation', { name: 'Páginas de conjuntos de anuncios' });
+    await children.getByRole('button', { name: 'Siguiente' }).click();
+    await expect(children).toContainText('Página 2 de 2');
+    await expect(detail.getByText(`Conjunto ${seeded.lastAdSet}`, { exact: true })).toBeVisible();
+    await expect(detail.getByText(`Conjunto ${seeded.orphan}`, { exact: true })).toHaveCount(0);
+    await expectView(page, { metaCampaign: campaignId, connection: connectionId, page: null });
+
+    await estimate.getByLabel('Presupuesto total de la pauta', { exact: true }).fill('100000');
+    await estimate.getByLabel('Contribución esperada por venta', { exact: true }).fill('30000');
+    await estimate.getByLabel('Moneda del escenario', { exact: true }).fill('COP');
+    await expect(estimate).toContainText('4 ventas');
+    await captureAdvertisingSurface(page, info, 'consultadas-en-meta-ficha-economica');
+    await detail.getByRole('combobox', { name: 'Lectura guardada' }).selectOption(oldSnapshot);
+    await expectView(page, { snapshot: oldSnapshot, connection: connectionId });
+    await expect(meta).toContainText('2025-08-01');
+    await expect(meta).toContainText('2025-08-07');
+    await expect(meta).toContainText(/0\s*COP/);
+    await expect(meta).toContainText('Sin datos');
+    await expect(trade).toContainText(/corte/i);
+    await expect(trade).not.toContainText('2025-08-07');
+    await expect(estimate).toContainText('4 ventas');
+    await detail.getByRole('button', { name: 'Volver a campañas consultadas', exact: true }).click();
+    await inventory.getByRole('button', { name: `Ver detalle: Campaña ${seeded.otherCampaign} · ${accountId}`, exact: true }).click();
+    await expect(estimate).toContainText('Sin base para estimar');
+    await expect(estimate.getByLabel('Contribución esperada por venta', { exact: true })).toHaveValue('');
+    await expect(trade).toContainText('Sin campaña propia vinculada');
+    expect(remoteReads.filter(path => path === `${ROOT}/campaigns` || path.startsWith(`${ROOT}/assets`) || /\/connections\/[^/]+\/advertising$/.test(path))).toEqual([]);
+
+    await selectWorkspace(page, 'Origen de campañas', 'Creadas en All Nutrition');
+    await expectView(page, { source: null, connection: null, account: null, metaCampaign: null, page: null });
+    await selectWorkspace(page, 'Origen de campañas', 'Consultadas en Meta');
+    await expectView(page, { section: 'advertising', tab: 'campaigns', source: 'meta', connection: null, account: null });
+    const account = inventory.getByRole('combobox', { name: 'Cuenta publicitaria', exact: true });
+    await expect(account.locator('option:checked')).toHaveText('Todas las cuentas');
+    await account.selectOption(accountId);
+    await expectView(page, { account: accountId, connection: null });
+    await expect(inventory.getByText('26 campañas', { exact: true })).toBeVisible();
+    await expect(inventory.getByText('También creada en All Nutrition', { exact: true })).toHaveCount(1);
+    await row.getByRole('button', { name: /^Ver detalle:/ }).click();
+    await detail.getByRole('button', { name: 'Abrir ficha propia', exact: true }).click();
+    await expectView(page, { source: null, account: null, connection: null, record: local.id });
+
+    await page.goto(`/admin?section=advertising&tab=campaigns&q=${encodeURIComponent(f.marker)}`);
+    const linked = card(page, local.name);
+    await expect(linked.getByText('Consultada en Meta', { exact: true })).toBeVisible();
+    await card(page, draft.name).getByRole('button', { name: 'Ver ficha económica', exact: true }).click();
+    await expectView(page, { tab: 'results', record: draft.id, source: null });
+    await expect(page.getByRole('heading', { name: 'Resultado comercial en All Nutrition', exact: true })).toBeVisible();
+    await page.goto(`/admin?section=advertising&tab=campaigns&record=${draft.id}`);
+    const caption = page.locator('textarea[name=\"caption\"]');
+    await caption.fill('Texto provisional no guardado');
+    const discard = page.waitForEvent('dialog');
+    const leaving = page.getByRole('button', { name: 'Volver a publicaciones', exact: true }).click();
+    const confirmation = await discard;
+    expect(confirmation.message()).toMatch(/cambios sin guardar/);
+    await confirmation.dismiss();
+    await leaving;
+    await expect(caption).toHaveValue('Texto provisional no guardado');
+    await page.getByRole('button', { name: 'Continuar a revisión', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Qué falta antes de aprobar' })).toBeVisible();
+    await page.getByRole('button', { name: 'Editar definición', exact: true }).click();
+    await expect(caption).toHaveValue('Texto provisional no guardado');
+    expect(await f.campaign(local.id)).toEqual(linkedBaseline);
+    expect(await f.campaign(draft.id)).toEqual(draftBaseline);
+    expect(reading.writes).toEqual([]);
+    expect((await f.get(`${ROOT}/results?campaignId=${local.id}`)).business.orders).toEqual(linkedOrdersBefore);
+  } finally {
+    page.off('request', track);
+    reading.stop();
+    await seeded.cleanup();
+  }
+});
+
+async function seedMetaInventory(f) {
+  const env = testDatabaseEnv(), host = new URL(env.DATABASE_URL).hostname;
+  if (!['db', 'localhost', '127.0.0.1'].includes(host) || env.DB_SSL !== 'verify' || !(env.DB_CA_CERT || env.DB_CA_CERT_FILE)) throw new Error('El inventario sintético requiere PostgreSQL local con TLS verificado.');
+  const store = new Store(await openPostgres(databaseConfig(env)));
+  const createdCampaigns = [];
+  let ready = false;
+  try {
+    if ((await store.db.get('SELECT current_database() AS name')).name !== 'allnutrition_test') throw new Error('La conexión real no corresponde al fixture allnutrition_test.');
+    const actor = await store.db.get(`SELECT id FROM ${store.t('users')} WHERE email=?`, ['e2e@example.test']);
+    const at = new Date(Date.now() - 2000).toISOString(), earlier = new Date(Date.parse(at) - 86400000).toISOString();
+    const historicalPeriod = { type: 'range', since: '2025-08-01', until: '2025-08-07', timeZone: 'America/Bogota' };
+    const connectionId = randomUUID(), secondConnection = randomUUID(), assetId = randomUUID();
+    const snapshot = randomUUID(), oldSnapshot = randomUUID(), secondSnapshot = randomUUID();
+    const prefix = BigInt(`0x${connectionId.replaceAll('-', '')}`).toString().slice(0, 25);
+    const accountId = `act_${prefix}00`, campaignId = `${prefix}100`, otherCampaign = `${prefix}101`;
+    const lastAdSet = `${prefix}211`, orphan = `${prefix}244`;
+    const localName = `${f.marker} vinculada`, draftName = `${f.marker} para revisar`;
+    const local = await f.post(`${ROOT}/campaigns`, { name: localName, mode: 'paid' });
+    createdCampaigns.push(local.id);
+    const draft = await f.post(`${ROOT}/campaigns`, { name: draftName });
+    createdCampaigns.push(draft.id);
+    const evidence = async (tx, analysisId, kind, resourceId, observedAt, data) => insertRow(tx, 'social_account_analysis_items', {
+      id: randomUUID(), analysis_id: analysisId, resource_kind: kind, resource_id: resourceId, created_at: observedAt, updated_at: observedAt,
+      data: JSON.stringify({ accountId, observedAt, ...data })
+    });
+    await store.transaction(async tx => {
+      const identities = { adAccountId: accountId };
+      for (const [id, label] of [[connectionId, 'Principal'], [secondConnection, 'Segunda']]) await insertRow(tx, 'social_connections', {
+        id, provider: 'meta', integration_method: 'api', state: 'connected', version: 1, created_at: earlier, updated_at: at,
+        data: JSON.stringify({ name: `${f.marker} ${label}`, authenticationMethod: 'token', readOnly: true, identities,
+          currency: 'COP', timeZone: 'America/Bogota', capabilities: { insights: true },
+          resources: { adAccounts: [{ id: accountId, name: 'Cuenta sintética de publicidad', currency: 'COP', timeZone: 'America/Bogota' }] },
+          evaluation: { permissions: [{ name: 'ads_read', status: 'granted' }] }
+        })
+      });
+      const assetHash = hash(assetId);
+      await insertRow(tx, 'social_assets', { id: assetId, state: 'archived', sha256: assetHash, bytes: 0,
+        version: 1, created_at: earlier, updated_at: at, data: JSON.stringify({ name: 'Pieza histórica sintética', kind: 'image', derivativeSha256: assetHash }) });
+      for (const [id, connection, observedAt] of [[snapshot, connectionId, at], [oldSnapshot, connectionId, earlier], [secondSnapshot, secondConnection, earlier]]) await insertRow(tx, 'social_account_analyses', {
+        id, connection_id: connection, actor_id: actor.id, state: 'completed', version: 1, created_at: observedAt, updated_at: observedAt,
+        data: JSON.stringify({ period: historicalPeriod, phase: 'completed', stats: { completedUnits: 3, resources: 1, pages: 2, objects: 26 }, work: [],
+          permissions: ['ads_read'], coverage: { [`ad_account:${accountId}`]: { kind: 'ad_account', resourceId: accountId, state: 'accessible_complete', missing: [] } } })
+      });
+      for (let index = 0; index < 26; index++) await evidence(tx, snapshot, 'campaigns', `${prefix}${100 + index}`, new Date(Date.parse(at) - index * 1000).toISOString(), {
+        period: { type: 'current_snapshot', at }, configuration: { objective: 'OUTCOME_SALES', status: 'PAUSED', effective_status: 'PAUSED' }
+      });
+      for (let index = 0; index < 44; index++) await evidence(tx, snapshot, 'adsets', `${prefix}${200 + index}`, at, {
+        period: { type: 'current_snapshot', at }, configuration: { campaignId: index < 12 ? campaignId : `${prefix}${101 + index % 25}`, status: 'PAUSED', optimization_goal: 'REACH' }
+      });
+      await evidence(tx, snapshot, 'adsets', orphan, at, { period: { type: 'current_snapshot', at }, configuration: { campaignId: `${prefix}999` } });
+      await evidence(tx, secondSnapshot, 'campaigns', campaignId, earlier, { period: { type: 'current_snapshot', at: earlier }, configuration: { status: 'PAUSED' } });
+      await evidence(tx, oldSnapshot, 'ads_campaign', campaignId, earlier, {
+        period: historicalPeriod, dimensions: { level: 'campaign', breakdowns: [] }, scope: 'paid', currency: 'COP',
+        values: { spend: { value: '0', unit: 'account_currency_decimal', status: 'reported' }, impressions: { value: '0', unit: 'count', status: 'reported' } }
+      });
+      const spec = { name: localName, mode: 'paid', objective: 'reach', platforms: ['facebook'], marketCountries: ['CO'], placements: ['facebook_feed'],
+        connectionId, integrationMethod: 'api', identities, currency: 'COP', timeZone: 'America/Bogota', assetId, assetHash, assetType: 'image' };
+      await insertRow(tx, 'social_revisions', { campaign_id: local.id, revision: 1, spec_hash: hash(spec), approved_at: earlier, actor_id: actor.id, data: JSON.stringify({ spec }) });
+      const deliveryId = randomUUID();
+      await insertRow(tx, 'social_deliveries', { id: deliveryId, campaign_id: local.id, revision: 1, channel: 'meta_ads', state: 'paused',
+        remote_id: campaignId, next_sync_at: null, version: 1, created_at: earlier, updated_at: at,
+        data: JSON.stringify({ id: deliveryId, remoteRefs: { campaignId }, integrationMethod: 'api', lastConfirmedState: 'paused', lastConfirmedAt: at, evidence: { remoteRead: true } })
+      });
+      await tx.db.run(`UPDATE ${tx.t('social_campaigns')} SET state='paused',connection_id=?,asset_id=? WHERE id=?`, [connectionId, assetId, local.id]);
+    });
+    ready = true;
+    return { connectionId, campaignId, accountId, otherCampaign, oldSnapshot, lastAdSet, orphan, local: { id: local.id, name: localName }, draft: { id: draft.id, name: draftName },
+      cleanup: async () => {
+        try {
+          await store.transaction(async tx => {
+            await tx.db.run(`DELETE FROM ${tx.t('social_deliveries')} WHERE campaign_id=?`, [local.id]);
+            await tx.db.run(`DELETE FROM ${tx.t('social_revisions')} WHERE campaign_id=?`, [local.id]);
+            await tx.db.run(`DELETE FROM ${tx.t('social_campaigns')} WHERE id IN (?,?)`, [local.id, draft.id]);
+            await tx.db.run(`DELETE FROM ${tx.t('social_assets')} WHERE id=?`, [assetId]);
+            await tx.db.run(`DELETE FROM ${tx.t('social_account_analyses')} WHERE id IN (?,?,?)`, [snapshot, oldSnapshot, secondSnapshot]);
+            await tx.db.run(`DELETE FROM ${tx.t('social_connections')} WHERE id IN (?,?)`, [connectionId, secondConnection]);
+          });
+        } finally { await store.close(); }
+      }
+    };
+  } finally {
+    if (!ready) {
+      try {
+        if (createdCampaigns.length) await store.db.run(`DELETE FROM ${store.t('social_campaigns')} WHERE id IN (${createdCampaigns.map(() => '?').join(',')})`, createdCampaigns);
+      } finally { await store.close(); }
+    }
+  }
+}
+
 async function seedResults(f) {
   const env = testDatabaseEnv(), host = new URL(env.DATABASE_URL).hostname;
   if (!['db', 'localhost', '127.0.0.1'].includes(host) || env.DB_SSL !== 'verify' || !(env.DB_CA_CERT || env.DB_CA_CERT_FILE)) throw new Error('La evidencia solo se instala en el fixture PostgreSQL local con TLS verificado.');
@@ -1022,11 +1240,12 @@ test('estudio de publicaciones · abrir la captura exacta y preparar una variant
   try {
     await page.goto(`/admin?section=advertising&tab=results&record=${record.id}&resultsFocus=recommendations`);
   await expect(page.getByRole('heading', { name: record.name, exact: true })).toBeVisible();
-  await expect(page.getByText('0 reportado', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Rendimiento reportado por Meta', exact: true }).getByText('0', { exact: true }).first()).toBeVisible();
   await expectNoOverflow(page);
   await openDisclosure(page, /^Métricas completas, capturas y estado por destino$/);
   await expect(page.getByRole('heading', { name: 'Estado de publicación por red' })).toBeVisible();
   await captureAdvertisingSurface(page, info, 'resultados-capturas');
+  await openDisclosure(page, /^Evidencia y acciones de las recomendaciones$/);
   const capture = page.getByRole('button', { name: 'Abrir captura citada', exact: true });
   await capture.scrollIntoViewIfNeeded();
   await captureAdvertisingSurface(page, info, 'resultados-recomendacion');
@@ -1058,6 +1277,7 @@ test('estudio de publicaciones · abrir la captura exacta y preparar una variant
   await f.post(`${ROOT}/recommendations/${record.recommendationId}/actions`, { action: 'cancel-in-place', version: local.changeDraft.recommendationVersion, evidenceHash: local.changeDraft.evidenceHash, draftId: change.id, draftVersion: local.version, deliveryId: local.changeDraft.deliveryId });
   await page.goBack();
   await expectView(page, { tab: 'results', record: record.id, resultsFocus: 'recommendations' });
+  await openDisclosure(page, /^Evidencia y acciones de las recomendaciones$/);
   await page.getByRole('button', { name: 'Preparar una variante', exact: true }).click();
   const variant = page.getByRole('dialog');
   await variant.getByRole('checkbox').check();
@@ -1074,6 +1294,7 @@ test('estudio de publicaciones · abrir la captura exacta y preparar una variant
   expect(child.operations).toEqual([]);
   await page.goBack();
   await expectView(page, { tab: 'results', record: record.id });
+  await openDisclosure(page, /^Historial de pruebas y aprendizajes$/);
   await expect(page.getByRole('heading', { name: 'Qué aprendimos' })).toBeVisible();
   await expect(page.getByText('Mejoró según este criterio', { exact: true })).toBeVisible();
   await page.getByRole('heading', { name: 'Qué aprendimos' }).scrollIntoViewIfNeeded();

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { hash } from '../lib/business/commands.mjs';
 import { buildSocialHistoricalForecast, compareSocialForecast, socialHistoryQuartiles, selectSocialComparableSamples } from '../lib/business/social-analysis.mjs';
+import { formatSocialMoneyMinor, selectSocialEconomicForecast, socialBreakEven, socialBusinessAmounts, socialExpectedCost, socialPrimaryForecastRange } from '../lib/business/social-economics.mjs';
 
 // All accounts, deliveries and measurements in this file are synthetic.
 const NOW = '2026-11-02T12:00:00.000Z', DAY = 86400000;
@@ -41,6 +42,74 @@ test('five final campaigns yield quartiles, retain zero, and never count one cam
   assert.equal(forecast(spec, [...samples, samples[0]]).sampleCount, 5);
   assert.equal(forecast(spec, samples.slice(1)).metricRanges.linkClicks, undefined);
 });
+
+test('break-even uses the exact ceiling in the same currency, without treating an absent budget as zero', () => {
+  const cop = { budgetCurrency: 'COP', contributionCurrency: 'COP' };
+  assert.deepEqual(socialBreakEven({ ...cop, budgetMinor: 10000000, contributionMinor: 2500000 }), { status: 'estimated', sales: 4 });
+  assert.deepEqual(socialBreakEven({ ...cop, budgetMinor: 10000000, contributionMinor: 3000000 }), { status: 'estimated', sales: 4 });
+  assert.deepEqual(socialBreakEven({ budgetCurrency: 'USD', contributionCurrency: 'USD', budgetMinor: 101, contributionMinor: 100 }), { status: 'estimated', sales: 2 });
+  for (const contributionMinor of [0, -2000000]) {
+    assert.equal(socialBreakEven({ ...cop, budgetMinor: 10000000, contributionMinor }).status, 'nonpositive_contribution');
+  }
+  assert.equal(socialBreakEven({ ...cop, budgetMinor: null, contributionMinor: 2000000 }).status, 'missing_budget');
+  assert.equal(socialBreakEven({ ...cop, budgetMinor: 10000000, contributionMinor: null }).status, 'missing_contribution');
+  assert.equal(socialBreakEven({ ...cop, contributionCurrency: 'USD', budgetMinor: 10000000, contributionMinor: 2000000 }).status, 'incompatible_currency');
+  assert.equal(socialBreakEven({ budgetMinor: 0 }).status, 'incompatible_currency');
+  assert.equal(socialBreakEven({ ...cop, budgetMinor: 0 }).status, 'no_investment');
+  assert.equal(socialBreakEven({ organic: true }).status, 'no_investment');
+});
+
+test('estimated cost follows only the forecast budget and positive primary quartiles', () => {
+  const spec = modelSpec();
+  const saved = { ...forecast(spec, cohort()), id: 'forecast-1', budgetMinor: spec.budgetMinor, currency: spec.currency };
+  const draft = { ...spec, state: 'draft', forecastId: saved.id, validation: { specHash: saved.specHash }, forecasts: [saved] };
+  const selected = selectSocialEconomicForecast(draft);
+  const range = socialPrimaryForecastRange(selected, 'linkClicks');
+  assert.equal(range.sampleCount, 5);
+  const expected = socialExpectedCost(selected, range);
+  assert.deepEqual(expected, { medianMinor: 25000, interval: { lowMinor: 20000, highMinor: 33333 } });
+  assert.equal(formatSocialMoneyMinor(expected.medianMinor, selected.currency), 'COP 250');
+  assert.deepEqual(socialExpectedCost(selected, { lower: 0, median: 200, upper: 250 }), { medianMinor: 25000, interval: null });
+  assert.equal(socialExpectedCost(selected, { lower: 0, median: 0, upper: 250 }), null);
+  assert.equal(socialExpectedCost({ ...selected, budgetMinor: 3 }, { lower: 0.125, median: 0.25, upper: 0.375 }).medianMinor, 12);
+  assert.equal(selectSocialEconomicForecast(draft, { draftEdited: true }), null);
+  assert.equal(selectSocialEconomicForecast({ ...draft, forecastId: 'another' }), null);
+  assert.equal(selectSocialEconomicForecast({ ...draft, validation: { specHash: 'changed' } }), null);
+  assert.equal(selectSocialEconomicForecast({ ...draft, budgetMinor: spec.budgetMinor * 2 }), null);
+  const approved = { ...draft, state: 'active', budgetMinor: spec.budgetMinor * 2, revisions: [{ spec, specHash: saved.specHash, forecastId: saved.id, forecast: saved }] };
+  assert.equal(selectSocialEconomicForecast(approved), saved);
+
+  const four = { ...forecast(spec, cohort().slice(1)), budgetMinor: spec.budgetMinor, currency: spec.currency,
+    manualScenario: { metric: 'linkClicks', lower: 100, upper: 300, basis: 'Hipótesis sintética' } };
+  assert.equal(socialPrimaryForecastRange(four, 'linkClicks'), null);
+  assert.equal(socialExpectedCost(four, socialPrimaryForecastRange(four, 'linkClicks')), null);
+});
+
+test('commercial summary shows the server result once and never upgrades a partial subtotal', () => {
+  // Same recognized sales after returns, contribution, and committed spend as the finance contract.
+  const full = valueMinor => ({ valueMinor, knownMinor: valueMinor, complete: true, currency: 'COP' });
+  const partial = knownMinor => ({ valueMinor: null, knownMinor, complete: false, currency: 'COP' });
+  const business = { orders: [{ id: 'order' }], recognizedProductSales: full(40000000), knownContribution: full(30800000),
+    metaSpend: full(10000000), registeredAdvertising: full(4500000), advertisingPayments: full(2500000), contributionAfterAdvertising: full(20800000) };
+  const summarized = socialBusinessAmounts(business);
+  assert.deepEqual(summarized, { orderCount: 1, sales: { valueMinor: 40000000, complete: true },
+    contribution: { valueMinor: 30800000, complete: true }, afterAdvertising: 20800000 });
+  assert.deepEqual([summarized.sales.valueMinor, summarized.contribution.valueMinor, business.metaSpend.valueMinor, summarized.afterAdvertising]
+    .map(value => formatSocialMoneyMinor(value, 'COP')), ['COP 400.000', 'COP 308.000', 'COP 100.000', 'COP 208.000']);
+  const usdSpend = { ...full(10000), currency: 'USD' };
+  const mixed = socialBusinessAmounts({ ...business, metaSpend: usdSpend, contributionAfterAdvertising: partial(null) });
+  assert.equal(formatSocialMoneyMinor(usdSpend.valueMinor, usdSpend.currency), 'USD 100');
+  assert.equal(formatSocialMoneyMinor(mixed.contribution.valueMinor, 'COP'), 'COP 308.000');
+  assert.equal(formatSocialMoneyMinor(mixed.afterAdvertising, 'COP'), null);
+  const incomplete = socialBusinessAmounts({ ...business, knownContribution: partial(12000000), contributionAfterAdvertising: partial(2000000) });
+  assert.deepEqual(incomplete.contribution, { valueMinor: 12000000, complete: false });
+  assert.equal(incomplete.afterAdvertising, null);
+  assert.equal(socialBusinessAmounts({ ...business, metaSpend: { ...partial(10000000), newerPartial: true }, contributionAfterAdvertising: partial(20800000) }).afterAdvertising, null);
+  const unlinked = socialBusinessAmounts({ orders: [], recognizedProductSales: partial(0), knownContribution: partial(0) });
+  assert.equal(unlinked.orderCount, 0);
+  assert.deepEqual(unlinked.sales, { valueMinor: null, complete: false });
+});
+
 test('cohort excludes mismatched configuration and incomplete or rounded definitions per metric', () => {
   const mutations = [
     sample => { sample.spec.audience.ageMin = 21; }, sample => { sample.spec.identities.businessId = '999'; },

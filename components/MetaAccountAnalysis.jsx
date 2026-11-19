@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import WorkspaceTabs from './WorkspaceTabs';
 import styles from './AdvertisingWorkspace.module.css';
 import accountStyles from './AdvertisingResults.module.css';
 
@@ -10,53 +11,71 @@ const states = { queued: 'En cola', running: 'Consultando', waiting: 'Esperando 
 const coverageStates = { pending: 'Pendiente', running: 'En curso', accessible_complete: 'Lectura accesible terminada (no garantiza historia completa)', partial: 'Parcial', denied: 'Permiso denegado', unavailable: 'No disponible' };
 const date = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('es-CO') : 'Sin fecha';
 
-export default function MetaAccountAnalysis({ api, connections = [], onInteractionStateChange, onMutation }) {
-  const eligible = connections.filter(connection => connection.provider === 'meta' && connection.integrationMethod === 'api');
-  const [selected, setSelected] = useState(''), [page, setPage] = useState(1), [refresh, setRefresh] = useState(0);
-  const connectionId = eligible.some(connection => connection.id === selected) ? selected : eligible[0]?.id || '';
-  const connection = eligible.find(item => item.id === connectionId);
-  const [report, setReport] = useState(null), [error, setError] = useState(''), [loading, setLoading] = useState(false), [busy, setBusy] = useState(false);
-  const lock = useRef(false), mutations = useRef(new Set()), errorRef = useRef(null);
-  const objective = connection?.measurementConfig?.objective || 'reach';
+const activeStates = new Set(['queued', 'running', 'waiting']);
+
+function useAccountAnalysis({ api, connectionId, objective, content, revision, onInteractionStateChange, onMutation }) {
+  const [page, setPage] = useState(1), [refresh, setRefresh] = useState(0), [busy, setBusy] = useState(false);
+  const [read, setRead] = useState(null), [actionError, setActionError] = useState(null);
+  const lock = useRef(false), mutations = useRef(new Set());
+  const query = new URLSearchParams({ page, pageSize: content ? 10 : 20, ...(content ? { content } : {}) });
+  const path = connectionId && `${ROOT}/${encodeURIComponent(connectionId)}/analysis?${query}`;
+  const key = `${path}:${objective}`;
+  const visible = read?.key === key ? read : null;
   useEffect(() => { onInteractionStateChange?.({ dirty: false, busy }); }, [busy, onInteractionStateChange]);
   useEffect(() => () => {
     for (const controller of mutations.current) controller.abort();
     onInteractionStateChange?.({ dirty: false, busy: false });
   }, [onInteractionStateChange]);
-  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
+  useEffect(() => { setActionError(null); }, [key]);
   useEffect(() => {
-    setReport(null); setError('');
-    if (!connectionId) return;
+    if (!path) return;
     const controller = new AbortController(); let active = true, timer, failures = 0;
     async function load() {
       if (!active) return;
       if (document.hidden) { timer = setTimeout(load, 5000); return; }
-      setLoading(true);
+      setRead(previous => ({ ...(previous?.key === key ? previous : { report: null, error: '' }), key, loading: true }));
       let next = null;
       try {
-        next = await api(`${ROOT}/${encodeURIComponent(connectionId)}/analysis?page=${page}&pageSize=20`, { signal: controller.signal });
-        if (active) { setReport(next); setError(''); failures = 0; }
-      } catch (cause) { if (active && cause.name !== 'AbortError') { setError(cause.message); failures++; } }
-      finally { if (active) setLoading(false); }
-      if (active && (!next || ['queued', 'running', 'waiting'].includes(next.analysis?.state))) {
+        next = await api(path, { signal: controller.signal });
+        if (active) { setRead({ key, report: next, error: '', loading: false }); failures = 0; }
+      } catch (cause) {
+        if (active && cause.name !== 'AbortError') {
+          setRead(previous => ({ key, report: previous?.key === key ? previous.report : null, error: cause.message, loading: false }));
+          failures++;
+        }
+      }
+      if (active && (!next || activeStates.has(next.analysis?.state))) {
         const retryAt = Date.parse(next?.analysis?.retryAt || '');
         timer = setTimeout(load, failures ? Math.min(60000, 5000 * 2 ** Math.min(failures, 4)) : Number.isFinite(retryAt) ? Math.max(5000, Math.min(60000, retryAt - Date.now())) : 5000);
       }
     }
     void load();
     return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [api, connectionId, page, refresh, objective]);
+  }, [api, path, key, refresh, revision]);
   async function act(action) {
     if (!connectionId || lock.current) return;
-    lock.current = true; setBusy(true); setError('');
+    lock.current = true; setBusy(true); setActionError(null);
     const controller = new AbortController(); mutations.current.add(controller);
     try {
       await api(`${ROOT}/${encodeURIComponent(connectionId)}/analysis`, { method: 'POST', body: JSON.stringify({ action }), signal: controller.signal });
       setPage(1); setRefresh(value => value + 1); await onMutation?.();
-    } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); }
+    } catch (cause) { if (cause.name !== 'AbortError') setActionError({ key, message: cause.message }); }
     finally { mutations.current.delete(controller); lock.current = false; setBusy(false); }
   }
-  const analysis = report?.analysis, progress = analysis?.progress, active = ['queued', 'running', 'waiting'].includes(analysis?.state);
+  const report = visible?.report, analysis = report?.analysis;
+  return { report, analysis, page, setPage, act, busy, active: activeStates.has(analysis?.state),
+    loading: Boolean(path) && (!visible || visible.loading), readError: visible?.error, actionError: actionError?.key === key ? actionError.message : '',
+    retry: () => setRefresh(value => value + 1) };
+}
+
+export default function MetaAccountAnalysis({ api, connections = [], onInteractionStateChange, onMutation }) {
+  const eligible = connections.filter(connection => connection.provider === 'meta' && connection.integrationMethod === 'api');
+  const [selected, setSelected] = useState('');
+  const connection = eligible.find(item => item.id === selected) || eligible[0];
+  const connectionId = connection?.id || '', objective = connection?.measurementConfig?.objective || 'reach';
+  const { report, analysis, page, setPage, act, busy, active, loading, readError, actionError, retry } = useAccountAnalysis({ api, connectionId, objective, onInteractionStateChange, onMutation });
+  const progress = analysis?.progress, error = readError || actionError, errorRef = useRef(null);
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
   return <section className={`${styles.panel} ${accountStyles.accountPanel}`} aria-label="Análisis histórico de las cuentas Meta">
     <header className={accountStyles.stageTitle}><p className={styles.eyebrow}>Lectura de la cuenta</p><h3>Análisis histórico y contenido actual</h3>
       <p>Examina los recursos profesionales accesibles de los últimos 12 meses calendario y su configuración actual. El análisis no publica ni cambia anuncios.</p>
@@ -71,12 +90,12 @@ export default function MetaAccountAnalysis({ api, connections = [], onInteracti
       {!loading && !analysis && !error && <p>Aún no existe un análisis guardado para esta conexión.</p>}
       <div className={accountStyles.refreshActions}>
         <div className={accountStyles.operation}>
-          <button type="button" className="button subtle" disabled={busy || active || connection?.state !== 'connected' || connection?.revalidationRequired} onClick={() => act('refresh')}>{analysis ? 'Actualizar análisis desde Meta' : 'Iniciar análisis desde Meta'}</button>
+          <button type="button" className="button subtle" disabled={busy || active || connection?.state !== 'connected' || connection?.revalidationRequired || Boolean(connection?.disconnectStatus)} onClick={() => act('refresh')}>{analysis ? 'Actualizar análisis desde Meta' : 'Iniciar análisis desde Meta'}</button>
           <p className={styles.help}>Solicita una nueva lectura de los recursos accesibles. Está sujeta a permisos y límites de Meta.</p>
           {active && <button type="button" className="button subtle" disabled={busy} onClick={() => act('cancel')}>Cancelar lectura local</button>}
         </div>
         <div className={accountStyles.operation}>
-          <button type="button" className="button subtle" disabled={busy || loading} onClick={() => setRefresh(value => value + 1)}>Reintentar estado local</button>
+          <button type="button" className="button subtle" disabled={busy || loading} onClick={retry}>Reintentar estado local</button>
           <p className={styles.help}>Consulta el estado guardado aquí. No inicia un nuevo análisis en Meta.</p>
         </div>
       </div>
@@ -124,5 +143,112 @@ export default function MetaAccountAnalysis({ api, connections = [], onInteracti
       </>}
     </>}
     {error && <p ref={errorRef} tabIndex={-1} className={styles.error} role="alert">{error}</p>}
+  </section>;
+}
+
+const contentNames = { all: 'Todo', facebook: 'Facebook', instagram: 'Instagram', campaigns: 'Campañas' };
+const contentTabs = Object.entries(contentNames).map(([id, label]) => ({ id, label }));
+const coverageNames = { facebook: 'Facebook', instagram: 'Instagram', ad_account: 'Publicidad', discovery_facebook: 'Páginas e Instagram', discovery_ads: 'Cuentas publicitarias' };
+const metricNames = {
+  impressions: 'Impresiones', clicks: 'Clics totales', inline_link_clicks: 'Clics en enlace', reach: 'Alcance', spend: 'Gasto',
+  frequency: 'Frecuencia', ctr: 'Tasa de clics', cpc: 'Costo por clic', cpm: 'Costo por mil impresiones',
+  post_engagement: 'Interacciones con la publicación', link_click: 'Acciones de clic en enlace',
+  'onsite_conversion.messaging_conversation_started_7d': 'Conversaciones iniciadas reportadas por Meta',
+  'offsite_conversion.fb_pixel_purchase': 'Compras atribuidas al píxel por Meta', omni_purchase: 'Compras atribuidas por Meta',
+  views: 'Visualizaciones', plays: 'Reproducciones', interactions: 'Interacciones', reactions: 'Reacciones',
+  likes: 'Me gusta', comments: 'Comentarios', saves: 'Guardados', shares: 'Compartidos', linkClicks: 'Clics en enlace',
+  averageWatchTime: 'Tiempo medio de reproducción', totalWatchTime: 'Tiempo total de reproducción', skipRate: 'Tasa de omisión'
+};
+const paidPrimary = ['impressions', 'clicks', 'reach', 'spend'];
+const organicPrimary = ['views', 'plays', 'reach', 'interactions', 'reactions', 'likes'];
+const scopes = { organic: 'Orgánico', mixed: 'Mixto (orgánico y pagado)', paid: 'Pauta' };
+const formats = { IMAGE: 'Imagen', VIDEO: 'Video', CAROUSEL_ALBUM: 'Carrusel', REELS: 'Reel', reel: 'Reel', photo: 'Foto', video: 'Video', added_photos: 'Foto', added_video: 'Video', shared_story: 'Contenido compartido' };
+const campaignStates = { ACTIVE: 'Activa', PAUSED: 'Pausada', ARCHIVED: 'Archivada', DELETED: 'Eliminada', IN_PROCESS: 'En procesamiento', WITH_ISSUES: 'Con incidencias' };
+const campaignObjectives = { OUTCOME_AWARENESS: 'Reconocimiento', OUTCOME_TRAFFIC: 'Tráfico', OUTCOME_ENGAGEMENT: 'Interacción', OUTCOME_LEADS: 'Clientes potenciales', OUTCOME_APP_PROMOTION: 'Promoción de la aplicación', OUTCOME_SALES: 'Ventas' };
+
+function ownerName(connection, { kind, ownerId }) {
+  const pages = connection.resources?.pages || [];
+  if (kind === 'instagram') return pages.find(page => page.instagramId === ownerId)?.instagramName || ownerId;
+  const resources = kind === 'campaigns' ? connection.resources?.adAccounts : pages;
+  return resources?.find(resource => resource.id === ownerId)?.name || ownerId;
+}
+
+function MetricList({ entries, reading }) {
+  return <dl className="summary-values" data-connection-metrics>{entries.map(([key, entry]) => {
+    const unit = entry.unit === 'account_currency_decimal' || key === 'cpc' || key === 'cpm' ? reading.currency || 'moneda no informada'
+      : key === 'ctr' || entry.unit === 'percent' ? '%' : entry.unit === 'milliseconds' ? 'ms' : key === 'frequency' ? 'veces por persona alcanzada' : '';
+    return <div key={key}><dt>{metricNames[key]}</dt><dd>{entry.value == null ? 'Sin dato' : `${entry.value}${unit ? ` ${unit}` : ''}`}{entry.status === 'estimated' ? ' · Estimado' : ''}</dd></div>;
+  })}</dl>;
+}
+
+function ContentRow({ item, connection, snapshot, onNavigate }) {
+  const { kind, resourceId, ownerId, object, metrics } = item;
+  const paid = kind === 'campaigns', config = object?.configuration || {};
+  const title = paid ? `Campaña ${resourceId}` : `${contentNames[kind]} · Publicación ${resourceId}`;
+  const format = config.productType === 'REELS' ? config.productType : config.mediaType || config.statusType || config.assetType;
+  const state = config.effective_status || config.status;
+  const primary = paid ? paidPrimary : organicPrimary;
+  const availability = { denied: 'No se concedió permiso para leer sus métricas.', unavailable: 'Meta no devolvió métricas para este contenido.', unavailable_media_type: 'No se dispone de métricas para este formato.', pending: 'Las métricas aún no se han consultado.', partial: 'Lectura de métricas parcial.' };
+  return <article className={styles.card}>
+    <h4>{title}</h4>
+    <p>{paid ? 'Cuenta publicitaria' : kind === 'instagram' ? 'Cuenta de Instagram' : 'Página de Facebook'}: {ownerName(connection, item)}{ownerName(connection, item) !== ownerId ? ` · ${ownerId}` : ''}</p>
+    {paid ? <p>{object ? <>Configuración actual observada: {state ? `${campaignStates[state] || state}${config.effective_status ? '' : ' (configurado)'}` : 'Estado no informado'}{config.objective && ` · Objetivo: ${campaignObjectives[config.objective] || config.objective}`}</> : 'Sin configuración consultada'}</p>
+      : <p>Publicada: {date(object?.period?.publishedAt)}{format ? ` · Formato: ${formats[format] || format}` : ''}</p>}
+    {availability[object?.metricsAvailability] && <p>{availability[object.metricsAvailability]}</p>}
+    {!metrics.length && <p>{paid && object ? 'Configuración disponible · Sin métricas' : 'Sin métricas en esta captura'}</p>}
+    {metrics.map((reading, index) => {
+      const values = reading.values || {};
+      const first = primary.filter(key => values[key]).map(key => [key, values[key]]);
+      const other = Object.entries(values).filter(([key]) => metricNames[key] && !primary.includes(key));
+      const period = reading.period || {};
+      return <div key={reading.id || index}>
+        <p><strong>{scopes[reading.scope] || 'Ámbito no informado'}</strong> · {period.type === 'lifetime' ? 'Desde que se publicó' : period.type === 'range' ? `${period.since} a ${period.until}` : 'Período no informado'}{paid && reading.currency && ` · ${reading.currency}`}</p>
+        <MetricList entries={first} reading={reading}/>
+        <details className={styles.technicalDetails}><summary>Ver detalle</summary>
+          <p>Observado: {date(reading.observedAt)}{period.timeZone && period.timeZone !== 'provider_account_timezone' ? ` · Zona: ${period.timeZone}` : ''}. {reading.coverage?.complete === false ? 'Cobertura parcial. ' : ''}Las cifras corresponden solo a este ámbito y período.</p>
+          {!!other.length && <MetricList entries={other} reading={reading}/>}
+        </details>
+      </div>;
+    })}
+    {paid && /^act_\d+$/.test(ownerId) && /^\d+$/.test(resourceId) && snapshot?.id && <button type="button" className="button subtle" onClick={() => onNavigate({ section: 'advertising', tab: 'campaigns', source: 'meta', connection: connection.id, account: ownerId, metaCampaign: resourceId, snapshot: snapshot.id, allAccounts: '1' })}>Ver en Publicidad</button>}
+  </article>;
+}
+
+export function MetaConnectionData({ api, connection, blocked, onInteractionStateChange, onMutation, onNavigate }) {
+  const [content, setContent] = useState('all');
+  const { report, analysis, page, setPage, act, busy, active, loading, readError, actionError, retry } = useAccountAnalysis({ api, connectionId: connection.id, content, revision: connection.version, onInteractionStateChange, onMutation });
+  const snapshot = report?.snapshot, coverage = analysis?.coverage || [], pagination = report?.pagination;
+  const relevant = coverage.filter(item => content === 'all' || (content === 'campaigns' ? ['ad_account', 'discovery_ads'].includes(item.kind) : item.kind === content || item.kind === 'discovery_facebook'));
+  const denied = relevant.some(item => item.state === 'denied');
+  const partial = analysis?.state === 'partial' || relevant.some(item => ['partial', 'unavailable'].includes(item.state));
+  const pages = pagination ? Math.max(1, Math.ceil(pagination.total / pagination.pageSize)) : 1;
+  const refreshAllowed = !blocked && !busy && !active && !loading && !readError && connection.state === 'connected' && !connection.revalidationRequired && !connection.disconnectStatus;
+  return <section className={styles.panel} aria-label="Datos consultados">
+    <h3>Datos consultados</h3>
+    <p>Recursos accesibles para esta conexión. La consulta puede abarcar más recursos que los seleccionados para publicar.</p>
+    <div className={styles.actions}>
+      <button type="button" className="button subtle" disabled={!refreshAllowed} onClick={() => act('refresh')}>{analysis ? 'Actualizar desde Meta' : 'Consultar desde Meta'}</button>
+      {active && <button type="button" className="button subtle" disabled={blocked || busy} onClick={() => act('cancel')}>Cancelar lectura local</button>}
+      <button type="button" className="button subtle" disabled={busy || loading} onClick={retry}>Reintentar lectura</button>
+    </div>
+    {loading && !report && <p role="status">Cargando datos guardados…</p>}
+    {readError && <p role="alert" className={styles.error}>{readError}{report && ` Última lectura conservada: ${date(snapshot?.updatedAt || analysis?.updatedAt)}.`}</p>}
+    {actionError && <p role="alert" className={styles.error}>{actionError}</p>}
+    {analysis && <p><strong>{states[analysis.state] || analysis.state}</strong> · Última consulta: {date(analysis.updatedAt)}{active && ` · Unidades completadas: ${analysis.progress?.completed ?? 0}`}{analysis.retryAt && ` · Próximo reintento: ${date(analysis.retryAt)}`}</p>}
+    {snapshot && snapshot.id !== analysis?.id && <p className={styles.notice}>Actualizando; se muestra la consulta anterior · {date(snapshot.updatedAt)}</p>}
+    {(snapshot?.stale || analysis?.stale || (snapshot && connection.state !== 'connected')) && <p className={styles.warning}>Histórico guardado. No acredita acceso vigente.</p>}
+    {partial && <p className={styles.warning}>Cobertura parcial: no se devolvieron todos los datos solicitados.</p>}
+    {denied && <p className={styles.warning}>Meta no concedió permiso para uno o más recursos de esta vista.</p>}
+    {analysis?.error?.notice && <p className={styles.warning}>{analysis.error.notice}</p>}
+    {!!relevant.length && <details className={styles.technicalDetails}><summary>Cobertura de la última consulta</summary><ul>{relevant.map((item, index) => <li key={index}>{coverageNames[item.kind] || item.kind}{item.resourceId ? ` · ${item.resourceId}` : ''}: {coverageStates[item.state] || item.state}</li>)}</ul></details>}
+    <WorkspaceTabs label="Contenido consultado" items={contentTabs} value={content} disabled={busy} onChange={value => { if (value !== content) { setPage(1); setContent(value); } }}/>
+    {report && !analysis && <p>Aún no existe una captura guardada para esta conexión.</p>}
+    {analysis && !report.items.length && <p>{active ? 'Todavía no hay filas para este contenido.' : denied ? 'No hay filas para esta vista con los permisos consultados.' : ['failed', 'cancelled'].includes(analysis.state) ? 'La lectura terminó sin guardar filas para esta vista.' : 'Consulta completada sin filas para esta vista.'}</p>}
+    <div className={styles.stack}>{report?.items.map(item => <ContentRow key={`${item.kind}:${item.ownerId}:${item.resourceId}`} item={item} connection={connection} snapshot={snapshot} onNavigate={onNavigate}/>)}</div>
+    {pagination && (pages > 1 || page > 1) && <nav className={styles.actions} aria-label="Páginas de datos consultados">
+      <button type="button" className="button subtle" disabled={busy || loading || page <= 1} onClick={() => setPage(page - 1)}>Anterior</button>
+      <span>Página {page} de {pages} · {pagination.total} objetos</span>
+      <button type="button" className="button subtle" disabled={busy || loading || page >= pages} onClick={() => setPage(page + 1)}>Siguiente</button>
+    </nav>}
   </section>;
 }

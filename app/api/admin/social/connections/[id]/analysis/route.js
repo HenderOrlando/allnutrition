@@ -4,7 +4,9 @@ export const runtime = 'nodejs';
 export async function GET(request, { params }) {
   try {
     const session = await authorize(request), { id } = await params;
-    const query = Object.fromEntries(new URL(request.url).searchParams);
+    const search = new URL(request.url).searchParams, query = Object.fromEntries(search);
+    const categories = search.getAll('content');
+    if (categories.length > 1) query.content = categories;
     return json(await getMetaAccountAnalysis(await db(), id, query, session.user.id));
   } catch (error) { return errorResponse(error); }
 }

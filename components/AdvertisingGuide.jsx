@@ -24,9 +24,10 @@ const topics = [
   {
     id: 'organize', title: 'Encontrar y organizar',
     steps: [
-      'En Publicaciones y campañas, busca por nombre; Más filtros ofrece Red y Objetivo.',
+      'En Publicaciones y campañas, elige Creadas en All Nutrition para buscar publicaciones y borradores propios por nombre, Red u Objetivo en Más filtros.',
       'Mis piezas en curso reabre tus conversaciones privadas. Quien colabora en un borrador puede revisar su pieza comercial, no leer tu conversación.',
       'La tarjeta indica el siguiente paso: retomar un borrador, revisar la autorización, comprobar en Meta sin reenviar o ver resultados cuando se confirme la entrega.',
+      'Consultadas en Meta abre el historial de cuenta guardado, de solo lectura. Puedes filtrar por conexión o cuenta y abrir una lectura fechada con sus conjuntos de anuncios. Si hay un vínculo comprobado, Abrir ficha propia lleva al registro que sí puedes gestionar.',
       'En Biblioteca, busca o filtra los archivos guardados. Subir archivo privado abre la carga sin salir de la galería. Abre la ficha y espera Lista para revisar antes de usarlo. Archivar conserva el historial y el archivo; no libera espacio.',
     ],
   },
@@ -34,7 +35,7 @@ const topics = [
     id: 'connect', title: 'Conectar una cuenta',
     steps: [
       'En Configuración → Redes sociales, completa las opciones requeridas para tu vía. Conectar con Facebook abre la autorización oficial; no introduzcas tu contraseña en este panel.',
-      'En Cuentas conectadas, abre la cuenta y elige Seleccionar página y cuenta. Comprueba que la página, Instagram o la cuenta de anuncios elegidas aparezcan con el permiso que necesitas. Un token manual solo permite consultar.',
+      'En Tus conexiones, pulsa Administrar para elegir página y cuenta o revisar Datos consultados. Desde la ficha puedes abrir las campañas guardadas de esa conexión. Consultar anuncios por fecha es una consulta puntual: no se guarda en el historial.',
       'Para publicar, revisa también que esté habilitada la publicación en las opciones de Meta. Si usas acceso asistido, este requiere permiso previo de Meta y que completes personalmente el acceso o el desafío en el visor privado. No se cambia de método automáticamente.',
     ],
   },
@@ -50,7 +51,7 @@ const topics = [
   {
     id: 'results', title: 'Entender resultados y mejorar',
     steps: [
-      'En Resultados, busca por nombre y abre una pieza de la lista. Empieza por la métrica de su objetivo. Para WhatsApp, revisa conversaciones y costo por conversación solo si se reportaron. Cero, sin dato y aún es pronto no significan lo mismo.',
+      'Desde una campaña propia, Ver ficha económica abre su ficha de Resultados. Las campañas consultadas tienen su ficha económica de solo lectura. Separa el punto de equilibrio simulado, lo que reportó Meta para su período y lo que dejaron los pedidos vinculados al corte del negocio. Cero y sin datos no significan lo mismo.',
       'En Qué probar ahora, abre la captura citada directamente desde la propuesta. Cambiar aquí afecta solo el destino que revisaste; Preparar una variante conserva el original y no transfiere comentarios ni métricas.',
       'En Qué aprendimos, compara la misma métrica y período según el criterio de la prueba. Período y filtros cambia qué capturas ves. Actualizar vista solo lee datos locales; Actualizar desde Meta solicita una captura y Revisar mejoras, un análisis local. Medición de la cuenta lleva a fuentes e historial, separados de la publicación.',
     ],

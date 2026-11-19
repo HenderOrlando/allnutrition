@@ -7,6 +7,7 @@ import AdvertisingCampaignEditor from './AdvertisingCampaignEditor';
 import { useAssistantBridge } from './AssistantBridge.jsx';
 import AdvertisingResults from './AdvertisingResults';
 import AdvertisingGuide from './AdvertisingGuide';
+import MetaCampaignInventory from './MetaCampaignInventory';
 import AdvertisingGeneration from './AdvertisingGeneration';
 import AdvertisingAssetUpload from './AdvertisingAssetUpload';
 import Icon from './Icons';
@@ -21,6 +22,7 @@ import library from './AdvertisingLibrary.module.css';
 
 const ROOT = '/api/admin/social';
 const tabs = [{ id: 'campaigns', label: 'Publicaciones y campañas' }, { id: 'assets', label: 'Biblioteca' }, { id: 'results', label: 'Resultados' }];
+const origins = [{ id: 'local', label: 'Creadas en All Nutrition' }, { id: 'meta', label: 'Consultadas en Meta' }];
 const journey = ['Pieza creativa', 'Tipo de publicación', 'Configuración y revisión'];
 const states = { draft: 'Borrador', ready: 'Preparada', scheduled: 'Programada', publishing: 'En preparación o publicación', partial: 'Publicación parcial', published: 'Publicada', in_review: 'En revisión de Meta', active: 'Activa', paused: 'Pausada', completed: 'Finalizada', failed: 'Falló', needs_attention: 'Requiere atención', cancelled: 'Cancelada', queued: 'En cola', preparing: 'Preparando', uncertain: 'Envío incierto: comprobar estado en Meta sin reenviar', blocked: 'Bloqueada', connected: 'Conectada', reconnect_required: 'Sesión vencida o revocada: reconectar', disconnected: 'Desconectada', login_required: 'Necesita iniciar sesión', login_in_progress: 'Acceso en curso; control exclusivo', challenge_required: 'Desafío pendiente: intervención humana', layout_changed: 'Interfaz incompatible: revalidar adaptador' };
 const ASSET_STATES = { uploading: 'Carga pendiente o en curso', processing: 'Preparando imagen o video', ready: 'Lista para revisar', failed: 'No se pudo preparar', archived: 'Archivada', missing_file: 'Archivo no disponible' };
@@ -77,6 +79,7 @@ function useRequestIds() {
 
 export default function AdvertisingWorkspace({ api, view, onViewChange, onStudioThread, onNavigate, onInteractionStateChange, onMutation, revision = 0, assistantOpenRequest, onAssistantOpenHandled }) {
   const tab = tabs.some(item => item.id === view.tab) ? view.tab : 'campaigns';
+  const remote = tab === 'campaigns' && view.source === 'meta';
   const [refresh, setRefresh] = useState(0), [inventory, setInventory] = useState({ data: null, error: '', loading: false, fetchedAt: null });
   const [notice, setNotice] = useState('');
   const heading = useRef(null), queryPanel = useRef(null), interaction = useRef(new Map()), callbacks = useRef({}), mounted = useRef(true);
@@ -86,7 +89,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
   useEffect(() => {
     const request = assistantOpenRequest, open = request?.open, destination = readAdminView(open?.view);
     setAssistantOpenContext(null);
-    if (!request || open?.owner !== 'advertising' || destination.section !== 'advertising' || !['campaign-draft', 'asset-metadata', 'advertising-result-action'].includes(open.target)) return;
+    if (remote || !request || open?.owner !== 'advertising' || destination.section !== 'advertising' || !['campaign-draft', 'asset-metadata', 'advertising-result-action'].includes(open.target)) return;
     const controller = new AbortController();
     const paths = { order: id => `/api/admin/orders/${encodeURIComponent(id)}`, expense: id => `/api/admin/finance/expenses?${new URLSearchParams({ record: id })}`, source: id => `/api/admin/business/sources/${encodeURIComponent(id)}`, platform: id => `/api/admin/business/platforms/${encodeURIComponent(id)}` };
     Promise.all(Object.entries(open.refs || {}).map(async ([role, ref]) => {
@@ -96,10 +99,10 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
       return [role, record];
     })).then(entries => { if (!controller.signal.aborted) setAssistantOpenContext({ requestId: request.requestId, refs: Object.fromEntries(entries) }); }).catch(cause => { if (!controller.signal.aborted) setNotice(cause.message); });
     return () => controller.abort();
-  }, [api, assistantOpenRequest]);
+  }, [api, assistantOpenRequest, remote]);
   useEffect(() => {
     const request = assistantOpenRequest, open = request?.open;
-    if (!request || assistantOpenContext?.requestId !== request.requestId) return;
+    if (remote || !request || assistantOpenContext?.requestId !== request.requestId) return;
     const destination = readAdminView(open.view), current = readAdminView({ ...view, section: 'advertising' });
     const expectedTab = { 'campaign-draft': 'campaigns', 'asset-metadata': 'assets', 'advertising-result-action': 'results' }[open.target];
     if (destination.tab !== expectedTab || tab !== expectedTab || (destination.record || null) !== (current.record || null)) return;
@@ -110,7 +113,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
       const text = 'Abre la acción concreta de Resultados y selecciona el registro real para revisar el motivo. Ali no elige vínculos ni confirma acciones por ti.';
       if (assistantOpenNotice.current !== `${request.requestId}:${text}`) { assistantOpenNotice.current = `${request.requestId}:${text}`; setNotice(text); }
     }
-  }, [assistantOpenRequest, assistantOpenContext, assistantBridge, view, tab, onAssistantOpenHandled]);
+  }, [assistantOpenRequest, assistantOpenContext, assistantBridge, view, tab, remote, onAssistantOpenHandled]);
   const report = useCallback((owner, state) => {
     interaction.current.set(owner, state);
     callbacks.current.onInteractionStateChange?.({ dirty: [...interaction.current.values()].some(item => item.dirty), busy: [...interaction.current.values()].some(item => item.busy) });
@@ -127,7 +130,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
     window.addEventListener('beforeunload', beforeUnload);
     return () => { mounted.current = false; window.removeEventListener('beforeunload', beforeUnload); callbacks.current.onInteractionStateChange?.({ dirty: false, busy: false }); };
   }, []);
-  const listVisible = tab !== 'campaigns' || !view.record;
+  const listVisible = !remote && (tab !== 'campaigns' || !view.record);
   useEffect(() => { if (listVisible) heading.current?.focus({ preventScroll: true }); }, [tab, listVisible]);
   const invalidate = useCallback(async () => {
     if (mounted.current) setRefresh(value => value + 1);
@@ -143,10 +146,11 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
     });
   }, []);
   const refreshKey = `${revision}:${refresh}`;
-  const connectionRead = useRead(api, ROOT + '/connections', refreshKey);
+  const connectionRead = useRead(api, remote ? null : ROOT + '/connections', refreshKey);
   const connections = connectionRead.data?.connections || [];
   const pendingAssets = inventory.data?.assets.some(item => ['uploading', 'processing'].includes(item.state));
   useEffect(() => {
+    if (remote) return;
     const controller = new AbortController(); let active = true, timer;
     async function load() {
       if (!active) return;
@@ -163,10 +167,10 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
       if (active && pendingAssets && tab === 'assets') timer = setTimeout(load, 5000);
     }
     void load(); return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [api, refreshKey, tab, Boolean(pendingAssets)]);
+  }, [api, refreshKey, tab, remote, Boolean(pendingAssets)]);
   const listParams = new URLSearchParams({ page: String(view.page || 1) });
   for (const key of ['q', 'mode', 'network', 'objective', 'status']) if (view[key]) listParams.set(key, view[key]);
-  const listPath = tab === 'campaigns' && !view.record ? `${ROOT}/campaigns?${listParams}` : null;
+  const listPath = tab === 'campaigns' && !remote && !view.record ? `${ROOT}/campaigns?${listParams}` : null;
   const [listPending, setListPending] = useState(false);
   const campaignRead = useRead(api, listPath, refreshKey, listPending ? 5000 : 0);
   useEffect(() => { setListPending(Boolean(campaignRead.data?.campaigns.some(pendingCampaign))); }, [campaignRead.data]);
@@ -199,9 +203,14 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
         guide.scrollIntoView({ block: 'start' });
       }}>Ver guía</button>
     </header>
-    <WorkspaceTabs label="Vistas de publicidad" items={tabs} value={tab} onChange={value => change({ tab: value, record: null, resultsFocus: null, status: null, q: null })}/>
+    <WorkspaceTabs label="Vistas de publicidad" items={tabs} value={tab} onChange={value => {
+      if (value !== tab) change({ tab: value, source: null, record: null, resultsFocus: null, status: null, q: null });
+    }}/>
+    {tab === 'campaigns' && <WorkspaceTabs label="Origen de campañas" items={origins} value={remote ? 'meta' : 'local'} onChange={value => {
+      if (value !== (remote ? 'meta' : 'local')) navigate({ tab: 'campaigns', source: value === 'meta' ? 'meta' : null });
+    }}/>}
     {notice && <p className={styles.notice} role="status">{notice}</p>}
-    {tab === 'campaigns' && view.record ? <>
+    {remote ? <MetaCampaignInventory api={api} view={view} revision={revision} onChange={patch => navigate({ ...view, ...patch })} onOpenLocal={record => navigate({ tab: 'campaigns', record })}/> : tab === 'campaigns' && view.record ? <>
       <ReadStatus state={connectionRead} label="cuentas conectadas" onRetry={() => setRefresh(value => value + 1)}/><ReadStatus state={inventory} label="imágenes y videos privados" onRetry={() => setRefresh(value => value + 1)}/>
       {view.record === 'new' ? <NewPublication view={view} editorProps={editorProps} onThread={onStudioThread} onInteractionStateChange={generationReport}
         assisted={assistantOpenRequest?.open?.target === 'campaign-draft' && assistantOpenRequest.open.view?.record === 'new'}
@@ -235,7 +244,11 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
       <ReadStatus state={campaignRead} label="publicaciones" onRetry={() => setRefresh(value => value + 1)}/>
       {campaignRead.data && !currentCampaignQuery && <p role="status" className={styles.warning}>Resultados de la consulta anterior; actualizando filtros</p>}
       {campaignRead.data && <div inert={!currentCampaignQuery} aria-busy={campaignRead.loading}>
-        <div className={styles.recordGrid}>{campaignRead.data.campaigns.map(campaign => <CampaignRow key={campaign.id} campaign={campaign} asset={inventory.data?.assets.find(item => item.id === campaign.assetId && item.state === 'ready')} onOpen={() => change({ record: campaign.id })} onResults={resultsFocus => change({ tab: 'results', record: campaign.id, resultsFocus: resultsFocus || null })}/>)}</div>
+        <div className={styles.recordGrid}>{campaignRead.data.campaigns.map(campaign => <CampaignRow key={campaign.id} campaign={campaign}
+          asset={inventory.data?.assets.find(item => item.id === campaign.assetId && item.state === 'ready')}
+          onOpen={() => change({ record: campaign.id })}
+          onResults={resultsFocus => change({ tab: 'results', record: campaign.id, resultsFocus: resultsFocus || null })}
+          onMeta={reference => navigate({ tab: 'campaigns', source: 'meta', account: reference.accountId, metaCampaign: reference.resourceId, connection: reference.connectionId, snapshot: reference.snapshotId, allAccounts: '1', allConnections: '1' })}/>)}</div>
         {currentCampaignQuery && !campaignRead.loading && !campaignRead.error && !campaignRead.data.campaigns.length && <div className={`admin-empty ${styles.empty}`}>
           {campaignRead.data.total > 0 ? <><h2>Esta página no tiene publicaciones</h2><button type="button" className="button subtle" onClick={() => change({ page: 1 })}>Ir a la primera página</button></> : campaignFilters.length ? <><h2>No hay publicaciones con estos filtros</h2><button type="button" className="button subtle" onClick={clearCampaignFilters}>Limpiar filtros</button></> : <><h2>Aún no hay publicaciones</h2><p>Tus borradores y publicaciones aparecerán aquí. Si ya tienes una imagen o video guardado, puedes usarlo al crear.</p><button type="button" className="button subtle" onClick={() => change({ tab: 'assets', record: null })}>Ir a la biblioteca</button></>}
         </div>}
@@ -325,7 +338,7 @@ function LegacyGenerationHistory({ api }) {
   </div>;
 }
 
-function CampaignRow({ campaign, asset, onOpen, onResults }) {
+function CampaignRow({ campaign, asset, onOpen, onResults, onMeta }) {
   const deliveries = campaign.deliveries || [];
   const awaitingPublication = campaign.mode === 'organic' && campaign.state === 'ready' && !deliveries.length;
   const confirmed = deliveries.some(delivery => delivery.remoteId && delivery.lastConfirmedAt &&
@@ -348,6 +361,7 @@ function CampaignRow({ campaign, asset, onOpen, onResults }) {
         {campaign.offerSnapshot?.primary && <p>{offerLabel(campaign.offerSnapshot.primary)}</p>}
       </div>
     </div>
+    {campaign.metaCampaign && <p><span className={styles.badge}>Consultada en Meta</span> · {campaign.metaCampaign.accountId} · {date(campaign.metaCampaign.observedAt)}</p>}
     {(campaign.restoreHold || campaign.restore_hold) && <p className={styles.warning}>{campaign.mode === 'organic' && !deliveries.length ? 'Restaurada sin entrega: duplica, vuelve a validar y aprueba el nuevo borrador.' : 'Restaurada: bloqueada hasta reconexión, comprobación de estado en Meta sin reenviar y reanudación explícita.'}</p>}
     {deliveries.length > 0 && <ul className={styles.choiceList}>{deliveries.map(delivery => <li key={delivery.id}><strong>{delivery.channel === 'meta_ads' ? 'Anuncio Meta · presupuesto único' : delivery.channel === 'facebook' ? 'Facebook' : 'Instagram'}</strong>: {states[delivery.state] || delivery.state}{delivery.lastConfirmedState && <span> · Último confirmado: {states[delivery.lastConfirmedState] || delivery.lastConfirmedState}</span>}{delivery.state === 'uncertain' && <p className={styles.warning}>Envío incierto: comprueba el estado en Meta sin reenviar.</p>}{['queued', 'scheduled'].includes(delivery.state) && campaign.publishAt && Date.parse(campaign.publishAt) < Date.now() - 900000 && <p className={styles.warning}>Horario vencido por más de 15 minutos: requiere revisión; no se presenta como publicada.</p>}</li>)}</ul>}
     {(deliveries.length > 0 || campaign.publishAt || campaign.startAt || campaign.endAt) && <details className={styles.technicalDetails}><summary>Fechas y seguimiento</summary>
@@ -358,6 +372,8 @@ function CampaignRow({ campaign, asset, onOpen, onResults }) {
       <button type="button" className="button primary" onClick={next === 'Ver resultados' ? () => onResults() : onOpen}>{next}</button>
       {next === 'Ver resultados' && <button type="button" className="button subtle" onClick={onOpen}>Abrir ficha</button>}
       {needsCheck && confirmed && <button type="button" className="button subtle" onClick={() => onResults()}>Ver resultados</button>}
+      <button type="button" className="button subtle" onClick={() => onResults()}>Ver ficha económica</button>
+      {campaign.metaCampaign && <button type="button" className="button subtle" onClick={() => onMeta(campaign.metaCampaign)}>Ver lectura guardada de Meta</button>}
       {deliveries.length > 0 && campaign.improvementState && <button type="button" className="button subtle" onClick={() => onResults(campaign.improvementState === 'suggested' ? 'recommendations' : 'learnings')}>{{ suggested: 'Mejora disponible · Ver propuesta', observing: 'Prueba en curso', concluded: 'Ya hay una conclusión' }[campaign.improvementState]}</button>}
     </div>
   </article>;
