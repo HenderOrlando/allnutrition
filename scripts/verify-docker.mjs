@@ -671,7 +671,7 @@ try {
   const required = requiredChecks(plan, mode);
   const has = gate => required.includes(`gate:${gate}`);
   const browser = full || plan.playwright.some(spec => spec !== 'privacy');
-  const browserWorker = browser && (full || plan.playwright.some(spec => spec !== 'app:media' && /^(?:app|workbook)(?::|$)/.test(spec)));
+  const browserWorker = browser && (full || plan.playwright.some(spec => spec === 'advertising' || spec !== 'app:media' && /^(?:app|workbook)(?::|$)/.test(spec)));
   const web = has('https') || has('restore') || has('migration');
   const sandboxed = (full ? readdirSync('tests').map(name => `tests/${name}`) : plan.node).filter(nodeSandboxed);
   const databaseChecks = full || browser || Boolean(plan.postgres.length) || has('postgres') || has('scheduler') || has('migration') || has('restore');

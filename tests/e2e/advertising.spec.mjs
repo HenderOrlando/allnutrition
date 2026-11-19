@@ -19,17 +19,14 @@ import sharp from 'sharp';
 import { login, navigate, selectWorkspace, openDisclosure, signOut } from './helpers.mjs';
 
 const ROOT = '/api/admin/social';
-const approvalProject = process.env.ADVERTISING_APPROVAL_COMPOSE_PROJECT;
 const controlledImages = process.env.ADVERTISING_IMAGE_E2E_URL;
 const imageProject = process.env.ADVERTISING_IMAGE_COMPOSE_PROJECT;
 
-function runGuidedFixture(kind, script, args) {
-  const image = kind === 'image';
-  const project = image ? imageProject : approvalProject;
-  const origin = image ? controlledImages : process.env.E2E_BASE_URL;
-  expect(project).toMatch(new RegExp(`^allnutrition-guided-${image ? 'image' : 'approval'}-[a-z0-9-]+$`));
+function runGuidedFixture(script, args) {
+  const project = imageProject, origin = controlledImages;
+  expect(project).toMatch(/^allnutrition-guided-image-[a-z0-9-]+$/);
   expect(origin).toMatch(/^https:\/\/localhost:\d+$/);
-  if (image) expect(origin).not.toBe(process.env.E2E_BASE_URL);
+  expect(origin).not.toBe(process.env.E2E_BASE_URL);
   const result = spawnSync('docker', ['exec', `${project}-web-1`, 'node', `./tests/e2e/${script}.mjs`, ...args, origin], { encoding: 'utf8', timeout: 30000 });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
@@ -399,10 +396,13 @@ test('estudio de publicaciones: oferta y foto propia sin IA en el mismo borrador
   await page.getByLabel('Archivo de imagen o video', { exact: true }).setInputFiles({ name: `duo-${tag}.png`, mimeType: 'image/png', buffer: png });
   const uploaded = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/content') && response.request().method() === 'PUT');
   await page.getByRole('button', { name: 'Subir archivo', exact: true }).click();
-  const file = await (await uploaded).json();
-  expect(file.state).toBe('processing');
-  runGuidedFixture('approval', 'guided-image-worker', ['asset', file.id]);
-  expect((await f.asset(file.id)).state).toBe('ready');
+  const response = await uploaded;
+  expect(response.ok(), await response.text()).toBe(true);
+  const file = await response.json();
+  await expect.poll(async () => (await f.asset(file.id)).state, {
+    message: 'El scheduler del fixture principal debe procesar la foto subida',
+    timeout: 90_000,
+  }).toBe('ready');
   const useOriginal = composer.getByRole('button', { name: 'Usar esta pieza y continuar', exact: true });
   await expect(useOriginal).toBeEnabled({ timeout: 120000 });
   await expect.poll(() => page.locator(`img[src*="/assets/${file.id}/content"]`).first().evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
@@ -434,9 +434,9 @@ test('estudio de publicaciones: oferta y foto propia sin IA en el mismo borrador
 test.describe('estudio de publicaciones · transporte sintético aislado', () => {
   test.use({ baseURL: controlledImages });
   test.skip(!controlledImages || !imageProject, 'Requiere un segundo fixture descartable HTTPS, con scheduler ordinario detenido.');
-  const worker = (action, id = '-') => runGuidedFixture('image', 'guided-image-worker', [action, id]);
-  const remote = (action, id = '-') => JSON.parse(runGuidedFixture('image', 'guided-publication-worker', [action, id]));
-  const provider = action => runGuidedFixture('image', 'guided-audience-provider', [action]);
+  const worker = (action, id = '-') => runGuidedFixture('guided-image-worker', [action, id]);
+  const remote = (action, id = '-') => JSON.parse(runGuidedFixture('guided-publication-worker', [action, id]));
+  const provider = action => runGuidedFixture('guided-audience-provider', [action]);
   const actionButton = (page, label) => page.getByRole('button', { name: label, exact: true });
   async function submit(page, path, button, action) {
     const waited = page.waitForResponse(response => {
