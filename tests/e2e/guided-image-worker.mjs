@@ -7,7 +7,7 @@ import { getAssistantSettings, saveAssistantSettings } from '../../lib/assistant
 import { getSocialGeneration, getSocialGenerationBrief, processSocialGenerationTurn } from '../../lib/business/social-generation.mjs';
 import { getSocialAsset, processSocialAssetTurn } from '../../lib/business/social-media.mjs';
 
-const [action, id, origin] = process.argv.slice(2);
+const [action, id, origin, referenceId] = process.argv.slice(2);
 assert.match(origin || '', /^https:\/\/localhost:\d+$/);
 assert.equal(process.env.APP_URL, origin);
 const database = new URL(process.env.DATABASE_URL);
@@ -33,6 +33,8 @@ try {
       assert.equal(action, 'generation');
       const job = await getSocialGeneration(store, id, admin.id);
       assert.equal(job.state, 'queued');
+      const reference = referenceId ? await getSocialAsset(store, referenceId) : null;
+      if (referenceId) assert.equal(reference.state, 'ready');
       assert.equal(Number((await store.db.get(`SELECT COUNT(*) AS n FROM ${store.t('social_generation_jobs')} WHERE state='queued'`)).n), 1);
       const png = await sharp({ create: { width: 512, height: 640, channels: 3, background: job.baseAssetId ? '#2744aa' : '#c88636' } }).png().toBuffer();
       let posts = 0;
@@ -42,8 +44,13 @@ try {
         if (job.baseAssetId) {
           assert.equal(url, 'https://api.openai.com/v1/images/edits');
           const { baseAsset } = await getSocialGenerationBrief(store, { campaignId: job.campaignId, baseAssetId: job.baseAssetId });
-          const first = input.body.getAll('image[]')[0];
-          assert.equal(createHash('sha256').update(Buffer.from(await first.arrayBuffer())).digest('hex'), baseAsset.sha256);
+          const images = input.body.getAll('image[]');
+          const digest = async file => createHash('sha256').update(Buffer.from(await file.arrayBuffer())).digest('hex');
+          assert.equal(await digest(images[0]), baseAsset.sha256);
+          if (reference) {
+            assert.equal(images.length, 2, 'El ajuste usa la imagen base y solo la referencia autorizada');
+            assert.equal(await digest(images[1]), reference.derivativeSha256, 'La segunda imagen son los bytes de la foto adjunta en el chat');
+          }
         }
         posts++;
         return Response.json({ data: [{ b64_json: png.toString('base64') }] });

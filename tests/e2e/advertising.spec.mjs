@@ -25,12 +25,12 @@ const imageProject = process.env.ADVERTISING_IMAGE_COMPOSE_PROJECT;
 // Catalog text is checked for phone numbers; fixture suffixes must stay alphabetic.
 const catalogTag = marker => marker.slice(-8).replace(/\d/g, digit => 'ghijklmnop'[Number(digit)]);
 
-function runGuidedFixture(script, args) {
+function runGuidedFixture(script, args, extra = []) {
   const project = imageProject, origin = controlledImages;
   expect(project).toMatch(/^allnutrition-guided-image-[a-z0-9-]+$/);
   expect(origin).toMatch(/^https:\/\/localhost:\d+$/);
   expect(origin).not.toBe(process.env.E2E_BASE_URL);
-  const result = spawnSync('docker', ['exec', `${project}-web-1`, 'node', `./tests/e2e/${script}.mjs`, ...args, origin], { encoding: 'utf8', timeout: 30000 });
+  const result = spawnSync('docker', ['exec', `${project}-web-1`, 'node', `./tests/e2e/${script}.mjs`, ...args, origin, ...extra], { encoding: 'utf8', timeout: 30000 });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   return result.stdout.trim().split('\n').at(-1);
@@ -537,8 +537,9 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     return submit(page, `${ROOT}/campaigns/${id}/actions`, button, action);
   }
   const dateTime = date => new Date(date - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  async function generate(page, f, composer, { campaignId, baseAssetId = null }) {
-    const submit = composer.getByRole('button', { name: /^Enviar (idea|ajuste)$/ });
+  async function generate(page, f, composer, { campaignId, baseAssetId = null, reference }) {
+    const submit = composer.getByRole('button', { name: baseAssetId ? 'Enviar ajuste' : 'Enviar idea', exact: true });
+    await expect(submit).toBeVisible();
     await expect(submit).toBeDisabled();
     await composer.getByRole('checkbox', { name: /^Autorizo el envío/ }).check();
     const posted = page.waitForResponse(response => new URL(response.url()).pathname === `${ROOT}/generation` && response.request().method() === 'POST');
@@ -547,7 +548,8 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     expect(response.status(), await response.text()).toBe(202);
     const job = await response.json();
     expect(job).toMatchObject({ campaignId, baseAssetId });
-    worker('generation', job.id);
+    if (reference) expect(response.request().postDataJSON().sources).toEqual([{ kind: 'asset', id: reference.id, version: reference.version }]);
+    runGuidedFixture('guided-image-worker', ['generation', job.id], reference ? [reference.id] : []);
     const ready = await f.get(`${ROOT}/generation/${job.id}`);
     expect(ready.asset.state).toBe('ready');
     const derivative = await page.request.get(ready.asset.previewUrl);
@@ -555,6 +557,81 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     if (campaignId) expect((await f.campaign(campaignId)).assetId).toBeNull();
     return ready.asset;
   }
+
+  test('chat creativo: conversación, contexto y referencias por turno', async ({ page }, info) => {
+    test.setTimeout(120000);
+    const f = await advertisingFixture(page, info);
+    worker('configure');
+    await navigate(page, 'Publicidad');
+    const reading = observeWrites(page);
+    const generations = () => reading.writes.filter(({ url }) => new URL(url).pathname === `${ROOT}/generation`);
+    try {
+      await actionButton(page, 'Crear publicación o campaña').click();
+      const chat = page.getByRole('region', { name: 'Chat creativo', exact: true });
+      const input = chat.getByRole('textbox', { name: 'Escríbele a Ali', exact: true });
+      const contextName = 'Datos y fotos para preparar imagen';
+      const trigger = actionButton(chat, contextName);
+      const dialog = page.getByRole('dialog', { name: contextName });
+      const first = 'Ali, quiero un fondo claro y con espacio para el título.';
+      const second = 'Conserva el encuadre y toma los colores de la foto adjunta.';
+      const filename = 'Paleta bosque.png';
+      await expect(chat.getByText(/^Hola, soy Ali/)).toBeVisible();
+      await input.fill(first);
+      await trigger.click();
+      await expect(dialog.getByRole('heading', { name: contextName })).toBeFocused();
+      await expect(dialog.getByRole('region', { name: 'Datos de marca y campaña' })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      await expect(input).toHaveValue(first);
+      expect(generations()).toHaveLength(0);
+      const original = await generate(page, f, chat, { campaignId: null });
+      await expect(chat.getByText(/^Ya tengo una versión para ti/)).toBeVisible();
+      await input.fill(second);
+      const authorize = chat.getByRole('checkbox', { name: /^Autorizo el envío/ });
+      await authorize.check();
+      await actionButton(chat, 'Adjuntar foto').click();
+      const bytes = await sharp({ create: { width: 480, height: 480, channels: 3, background: '#237454' } }).png().toBuffer();
+      await dialog.getByLabel('Archivo de imagen', { exact: true }).setInputFiles({ name: filename, mimeType: 'image/png', buffer: bytes });
+      const uploaded = page.waitForResponse(response => response.request().method() === 'PUT' && /\/assets\/[^/]+\/content$/.test(new URL(response.url()).pathname));
+      await actionButton(dialog, 'Adjuntar al turno').click();
+      const uploadResponse = await uploaded;
+      expect(uploadResponse.ok(), await uploadResponse.text()).toBe(true);
+      const { id: assetId } = await uploadResponse.json();
+      worker('asset', assetId);
+      const photos = dialog.getByRole('list', { name: 'Fotos adjuntas en el chat' });
+      await expect(photos.getByRole('button', { name: `Quitar ${filename}`, exact: true })).toBeVisible();
+      await expect(photos.getByText('Referencia para el próximo envío')).toBeVisible();
+      await expect(dialog.getByRole('img', { name: 'Imagen a modificar', exact: true })).toBeVisible();
+      await actionButton(dialog, 'Volver al chat').click();
+      await expect(authorize).not.toBeChecked();
+      await expect(input).toHaveValue(second);
+      await expect(actionButton(chat, 'Enviar ajuste')).toBeDisabled();
+      await authorize.check();
+      await authorize.uncheck();
+      await expect(actionButton(chat, 'Enviar ajuste')).toBeDisabled();
+      await input.press('Control+Enter');
+      expect(generations()).toHaveLength(1);
+      await trigger.click();
+      await expect(photos.getByRole('button', { name: `Quitar ${filename}`, exact: true })).toBeVisible();
+      await captureAdvertisingSurface(page, info, 'ali-chat-contexto');
+      await actionButton(dialog, 'Volver al chat').click();
+      const reference = await f.asset(assetId);
+      await generate(page, f, chat, { campaignId: null, baseAssetId: original.id, reference });
+      const transcript = chat.getByRole('list', { name: 'Turnos del chat' });
+      await expect(transcript.getByRole('listitem')).toHaveCount(2);
+      await expect(transcript.getByRole('listitem').first()).toContainText(first);
+      await expect(transcript.getByRole('listitem').last()).toContainText(second);
+      await expect(transcript.getByText('Tú', { exact: true })).toHaveCount(2);
+      await expect(transcript.getByText('Ali', { exact: true })).toHaveCount(2);
+      await expect(transcript.getByText(/^Ya tengo una versión para ti/)).toHaveCount(2);
+      await expect(authorize).not.toBeChecked();
+      expect(generations()).toHaveLength(2);
+      expect(reading.writes.some(({ url }) => /\/campaigns(?:\/|$)/.test(new URL(url).pathname))).toBe(false);
+      await chat.getByRole('heading', { name: 'Chat creativo' }).scrollIntoViewIfNeeded();
+      await captureAdvertisingSurface(page, info, 'ali-chat-conversacion');
+    } finally { reading.stop(); }
+  });
 
   test('idea, ajuste exacto, recarga, publicación de Instagram y cero comprobado sin reenviar', async ({ page }, info) => {
     test.setTimeout(180000);
@@ -571,7 +648,7 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     const example = composer.getByRole('button', { name: /^Muestra el producto sobre un fondo claro/ });
     await example.focus();
     await page.keyboard.press('Enter');
-    const idea = chat.getByRole('textbox', { name: 'Describe tu idea', exact: true });
+    const idea = chat.getByRole('textbox', { name: 'Escríbele a Ali', exact: true });
     await expect(idea).toBeFocused();
     await expect(idea).toHaveValue(/Muestra el producto/);
     expect(opening.writes).toEqual([]);
@@ -583,7 +660,7 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     const threadId = new URL(page.url()).searchParams.get('studio');
     expect(new URL(page.url()).searchParams.toString()).not.toContain('Fondo');
     await expect(chat.getByText(ideaText, { exact: true })).toBeVisible();
-    const adjust = composer.getByRole('textbox', { name: '¿Qué quieres ajustar?', exact: true });
+    const adjust = composer.getByRole('textbox', { name: 'Escríbele a Ali', exact: true });
     await adjust.fill('Aclara el fondo, conserva la etiqueta.');
     const variant = await generate(page, f, composer, { campaignId: null, baseAssetId: original.id });
     expect(variant.id).not.toBe(original.id);
@@ -807,11 +884,14 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     expect(base.diagnostic.code).toBe('IMAGE_GEOMETRY');
     await expect(adjustment.getByText(/Solo para ajustar: esta foto no se puede publicar tal cual/)).toBeVisible();
     await expect(adjustment.getByRole('button', { name: 'Usar esta pieza y continuar' })).toHaveCount(0);
-    const display = adjustment.getByRole('img', { name: 'Imagen a modificar', exact: true });
+    await actionButton(adjustment, 'Datos y fotos para preparar imagen').click();
+    const adjustmentContext = page.getByRole('dialog', { name: 'Datos y fotos para preparar imagen' });
+    const display = adjustmentContext.getByRole('img', { name: 'Imagen a modificar', exact: true });
     await expect(display).toHaveAttribute('src', new RegExp(`/assets/${base.id}/content\\?variant=reference&sha256=`));
     const baseResponse = await page.request.get(await display.getAttribute('src'));
     expect((await sharp(await baseResponse.body()).metadata()).exif).toBeUndefined();
-    await adjustment.getByRole('textbox', { name: '¿Qué quieres ajustar?', exact: true }).fill('Aclara el fondo y conserva el encuadre completo.');
+    await actionButton(adjustmentContext, 'Volver al chat').click();
+    await adjustment.getByRole('textbox', { name: 'Escríbele a Ali', exact: true }).fill('Aclara el fondo y conserva el encuadre completo.');
     const variant = await generate(page, f, adjustment, { campaignId: null, baseAssetId: base.id });
     expect(variant.id).not.toBe(base.id);
     await expect(adjustment.getByRole('button', { name: 'Usar esta pieza y continuar' })).toBeEnabled({ timeout: 15000 });

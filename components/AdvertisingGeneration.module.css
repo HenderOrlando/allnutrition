@@ -46,19 +46,42 @@
 
 .chat {
   min-width: 0;
-  border: 1px solid var(--admin-line);
-  border-radius: 16px;
+  border: 1px solid var(--admin-control-border);
+  border-radius: 20px;
   background: var(--admin-surface);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--admin-ink) 8%, transparent);
 }
 
 .chatTop {
   padding: var(--studio-padding);
-  border-radius: 15px 15px 0 0;
-  background: var(--admin-apricot);
+  border-radius: 19px 19px 0 0;
+  border-bottom: 1px solid var(--admin-line);
+  background: radial-gradient(ellipse at 90% 0%, var(--admin-apricot), transparent 60%), var(--admin-paper);
 }
 
 .root .chatTop h3 { margin: 0; font-size: clamp(1.45rem, 3vw, 1.85rem); }
 .root .chatTop p { margin: 4px 0 0; }
+
+.chatIdentity, .contextTitle { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.avatar {
+  display: grid;
+  place-items: center;
+  inline-size: 2rem;
+  block-size: 2rem;
+  align-self: start;
+  border-radius: 38% 38% 38% 14%;
+  background: var(--admin-ink);
+  color: var(--admin-paper);
+  font-weight: 800;
+}
+.chatIdentity .avatar { inline-size: 3rem; block-size: 3rem; font-size: 1.35rem; }
+.directoryLabel {
+  color: var(--admin-ink);
+  font-size: .75rem;
+  font-weight: 800;
+  letter-spacing: .085em;
+  text-transform: uppercase;
+}
 
 .history,
 .composer {
@@ -71,12 +94,8 @@
 .history > button { justify-self: start; }
 .history > p, .composer > :is(h4, p), .composerFields > p { margin: 0; }
 
-.emptyThread {
-  padding: 12px 14px;
-  border: 1px dashed var(--admin-line);
-  border-radius: 10px;
-  background: var(--admin-paper);
-}
+.history { background: color-mix(in srgb, var(--admin-paper) 55%, var(--admin-surface)); }
+.aliMessage { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px; }
 
 .turns {
   display: grid;
@@ -101,8 +120,9 @@
   border: 1px solid var(--admin-line);
   border-radius: 12px;
 }
-.userMessage { justify-self: end; background: var(--admin-paper); }
-.turnStatus { justify-self: start; background: var(--admin-surface); }
+.userMessage { justify-self: end; background: var(--admin-apricot); border-end-end-radius: 4px; }
+.turnStatus { justify-self: start; max-width: 100%; background: var(--admin-surface); border-start-start-radius: 4px; }
+.turnStatus p { margin: 0; }
 .turnStatus > button { margin-block-start: 4px; }
 
 .composer { border-top: 1px solid var(--admin-line); }
@@ -117,9 +137,29 @@
   color: inherit;
   font: inherit;
 }
+.promptLabel { font-weight: 800; }
+.contextActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.contextActions button, .contextDialog button { min-block-size: 44px; max-inline-size: 100%; }
+.contextActions p { flex-basis: 100%; margin: 0; font-size: .875rem; font-weight: 600; }
 .examples > button { flex: 1 1 13rem; text-align: start; }
 .composerFields > button { justify-self: end; }
-.composer h5, .composer h6 { margin: 0; font-size: .95rem; }
+.referenceDialog.contextDialog { width: min(48rem, calc(100% - 24px)); }
+.contextDialog .dialogHeader { background: var(--admin-paper); }
+.contextCard {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: clamp(12px, 2vw, 18px);
+  border: 1px solid var(--admin-line);
+  border-radius: 14px;
+}
+.contextTitle { justify-content: space-between; flex-wrap: wrap; }
+.contextCard :is(h4, h6, p) { margin: 0; }
+.contextCard h6 { font-size: 1rem; }
+.contextTitle span { font-size: .875rem; font-weight: 650; }
+.appliedReferences > .uploadedReference { grid-template-columns: minmax(0, 1fr) auto; }
+.appliedReferences > .uploadedReference:has(img) { grid-template-columns: auto minmax(0, 1fr) auto; }
 
 .previewEmpty {
   display: grid;
