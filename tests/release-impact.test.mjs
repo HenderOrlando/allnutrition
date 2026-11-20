@@ -299,6 +299,7 @@ test('workflow, harness and npm-script-only changes each require harness checks,
     ['scripts/verify-docker.mjs', 'export const version = 2;\n'],
     ['tests/release-impact.test.mjs', 'export const requiresGitHistory = true;\n'],
     ['deploy/audit/guest.mjs', 'export const isolation = "dedicated guest";\n'],
+    ['scripts/audit-issues.mjs', 'export const destination = "public issue";\n'],
     ['package.json', JSON.stringify({ ...pkg, scripts: { verify: 'node two.mjs' } })],
   ]) {
     await t.test(path, async () => {

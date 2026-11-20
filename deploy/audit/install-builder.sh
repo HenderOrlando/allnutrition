@@ -15,7 +15,12 @@ printf '%s  %s\n' "$digest" "$pool/golden.qcow2" | sha256sum --check --status
 chown 0:0 "$pool/golden.qcow2"
 stage=$(mktemp -d /opt/.allnutrition-audit-XXXXXX)
 trap 'rm -rf -- "$stage"' EXIT
-tar --no-same-owner --no-same-permissions -xf - -C "$stage"
+collector_files=(
+  scripts/{audit-production,audit-issues,production-host,production-release,release-impact,release-impact-matrix}.mjs
+  deploy/audit/{README.md,guest-host.mjs,guest.mjs,install-builder.sh,provision-golden.sh,smoke-golden.sh}
+  deploy/systemd/allnutrition-audit.{service,timer}
+)
+tar --no-same-owner --no-same-permissions -xf - -C "$stage" -- "${collector_files[@]}"
 find "$stage" -type d -exec chmod 0755 {} +; find "$stage" -type f -exec chmod 0644 {} +
 chmod 0755 "$stage/deploy/audit/"*.sh
 for f in "$stage/scripts/"*.mjs "$stage/deploy/audit/"*.mjs; do "$node" --check "$f"; done
