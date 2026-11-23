@@ -15,7 +15,7 @@ export const isSource = path => /\.(?:[cm]?[jt]s|[jt]sx|css)$/.test(path);
 export const isNodeTest = path => /^tests\/[^/]+\.test\.mjs$/.test(path) && !['tests/postgres.integration.test.mjs', 'tests/assistant-work-postgres.test.mjs', 'tests/release-impact.test.mjs'].includes(path);
 export const isDocs = path => path.startsWith('docs/') || /^[^/]+\.md$/i.test(path);
 export const isWebEntry = path => /^(app|components|public)\//.test(path) || /^(?:next\.config\.|jsconfig\.json$|tsconfig\.json$|proxy\.|instrumentation\.)/.test(path);
-export const isHarness = path => /^(?:\.github\/|scripts\/(?:release-|production-|verify-docker|check\.|deploy-production|audit-production|deployment-)|Dockerfile\.checks$|tests\/(?:native\/|docker\/|release-impact\.test\.mjs$)|playwright\.config\.|\.nvmrc$|\.gitignore$|deploy\/(?:systemd|audit)\/)/.test(path);
+export const isHarness = path => /^(?:\.github\/|scripts\/(?:release-|production-|verify-docker|check\.|deploy-production|audit-|deployment-)|Dockerfile\.checks$|tests\/(?:native\/|docker\/|release-impact\.test\.mjs$)|playwright\.config\.|\.nvmrc$|\.gitignore$|deploy\/(?:systemd|audit)\/)/.test(path);
 export const isInfra = path => /^(?:compose\.|deploy\/(?!(?:systemd|audit)\/))/.test(path);
 export const isCorePersistence = path => /^(?:db\/(?:sqlite|supabase)\.sql|lib\/(?:store\.mjs|db\/(?:config|postgres|sqlite)\.mjs))$/.test(path);
 export const isMigration = path => /^db\/.*\.sql$/.test(path);
