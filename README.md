@@ -106,6 +106,8 @@ Siete áreas: **Inicio, Pedidos, Productos, Caja, Informes, Publicidad y Configu
 
 **Configuración** abre la guía de inicio; el directorio completo se despliega con **Más opciones de configuración**, separado en operación del negocio, vitrina pública y acceso al panel. **Configurar cuentas del negocio** permite revisar cuentas y preferencias sin recorrer la guía. Las pantallas secundarias ofrecen **Volver a la guía de inicio** y **Cambiar de tarea**; los formularios conservan sus confirmaciones de cambios pendientes.
 
+Desde Ali, la guía enfoca la apertura inicial, el guardado del primer producto o la revisión de reglas según lo que falta. El saldo y el responsable se confirman en el formulario; la primera ficha queda en borrador y aceptar reglas no modifica la política vigente.
+
 **Ali** se abre desde el botón del panel. Configura y verifica su proveedor en **Configuración → Ali**. Para empezar, usa **Revisar pendientes**, **Recomendar próximos pasos** o **Explicar esta sección**; puedes editar la consulta antes de enviarla. Admite **APIKey** para OpenAI, proveedores compatibles y Google/Gemini, u **OAuth de Google/Gemini**. Proveedor, modelo y credenciales cambian desde el panel sin reiniciar. La autenticación permanece cifrada en el servidor; cambiar la configuración invalida los trabajos pendientes, no las operaciones ya guardadas.
 
 Cada conversación conserva su objetivo inicial, respuestas confirmadas, referencias consultadas y hasta tres próximos pasos. Reábrela desde **Conversaciones** y despliega **Objetivo y siguientes pasos** para responder lo pendiente o ir a la tarea sugerida, incluso después de navegar o recargar. La memoria pertenece al administrador y a esa conversación; una nueva empieza separada y borrar la conversación elimina su memoria. Las sugerencias no son tareas ejecutadas ni recordatorios programados: Ali vuelve a consultar los datos actuales. La consulta, la memoria y los campos asistibles pueden enviarse al proveedor configurado.
@@ -133,6 +135,10 @@ Esta ampliación requiere **migración 9 después de 8**: amplía el tipo admiti
 
 Pedidos: destinatario, productos, vendedor opcional y acuerdo económico; envíos, cobros y rentabilidad dentro del detalle. Guías/eventos, devoluciones, recaudos y reembolsos son documentos separados y auditables, no un campo «Pagado» editable. El recaudo de plataforma queda pendiente hasta confirmar la recepción de una liquidación. Después del despacho se preserva el acuerdo histórico; las correcciones explícitas conservan el registro anterior.
 
+Si la fecha del evento de una guía coincide con la apertura de inventario, indica si ocurrió antes o después del conteo. Ali abre el selector del evento exacto sin elegir la respuesta; solo al guardar se aplica su efecto a existencias.
+
+En **Cobros → Conciliar pago histórico**, elige **Ya incluido en saldo inicial** si el saldo de apertura ya lo recoge. Elige **Registrar un movimiento real** solo si puedes confirmar fecha, cuenta, método y referencia. Ali no marca ninguna opción.
+
 Caja registra cuentas con apertura explícita —también cero—, ingresos no comerciales, transferencias, gastos/pagos, anticipos y cierres. Un aporte del propietario no es una venta; una transferencia no altera el consolidado. Personas responsables y vendedores no necesitan credenciales de acceso. Sueldos/comisiones distinguen devengo, compensación y salida efectiva de dinero. Responsables, cuentas y vigencias se encuentran en **Configuración**, mediante **Gestionar personas y sueldos**, **Configurar cuentas del negocio** y **Revisar reglas y preferencias**.
 
 En **Caja**, la **Guía de caja** es opcional y desplegable: explica saldos, cuentas, ingresos, gastos/abonos, traslados, liquidaciones, sueldos y cierres con ejemplos ficticios. **Disponible en cuentas** es el saldo registrado actual, no la ganancia ni el saldo del período; los sueldos pendientes ya forman parte de gastos por pagar. Los listados sí dependen del período. Sus filtros aplicables, chips y detalles se conservan en la URL: cuenta en movimientos, categoría/persona en gastos, cuenta de plataforma en liquidaciones y persona/estado en sueldos. Las cuentas archivadas siguen consultables y su saldo permanece en el total.
@@ -154,11 +160,27 @@ Un gasto nuevo siempre comienza en **Dejar pendiente**, incluso con cuenta prede
 
 La [API oficial de Heka](https://new.hekaentrega.co/api/docs) no documenta anulación de guías, rastreo independiente, solicitudes de pago, cambios bancarios ni rotación de llaves por API. Para reemplazar o revocar una llave, hazlo desde tu cuenta Heka; **Retirar llave del panel** solo desconecta el panel. El complemento **Heka clásico** se mantiene independiente para consultas e importación, incluida la conciliación posterior de liquidaciones.
 
+Ali puede llevarte al selector de entorno, a la llave del entorno que elegiste y al retiro local. No elige Producción, no introduce llaves ni confirma en tu lugar. Puedes abrir las operaciones para revisar el entorno sin consultar ni emitir en Heka.
+
+En el directorio de Ali puedes buscar guías, ciudades, bodegas, plantillas, destinatarios, novedades o cotizaciones. Abrir una acción enfoca su formulario, no hace la consulta. Escribe teléfono y documento solo en el control del panel. Cambiar de emisión a cotización no borra el borrador del envío; una cotización no emite una guía ni acredita un cargo.
+
+Cuando una búsqueda de ciudades, bodegas o plantillas da un resultado único, Ali puede llevarte al botón exacto de copiar. Si hay varias coincidencias, vuelve a la búsqueda para que elijas. Copiar cambia el borrador, no envía datos a Heka.
+
+**Ayúdame con esta revisión** abre Ali desde el diálogo de emisión o solución; el borrador permanece en el panel. Al volver, puedes revisar el entorno, el alcance y la casilla de consentimiento. **Volver sin enviar** conserva lo escrito.
+
+Para vincular una guía existente, busca el AN exacto en el diálogo y confirma que corresponde a esa guía y transportadora. Abrir el vínculo guardado muestra su envío local; no actualiza la guía en Heka ni registra una entrega o un cobro.
+
+Si el historial muestra **Resultado incierto**, no repitas el envío. Puedes pedir a Ali que muestre la verificación de la solicitud con la llave y el entorno originales. Verificar solo consulta lo que Heka tiene registrado; encontrar una guía no demuestra que la solicitud anterior la haya creado.
+
+Para las etiquetas, marca las guías y después pulsa **Preparar etiquetas seleccionadas**. También puedes abrir directamente el campo de un documento guardado. Preparar no inicia ninguna descarga: pulsa **Descargar etiquetas PDF** después de revisar los IDs. **Comprobar acceso** consulta bodegas con la llave guardada; no comprueba permisos para emitir.
+
 Prueba local de navegador: `node tests/heka-browser.mjs` con Node 24, OpenSSL y Chromium de Playwright instalado. El comando inicia un panel HTTPS local con almacenamiento desechable y respuestas sintéticas; nunca usa llaves o servicios Heka reales.
 
 ### Proveedores de envíos · Heka clásico
 
 **Configuración → Proveedores de envíos** (`business/shipping`) vincula una fuente comercial activa al complemento local. Esta ampliación local todavía no está desplegada en producción. Requiere esquema **10** y panel HTTPS. El código de emparejamiento dura cinco minutos y solo puede usarse una vez; después, confirma expresamente la cuenta Heka y la fuente en el panel.
+
+Ali distingue el **estado guardado de la API oficial** de las **conexiones guardadas de Heka clásico**. Para generar un código o revocar el acceso del complemento, usa **Elegir esta conexión** en la fuente correcta. Revocar invalida los códigos pendientes; no elimina capturas ni lotes y no revoca la llave de la API oficial.
 
 ```sh
 npm run desktop:install
@@ -182,7 +204,7 @@ En **Publicaciones y campañas**, **Creadas en All Nutrition** es el origen pred
 
 1. **Redes sociales:** abre **Tus conexiones** o inicia el alta guiada: preparar la aplicación, conectar con Facebook y elegir los recursos. El alta no habilita la publicación. La ficha conserva su dirección `/admin?section=business&tab=social&record=<UUID>`; **Datos consultados** muestra las publicaciones y campañas de esa conexión, con fecha y cobertura. Solo **Consultar desde Meta** o **Actualizar desde Meta** solicita una nueva lectura. **Consultar anuncios por fecha** es una consulta puntual: no se guarda ni aparece después en el inventario de Publicidad.
    - **API Key / token de acceso manual:** alternativa de solo lectura en la misma pantalla. Requiere ID y secreto de la aplicación que emitió el token, además de la custodia cifrada; no requiere ID de configuración de login. Acepta tokens de usuario o usuario del sistema comprobados por Meta. Seleccionar y revalidar una cuenta permite consultar sus campañas existentes por período, sin crear publicaciones locales ni autorizar gasto. Para renovar el token, crear otra conexión manual; no se convierte a OAuth.
-   - **Acceso asistido por navegador:** usa un visor privado y requiere autorización independiente; no se activa si falla otra vía. La sesión se custodia cifrada y los desafíos requieren intervención personal. La ficha muestra recursos y la última verificación de esa vía, no el historial de la API.
+   - **Acceso asistido por navegador:** usa un visor privado y requiere autorización independiente; no se activa si falla otra vía. Los desafíos se completan dentro del visor, nunca en el chat. **Ali: revisar este control** orienta a la acción del visor abierto, sin leer sus entradas ni verificar o cerrar el acceso. Verificar solo guarda una sesión si Meta confirma la identidad; cancelar el control no elimina sesiones guardadas. La ficha distingue esa verificación del historial de la API.
    - **Evaluación para OAuth y token manual:** muestra permisos concedidos, rechazados, vencidos o desconocidos, vencimiento, recursos accesibles y restricciones por tareas y permisos granulares. La conexión manual no publica, modifica, activa, pausa ni revoca permisos remotos, aunque el token tenga permisos de escritura. La desconexión local sigue disponible.
    - **Diagnóstico de OAuth y revalidación:** el alta abre la ficha de esa conexión, donde puedes **Seleccionar página y cuenta**. Ante un rechazo se indica la etapa, la operación concreta de Graph v26, la acción sugerida y, cuando Meta los informa, HTTP, código y subcódigo. Comparte solo esos datos; nunca la URL del retorno, código OAuth, estado, tokens ni mensajes libres de Graph. Una conexión parcial permite usar solo las capacidades comprobadas.
    - **Límites:** se muestran únicamente los valores numéricos reportados en `x-app-usage`, `x-page-usage`, `x-business-use-case-usage` y `Retry-After`. Los porcentajes de uso no garantizan cuota restante; las cabeceras ausentes o inválidas quedan como desconocidas. La recuperación estimada de Meta se expresa en minutos y `Retry-After` en segundos. La evaluación es una captura fechada, no una autorización permanente: cada consulta comprueba el acceso vigente. Vencimiento `0` informado por Meta no significa que el token no pueda revocarse.
@@ -191,7 +213,7 @@ En **Publicaciones y campañas**, **Creadas en All Nutrition** es el origen pred
 3. **Definir qué publicar:** «Usar esta pieza y continuar» elige el derivado revisado; «Definir primero, sin imagen aún» permite guardar una idea incompleta. Al guardar, la selección queda ligada al borrador real en la misma transacción. «Mis piezas en curso» o `record=new&studio=<UUID>` reabre el estudio privado sin guardar indicaciones ni fotos en la URL. El activo comercial se comparte con colaboradores, no el chat.
    - **Definir publicación:** elige «Publicación sin inversión» o «Anuncio pagado», objetivo, oferta, texto, cuenta, redes y destino. El nombre sugerido es editable y un borrador puede guardarse incompleto. Si anuncias, por ejemplo, Dúo Cacao y una muestra adicional de vainilla, especifica la condición «Solo con Dúo»; lo aprobado conserva la referencia y la condición exactas. Si la pieza se hizo antes de elegir la oferta, revisa que represente el producto y ajusta la variante con los hechos de catálogo si hace falta.
    - **Mercados:** elige explícitamente uno o varios países. En orgánico orientan el mensaje y el análisis, pero no limitan ni garantizan la distribución en Meta. En pauta, la audiencia debe cubrir exactamente esos países mediante países completos o zonas verificadas sin solaparlas. La moneda y la zona son de la cuenta. Un mercado histórico desconocido no se infiere de la audiencia ni reescribe una aprobación anterior.
-   - **Audiencia de pauta:** con mercado confirmado puedes definirla tú, pedir a Ali que la proponga o que sugiera mejoras a tu selección, o elegir «Sin personalizar» para público amplio sin IA. Ali muestra el proveedor de texto, los hechos que enviará y solicita consentimiento por cada consulta; no recibe fotos, clientes ni credenciales. La propuesta explica sus supuestos y no estima alcance ni autoriza gasto. En manual se aplican solo las diferencias elegidas.
+   - **Audiencia de pauta:** con mercado confirmado puedes definirla tú, pedir a Ali que la proponga o que sugiera mejoras a tu selección, o elegir «Sin personalizar» para público amplio sin IA. Ali muestra el proveedor de texto, los hechos que enviará y solicita consentimiento por cada consulta; no recibe fotos, clientes ni credenciales. La propuesta explica sus supuestos y no estima alcance ni autoriza gasto. En ambos modos se aplican solo las diferencias elegidas y confirmadas por separado. Si buscas ubicaciones o intereses por navegador, guarda primero el borrador exacto.
    - **Revisar y publicar:** «Qué falta antes de aprobar» reúne los requisitos pendientes y permite saltar al campo correspondiente. Los bloqueos de acceso o habilitación indican qué comprobar en Redes sociales. Revisa cuenta, ubicación, pieza y texto por red, países y horario. En pauta revisa también audiencia, fechas y presupuesto total en la moneda de la cuenta, sin duplicarlo por red. Una vía que no acredita la etiqueta de IA no se ofrece para esa pieza; no se retira la etiqueta ni se cambia de método automáticamente.
 4. **Aprobar y publicar son acciones distintas:** antes de aprobar, usa «Guardar y obtener estimación». Si ya hay una estimación para el borrador actual, usa «Actualizar estimación», con o sin hipótesis propia. Audiencia potencial, rango histórico comparable e hipótesis son fuentes distintas; datos insuficientes no producen una predicción.
    - **Orgánico:** «Aprobar sin publicar» congela la revisión sin contactar a Meta ni crear entregas. «Publicar» o «Programar» abre otra confirmación de destinos, pieza, texto y horario. Solo al aceptarla se encola una entrega por red. Si la fecha aprobada ya pasó, duplica, reprograma y vuelve a aprobar. «En cola» y «Programada» no significan «Publicada»; si la respuesta es incierta o parcial, comprueba en Meta sin reenviar.
@@ -269,9 +291,15 @@ Visitar una hoja no la incluye: cada hoja real necesita una decisión explícita
 
 El perfil **v2** guarda propósito, encabezado, columnas, estados, valores fijos y exclusión por hoja. Las propuestas y **Aplicar a hojas similares** requieren confirmar las hojas afectadas; una columna de aspecto numérico no demuestra que sea celular. Al reutilizar un perfil, confirma **Este archivo está actualizado hasta…** para las hojas elegidas: no se arrastra un corte constante antiguo ni se toma la hora de subida. Una columna real de corte mantiene prioridad. Los perfiles anteriores se adaptan al abrirlos y el próximo guardado usa v2; no se reescriben revisiones ya aceptadas.
 
+Ali puede llevarte a la propuesta de la **hoja activa**, a las hojas **compatibles**, a las equivalencias de estado o a la propuesta del **libro completo**. Verifica qué hojas incluye la confirmación. Aceptar modifica el borrador de configuración; no guarda ni importa operaciones.
+
 La revisión solo queda disponible cuando el trabajo del servidor termina. Antes de aceptar puedes completar celdas con motivo conservando el original, vincular productos reales, resolver identidades/duplicados y revisar fechas discrepantes. Nunca se corrige un año por el nombre del mes o del archivo. Sin IDs, generar identidades requiere confirmar que cada fila representa un pedido y un envío; no usa nombre, celular ni número de fila como identificador. Una operación parecida no se suma ni se convierte silenciosamente en otra venta: debe vincularse, omitirse como duplicada o declararse independiente.
 
+Para archivos propios, **Crear un origen para mis archivos** crea su cuenta Principal. Para otra cuenta, elige primero el origen: Ali no elige la identidad por ti. Crear el origen o la cuenta conserva el archivo elegido en tu dispositivo hasta **Guardar archivo y continuar**.
+
 **Filas originales y motivos** permite buscar dentro de esta importación, filtrar por estado y abrir la hoja/fila exactas de un problema, incluso fuera de la página visible. **Ver todas las filas** elimina esa ubicación; buscar o cambiar estado vuelve a página 1. Una ubicación inexistente muestra que no está disponible, nunca otra fila. Las filas ya aplicadas no reciben controles de corrección.
+
+Después de elegir la columna o el grupo exacto, **Ayúdame con esta resolución** abre Ali sin descartar lo escrito. Al volver, el foco va al motivo. Omitir un grupo excluye toda esa operación de la próxima revisión: no modifica el Excel original ni revierte lo ya aplicado.
 
 Las acciones masivas muestran primero las columnas, hojas o registros afectados. Puedes confirmar una lista de exclusiones propuestas y aplicar reglas realmente comunes a los seleccionados; no rellenan clientes, celulares ni costos inventados. Declarar operaciones independientes asigna una identidad técnica distinta a cada fila. En apertura, cada casilla corresponde a una observación física concreta, sin respuesta preseleccionada. Las resoluciones se guardan por bloques conservando el progreso confirmado; si falla uno, se indica lo pendiente en vez de afirmar que se guardó todo.
 
@@ -321,6 +349,8 @@ Si falla la lectura o la extracción, el diagnóstico indica código, fase, ubic
 
 Para vincular una referencia del Excel con un producto que ya existe, selecciona **Registro que se vinculará** y pulsa **Guardar vínculo**: se guarda en el lote sin crear otro producto ni importar pedidos. **Vínculos guardados** muestra la referencia y el producto, permite cambiarlo y permanece al retomar o recargar. Después usa **Guardar cambios y revisar** para validar sus efectos. **Guardar lote y crear producto** es una alternativa solo sin selección existente; cancelar esa alta restaura el diálogo, la referencia, el motivo y la búsqueda, sin borrar los vínculos ya guardados.
 
+En la resolución de Excel, pide a Ali que vuelva al campo de búsqueda de la referencia, fila u operación que tienes abierta. Se conserva lo escrito; Ali no elige el producto, vendedor, pedido, guía ni gasto. Si abres una fuente desde una alerta, se selecciona la cuenta del episodio, pero el archivo queda por elegir.
+
 **Productos por vincular** conserva los pendientes de la última revisión aunque guardes un vínculo y se invalide el preview. Puedes vincularlos consecutivamente, salir y retomar sin recalcular todo después de cada producto; solo desaparecen las referencias cubiertas por los vínculos guardados. Es una lista de trabajo, no una revisión aprobada: al terminar usa **Guardar cambios y revisar** antes de importar.
 
 Antes de terminar puedes **Descartar archivo** durante la carga/preparación o **Cancelar importación** después de confirmar, incluso con el worker activo. El diálogo lista archivo y consecuencias; cerrarlo no escribe nada. Solo la respuesta del servidor confirma el descarte: se detiene lo pendiente al concluir la transacción en curso y se elimina el original privado; **no se revierten pedidos, existencias, recaudos ni liquidaciones ya confirmados**. Se conservan revisiones y filas fuente como evidencia. La importación cancelada queda de solo lectura: para otro archivo, usa **Nueva importación**.
@@ -329,6 +359,94 @@ Una importación terminada, también con excepciones, **no admite descarte ni ca
 
 
 Informes diarios, semanales, mensuales, trimestrales, semestrales y anuales en `America/Bogota`: consulta viva, detalle explicativo, snapshots inmutables y XLSX con Resumen/Detalle/Definiciones. Los períodos históricos anteriores a `reportsStartOn` se solicitan expresamente. Falta de costo/fecha se muestra como cobertura pendiente, no beneficio ficticio; un corte de archivo sin hora no adquiere la hora de subida. Los importes internos son centavos enteros seguros. Agregados con 16 o más dígitos en centavos se exportan como texto decimal COP exacto para evitar la pérdida de precisión de Excel.
+
+## Hoy con Ali
+
+Abre **Ali** desde el panel. **Ideas para empezar** también está disponible dentro de una conversación: elegir una idea copia un texto editable, sin enviarlo. Abrir una acción del directorio para consultar a Ali devuelve el foco a la caja de mensaje y conserva lo escrito; pulsa **Enviar** cuando esté listo.
+
+**Fuentes** muestra de dónde viene una afirmación; **Ver registros consultados** recupera lo que se leyó en ese turno, no ejecuta otro análisis. Si hay varias respuestas con evidencia, elige la respuesta exacta antes de abrir su fuente.
+
+En **Inicio → Hoy con Ali** ves avisos y recordatorios privados sin abrir el chat. Abre la fuente para revisar el registro original; leer, posponer o retomar un aviso no modifica ni resuelve esa fuente. **Toda la atención pendiente** conserva la vista general del negocio. Los recordatorios usan hora de Bogotá y aparecen al volver al panel, no envían notificaciones con el navegador cerrado.
+
+En **Mis tareas** puedes consultar o retomar lo que ya respondiste. Para un envío, Ali pide el pedido, la guía y la transportadora que falten; **Revisar envío en el pedido** abre el formulario nativo sin registrar nada. Si el pedido cambió, vuelve a revisar su versión. Cuando hay un comprobante, la tarea distingue ese guardado de un envío que ya constaba.
+
+Para **caja**, selecciona la cuenta y la fecha e indica el efectivo contado. Ali compara esperado, contado y diferencia en COP; el cierre solo se registra en el formulario de Caja y no ajusta el saldo. Si hubo un movimiento, revisa la comparación actualizada antes de confirmar. En **importaciones**, usa **Revisar con Ali** o **Retomar con Ali** en el aviso: la tarea te lleva a los pendientes del lote. Preparar una corrección no aplica el archivo; solo **Confirmar e importar** acepta la nueva revisión.
+
+En la **revisión de Excel**, distingue **Efectos previstos** de los resultados ya aplicados. **Ver fila original** abre la hoja y la fila exactas con sus valores conservados; consultarlos no corrige ni acepta el lote.
+
+Para **configurar la caja desde Inicio**, Ali abre el formulario de apertura si todavía no hay una cuenta operativa. Revisar el formulario no crea la cuenta: introduce y confirma el saldo real, incluso si es cero.
+
+Para **reabrir un cierre de caja**, abre la revisión exacta en **Cierres históricos**. Ali te lleva a **Reabrir cierre con motivo** sin ejecutar el cambio. El cierre original conserva el conteo y la diferencia; el siguiente tendrá un número de revisión nuevo.
+
+En **Pedidos → Cobros**, elige quién recibió o devolvió el dinero. Solo el dinero que pasó por una cuenta propia se registra allí en Caja; el recaudo de plataforma se concilia en **Caja → Liquidaciones**. Ali puede enfocar la autorización de saldo a favor, pero no la marca.
+
+En el **acuerdo del pedido**, el flete cobrado al cliente y el costo real de la transportadora son datos distintos. Si hay varias guías, Ali te lleva a la lista para que elijas la correcta. En **Rentabilidad**, una devolución comercial tampoco registra un reembolso: cuando ocurrió el día del conteo físico, confirma si la mercancía ya estaba incluida.
+
+En **Caja → Liquidaciones**, declarar o corregir soportes no mueve dinero. Revisa qué cobros y deducciones quedan incluidos y confirma solo lo que llegó: un abono deja el resto pendiente, un neto cero no genera asiento y un neto negativo registra la salida. Si hay varios recibos, elige el que corresponde antes de revertirlo; el original queda en el historial.
+
+Para **corregir un gasto importado**, abre el gasto exacto y consulta sus datos de origen antes de marcar la confirmación. La corrección no repite los pagos. Si necesitas crear un responsable desde un gasto nuevo, la persona queda seleccionada sin guardar el gasto ni recibir acceso al panel.
+
+En **Pedidos → Importaciones**, abre el lote exacto antes de pedir ayuda a Ali. Ali puede llevarte a la revisión y a la confirmación nativa. Para importar solo las operaciones válidas, marca esa opción: junto al botón de confirmación verás cuántas se incorporarán y cuántas quedarán pendientes. Usa **Revisar pendientes** para generar otra revisión sin repetir lo incorporado. La importación no registra cobros ni pagos.
+
+En **Hojas y columnas**, usa **Valores comunes de esta hoja** para completar campos sin columna asignada. **Guardar una configuración para próximas importaciones** guarda ese mapa para la misma cuenta de origen. El archivo nuevo siempre necesita su propio corte; guardar un perfil no acepta la importación.
+
+En **Configuración → Ali**, el resumen muestra lo que ya está guardado y la barra inferior avisa cuando estás editando un borrador. **Guardar y verificar** consulta al proveedor seleccionado. Deshabilitar Ali no elimina la clave; retirarla en el panel tampoco la revoca en el proveedor.
+
+En **Configuración → Personas**, elige la persona antes de abrir su convenio de sueldo o comisión. Para cerrar una vigencia, identifica el convenio por sus fechas e indica su último día. Guardar una vigencia no registra un pago ni cambia el período de nómina ya confirmado que estás consultando.
+
+Usa **¿Qué quieres hacer?** en Inicio o desde el chat para buscar una acción por su nombre o por área. Ali distingue **Consulta**, **Preparación**, **Requiere confirmación** y **Paso manual**. **Abrir en el panel** lleva el foco al control nativo disponible y puede desplegar el grupo de filtros que lo contiene. Si llegas desde una consulta compatible, conserva su contexto: por ejemplo, te lleva a **Limpiar filtros** de Gastos sin cambiar de listado ni borrar los criterios por ti. No selecciona valores ni guarda cambios. Si no encuentra el control exacto, explica qué falta.
+
+Si Ali te pide una aclaración y quieres consultar otro tema, usa **Empezar otra consulta**. La pregunta queda pendiente en el hilo anterior y vuelve a mostrarse al abrirlo en **Conversaciones**. También puedes buscar **«historial de Ali»** o **«nueva conversación»** en el directorio para ir directamente a esos controles.
+
+Si un análisis queda a medias, **Completar análisis** solicita un tramo nuevo de la misma consulta. Si cerraste Ali mientras trabajaba, **Continuar** recupera el turno sin duplicarlo. **Responder con lo revisado** conserva el alcance y las fuentes disponibles; no cancela operaciones del negocio.
+
+Si aplicas valores de una propuesta, no se guardan al cerrar Ali. Usa **Guardar cambios** en ese formulario y revisa la confirmación. El comprobante aparece solo después de guardar; volver al formulario conserva tus ediciones.
+
+Para borrar una conversación, ábrela primero. **Borrar** pide confirmar el hilo por su título; la eliminación no deshace cambios que ya guardaste en el negocio.
+
+En **Hoy con Ali → Mis recordatorios**, **Marcar como atendido** detiene el aviso y conserva el recordatorio en tu historial. **Eliminar** quita el recordatorio personal después de confirmar. Ninguna de las dos acciones cambia el registro del negocio.
+
+En la **biblioteca privada de Publicidad**, Ali conserva la búsqueda y el archivo abierto. Puedes revisar el original y si hay vista previa, o volver al selector sin perder un archivo local ya elegido. Elegir o descartar no sube nada: la carga y el archivo se hacen con los botones nativos.
+
+**Abrir original privado** muestra el archivo recibido, no el derivado utilizado para publicar. **Reintentar procesamiento** vuelve a encolar el mismo archivo solo si conserva el original íntegro; «En proceso» aún no significa que la vista previa esté lista.
+
+En **Mis piezas en curso**, selecciona el hilo que quieres retomar. En el **Estudio visual** puedes adjuntar un archivo propio o elegir uno de la biblioteca, y comparar el original con el archivo preparado. **Usar esta pieza y continuar** selecciona la versión revisada; no genera otra imagen ni publica.
+
+En campañas, estima y revisa derechos por separado. Aprobar una publicación orgánica no solicita el envío. Preparar un anuncio no lo activa ni autoriza gasto. En Resultados, **Actualizar vista** lee lo guardado; **Actualizar desde Meta** solicita una lectura nueva y no implica que ya haya una captura.
+
+Si eliges **Cambiar aquí** en Resultados, el borrador muestra el antes y el después de una sola entrega. Guardar el borrador, confirmar su envío y cancelarlo son acciones distintas. Descartar un borrador no modifica la entrega.
+
+En **Vitrina**, puedes buscar preguntas frecuentes, mensajes y condiciones de envío. Abre primero la ficha exacta para revisarla o editarla con Ali. Preparar una ficha no la guarda; el estado **Publicación** lo eliges tú y se aplica al guardar. Cambiar el estado de una ficha no habilita la vitrina global.
+
+En **Datos y publicación de la vitrina**, Ali conserva los cambios sin guardar al moverte entre identidad, contacto, pagos y publicación. **Ver mi página** abre en otra pestaña la versión guardada. Desmarcar **Publicar la vitrina** solo vuelve al modo preparación después de guardar y no archiva fichas.
+
+En **Publicidad**, Ali vuelve al borrador abierto y enfoca el paso pedido sin perder lo que ya escribiste. La revisión muestra qué falta antes de aprobar. Guardar o cancelar un borrador local no programa publicaciones, no solicita una pausa externa ni autoriza gasto.
+
+En un **anuncio pagado**, guarda primero la cuenta si cambia la moneda. Los montos anteriores no se convierten: escribe el nuevo presupuesto y la meta en la moneda de la cuenta. Revisar qué datos recibiría la IA no los envía; pedir la consulta requiere autorización explícita.
+
+En **Idea y oferta**, **Volver a leer la ficha** muestra el precio y las condiciones actuales al lado de la oferta del borrador. **Aceptar la ficha actual** prepara el cambio; **Guardar borrador** lo conserva sin publicar. Si cambias la referencia principal, debes elegir de nuevo el obsequio y su condición.
+
+En **Seguimiento de envíos**, abre primero la guía exacta y usa **Ayúdame con este formulario**. Ali puede devolverte a su detalle sin cambiar de guía: revisa el origen, las cantidades y el **Historial de eventos**. Cuando un corte no consta, el panel lo indica; consultar el historial no agrega eventos. En **Publicidad → Resultados**, las recomendaciones y los aprendizajes guardados no solicitan nuevas lecturas a las redes. **Sin pedidos vinculados** no significa que la publicidad haya generado cero ventas.
+
+En **Publicidad → Resultados → Pedidos y gastos vinculados**, abre primero la campaña exacta. Busca por número de pedido o concepto de gasto. Elige el registro, escribe el motivo y confirma el alcance. **Rectificar o retirar vínculo** permite cambiar el motivo o quitar la asociación sin borrar el registro. Para trasladarlo a otra campaña, el diálogo muestra de cuál saldrá antes de confirmar. Ningún vínculo atribuye ventas ni modifica pedidos, gastos o pagos.
+
+Desde **Inicio**, al abrir el detalle de ventas, resultado o puntualidad, Ali mantiene el período elegido. **Disponible ahora en caja/cuentas** conserva el corte de hoy en Bogotá y muestra la cuenta de cada registro. Si una cifra está incompleta, **Completar datos** abre solo los registros excluidos con su motivo; no corrige datos ni interpreta un desconocido como cero. En **Mi vitrina**, puedes escoger un tipo o una ficha en borrador sin publicar. En **Configuración → Alertas**, **Ver episodio** conserva el filtro y no marca la alerta en atención.
+
+Para **registrar, dividir o sustituir una guía local**, abre el pedido exacto. Revisa las cantidades y confirma con **Registrar envío**; eso no emite una guía en Heka ni acredita despacho. En el seguimiento de una guía, indica solo el hecho observado y guarda el evento; una fecha desconocida no se infiere del corte de observación. Para **archivar, reactivar o configurar el cierre diario** de una cuenta, Ali muestra las cuentas aptas, pero tú eliges cuál y cambias la casilla. Cambiar la regla no cierra la caja ni reescribe su apertura.
+
+En **Caja**, decide si el gasto queda **pendiente** o si ya hiciste **el pago completo**. Un traslado mueve dinero entre cuentas propias; un ingreso no comercial no es una venta. Para revertir un traslado o ingreso, abre el movimiento exacto: la contrapartida conserva el original. En **Productos**, el conteo físico no puede quedar por debajo de lo reservado; guardar un costo nuevo no cambia el que ya quedó registrado en un pedido.
+
+Para pagar un gasto pendiente, abre ese gasto y registra solo el abono o saldo que ya pagaste. Si una corrección reduce el importe por debajo de lo pagado, el crédito queda disponible para registrar una recuperación real. Revertir un abono o recuperación conserva el documento original: elige el comprobante por fecha e importe.
+
+Si una guía local no tiene pedido, **Identificar el pedido** consulta sin vincular. Para **Vincular pedido conocido**, busca el número AN exacto o el número de otra guía ya vinculada, elige el pedido y escribe las unidades comprobadas. Después del despacho solo puedes corregir notas con un motivo. La identidad de una guía oficial de Heka permanece protegida.
+
+En **Configuración → Reglas financieras**, una fecha de vigencia futura no reemplaza la regla que rige hoy. **Editar preferencias** separa la hora de informes de la aceptación de reglas ya guardadas. Esa aceptación se marca en el formulario; Ali no la da por hecha.
+
+En **Recomendaciones de Ali**, revisa el motivo, el corte y el límite del dato guardado. **Hacer seguimiento** conserva la lectura de partida en **Mis tareas**; al retomar verás si se resolvió, sigue pendiente, cambió o todavía no se puede comparar. En **Mis preferencias** puedes elegir el área y el nivel de detalle, y restablecerlos cuando quieras. Ocultar avisos informativos no oculta alertas del negocio ni recordatorios que pediste.
+
+**Solicitud recibida** para un informe significa que el trabajo se registró: **Comprobar esta solicitud** confirma la copia y su versión cuando estén disponibles. **Borrador creado** para Publicidad acredita solo el duplicado local. **Revisar y publicar** no publica al abrir, y el historial de Heka no reenvía solicitudes inciertas.
+
+**Ahora no** cierra el acompañamiento sin eliminar las respuestas guardadas. Cancelar o eliminar una tarea no deshace un cambio comercial. Si Ali está desactivado, siguen disponibles la operación nativa y el historial personal. Consulta los [resultados de aceptación](ALI_ASESOR_OPERATIVO_EVIDENCIA.md).
 
 ## Despliegue
 
@@ -375,7 +493,7 @@ El lockfile real está incluido: no lo regeneres desde cero ni uses `npm update`
 
 `npm run test:e2e` es un subcomando, no un arranque autónomo: exige `E2E_BASE_URL` con origen **HTTPS de `localhost`**, el servidor compilado ya disponible y PostgreSQL descartable previamente migrado y sembrado con `node tests/e2e/setup.mjs`. El fixture requiere `TEST_DATABASE_URL` apuntando exactamente a `allnutrition_test` y `TEST_ALLOW_DATABASE_RESET=allnutrition_test`, más la configuración TLS `TEST_DB_*`. No arranca `next dev`, no tiene `webServer` ni fallback SQLite. `E2E_ALLOW_SELF_SIGNED=1` permite solo la CA local en el navegador; no desactiva TLS de PostgreSQL. Usa el verificador para coordinar estos pasos: nunca ejecutes reset, E2E destructivo ni pruebas de caída sobre staging persistente o producción.
 
-El escenario de generación de `tests/e2e/advertising.spec.mjs` usa un **segundo** proyecto Compose descartable `allnutrition-guided-image-*`, con la misma imagen compilada, otro origen HTTPS local, su propio `allnutrition_test` y el scheduler detenido desde el arranque. Pasa `ADVERTISING_IMAGE_E2E_URL` y `ADVERTISING_IMAGE_COMPOSE_PROJECT` al comando Playwright. El runner inyecta un transporte local en el worker real, sin interceptar rutas ni enviar solicitudes a OpenAI. La suite de Publicidad usa además `TEST_DATABASE_URL` y TLS verificado para preparar evidencia sintética de Resultados; nunca apuntes a una base persistente.
+El escenario de generación de `tests/e2e/advertising.spec.mjs` usa un proyecto Compose descartable `allnutrition-guided-image-*`, con la misma imagen compilada, otro origen HTTPS local, su propio `allnutrition_test` y el scheduler detenido desde el arranque. `verify:docker` lo crea y elimina por separado para escritorio y móvil, para que los trabajos de publicación o medición de un perfil no lleguen al otro. Pasa `ADVERTISING_IMAGE_E2E_URL` y `ADVERTISING_IMAGE_COMPOSE_PROJECT` al comando Playwright. El runner inyecta un transporte local en el worker real, sin interceptar rutas ni enviar solicitudes a OpenAI. La suite de Publicidad usa además `TEST_DATABASE_URL` y TLS verificado para preparar evidencia sintética de Resultados; nunca apuntes a una base persistente.
 
 **Doble paso de publicación orgánica, sin Meta real ni producción:** desde la raíz, usa Node 24, `npm ci`, FFmpeg/FFprobe y Chromium de Playwright según la prueba. Los contratos usan SQLite en memoria y proveedores sintéticos; ejecuta los lanzadores, no los módulos compartidos:
 
