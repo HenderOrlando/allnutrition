@@ -4975,11 +4975,16 @@ test('Ali @advisor-c6: conserva seis observaciones económicas reales de Inicio 
           await expect(groups).not.toContainText(fixture.excludedGroup);
         }
         let trigger = observation.getByRole('button', { name: 'Ver registros del período', exact: true });
-        const reportResponse = page.waitForResponse(response => matchesReport(response, fixture), { timeout: 15000 });
-        if (fixture.selected && via !== 'panel') {
-          await trigger.click();
-          await checkDetail(fixture, await reportResponse);
-        }
+        const openReport = async button => {
+          const [response] = await Promise.all([
+            page.waitForResponse(candidate => matchesReport(candidate, fixture), { timeout: 15000 }),
+            button.click({ timeout: 12000 }),
+          ]);
+          return response;
+        };
+        // These actions revisit an already-open report and may not fetch it again.
+        const currentReport = fixture.selected && via !== 'panel' ? await openReport(trigger) : null;
+        if (currentReport) await checkDetail(fixture, currentReport);
         if (via !== 'panel') {
           let launcher;
           if (via === 'chat') {
@@ -4994,8 +4999,12 @@ test('Ali @advisor-c6: conserva seis observaciones económicas reales de Inicio 
           }
           trigger = launcher.locator(`[data-capability-id="${fixture.id||`reports.view-${fixture.action}`}"]`).getByRole('button', { name: /^Abrir en el panel:/ });
         }
-        await trigger.click({ timeout: 12000 });
-        await checkDetail(fixture, await reportResponse);
+        if (currentReport) {
+          await trigger.click({ timeout: 12000 });
+          await checkDetail(fixture, currentReport);
+        } else {
+          await checkDetail(fixture, await openReport(trigger));
+        }
         if (via === 'directorio' && !fixture.id) {
           const reopened = page.waitForResponse(response => matchesReport(response, fixture));
           await page.reload();
