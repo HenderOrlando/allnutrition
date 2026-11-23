@@ -74,7 +74,7 @@ function BriefDetails({ context, baseName, onPreviewError }) {
     </details> : null}
     {(baseAsset || automaticSources.length > 0) && <div className={styles.summaryGrid}>
       {baseAsset && <div className={styles.assetPreview}>
-        <strong>{BASE_LABEL}{baseName ? `: ${baseName}` : ''}</strong>
+        <strong>{BASE_LABEL}{baseName ? `: ${baseName}` : ''} · Versión {baseAsset.version}</strong>
         <img className={styles.previewImage} src={baseAsset.previewUrl} alt={BASE_LABEL} onError={onPreviewError} />
         {baseAsset.state !== 'ready' && <p className={styles.warning}>Solo se puede conservar como referencia: el original no está listo para publicar.</p>}
       </div>}
@@ -115,7 +115,7 @@ function StudioPreview({ asset, original, onUse, onFresh, disabled, publishable 
     <div className={styles.actions}>
       {url && <button type="button" className={`button subtle ${studio.expandPreview}`} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Reducir vista previa' : 'Ampliar vista previa'}</button>}
       {asset.state === 'ready' && (original?.originalUrl || asset.originalUrl) && <button type="button" className="button subtle" aria-pressed={comparison} onClick={() => setComparison(value => !value)}>{comparison ? 'Volver al archivo preparado' : 'Comparar con el original'}</button>}
-      {asset.state === 'ready' && onUse && <button type="button" className="button primary" disabled={disabled || comparison || !reviewed || error || !publishable} onClick={() => onUse(asset)}>Usar esta pieza y continuar</button>}
+      {asset.state === 'ready' && onUse && <button type="button" className="button primary" data-advisor-control="ad-studio-use-asset" disabled={disabled || comparison || !reviewed || error || !publishable} onClick={() => onUse(asset)}>Usar esta pieza y continuar</button>}
       {onFresh && <button type="button" className="button subtle" disabled={disabled} onClick={onFresh}>Crear otra pieza sin usar este archivo</button>}
     </div>
   </div>;
@@ -145,9 +145,9 @@ function ReferenceDialog({ api, baseId, items, id, limit, onApply, onClose }) {
       <p id={`${id}-description`} className={styles.help}>Elige hasta {limit} fotos locales adicionales. Se añaden al aplicar; no se descargan enlaces externos.</p>
     </header>
     <div className={studio.dialogBody}>
-      <label className="field">Buscar fotos de referencia<input type="search" value={query} maxLength={100} onChange={event => navigate(event.target.value, 0)}/></label>
+      <label className="field">Buscar fotos de referencia<input data-advisor-control="ad-studio-search-references" type="search" value={query} maxLength={100} onChange={event => navigate(event.target.value, 0)}/></label>
       {visible.length > 0 && <ul role="list" className={studio.referenceSelection} aria-label="Selección provisional">{visible.map(item => <li key={sourceId(item)}>
-        <span>{sourceTitle(item)}</span>
+        <span>{sourceTitle(item)} · Versión {item.version}</span>
         <button type="button" className="button subtle" aria-label={`Quitar ${sourceTitle(item)}`} onClick={() => {
           dialogHeading.current?.focus({ preventScroll: true });
           setDraft(draft.filter(value => value !== item));
@@ -161,7 +161,7 @@ function ReferenceDialog({ api, baseId, items, id, limit, onApply, onClose }) {
         return <li key={sourceId(item)}><label className={studio.referenceOption}>
           <input type="checkbox" checked={sameVersion} disabled={!picked && visible.length >= limit}
             onChange={() => setDraft(sameVersion ? draft.filter(value => value !== picked) : [...draft.filter(value => value !== picked), item])}/>
-          <img src={item.thumbnailUrl} alt="" width={56} height={56} className={studio.thumbnail}/><span>{sourceTitle(item)}</span>
+          <img src={item.thumbnailUrl} alt="" width={56} height={56} className={studio.thumbnail}/><span>{sourceTitle(item)} · Versión {item.version}</span>
         </label></li>;
       })}</ul>}
       <div className={styles.actions}>
@@ -173,15 +173,23 @@ function ReferenceDialog({ api, baseId, items, id, limit, onApply, onClose }) {
       <p role="status" className={styles.help}>{visible.length} de {limit} fotos seleccionadas.</p>
       <div className={studio.dialogActions}>
         <button type="button" className="button subtle" onClick={close}>Cancelar</button>
-        <button type="button" className="button primary" disabled={visible.length > limit} onClick={() => onApply(draft)}>Aplicar referencias</button>
+        <button type="button" className="button primary" data-advisor-control="ad-studio-choose-references" disabled={visible.length > limit} onClick={() => onApply(draft)}>Aplicar referencias</button>
       </div>
     </footer>
   </dialog>;
 }
 
-function ReferencePicker({ api, baseId, items, limit, onChange }) {
-  const [open, setOpen] = useState(false), id = useId();
+function ReferencePicker({ api, baseId, items, limit, onChange, catalogFocus }) {
+  const [open, setOpen] = useState(false), trigger = useRef(null), id = useId();
   const visible = items.filter(item => isAdditionalSource(item, baseId));
+  useEffect(() => {
+    if (!catalogFocus || open) return;
+    const frame = requestAnimationFrame(() => {
+      trigger.current?.focus({ preventScroll: true });
+      setOpen(true);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [catalogFocus, open]);
   function apply(draft) {
     const unchanged = draft.length === items.length && draft.every(item => items.some(value => sourceId(value) === sourceId(item) && value.version === item.version));
     if (!unchanged) onChange(draft);
@@ -189,13 +197,13 @@ function ReferencePicker({ api, baseId, items, limit, onChange }) {
   }
   return <div className={studio.references}>
     <div className={studio.referenceAccess}>
-      <button type="button" className="button subtle" aria-haspopup="dialog" aria-controls={open ? id : undefined} aria-expanded={open} onClick={event => {
+      <button ref={trigger} type="button" className="button subtle" aria-haspopup="dialog" aria-controls={open ? id : undefined} aria-expanded={open} onClick={event => {
         event.currentTarget.focus({ preventScroll: true }); setOpen(true);
       }}>Referencias opcionales: biblioteca y productos</button>
       <p className={styles.help}>{visible.length ? `${visible.length} de ${limit} fotos añadidas de la biblioteca o de Productos` : 'Sin fotos elegidas de la biblioteca o de Productos'}</p>
     </div>
     {visible.length > 0 && <ul role="list" className={studio.appliedReferences} aria-label="Fotos seleccionadas para el envío">{visible.map(item => <li key={sourceId(item)}>
-      <img src={item.thumbnailUrl} alt="" width={48} height={48} className={studio.thumbnail}/><span>{sourceTitle(item)}</span>
+      <img src={item.thumbnailUrl} alt="" width={48} height={48} className={studio.thumbnail}/><span>{sourceTitle(item)} · Versión {item.version}</span>
     </li>)}</ul>}
     {open && <ReferenceDialog api={api} baseId={baseId} items={items} id={id} limit={limit} onApply={apply} onClose={() => setOpen(false)}/>}
   </div>;
@@ -207,7 +215,7 @@ function CreativeContextDialog({ id, busy, dirty, onClose, children }) {
   return <dialog ref={dialog} id={id} className={`${studio.referenceDialog} ${studio.contextDialog}`} aria-labelledby={`${id}-title`}>
     <header className={studio.dialogHeader}>
       <p className={studio.directoryLabel}>Mesa de trabajo de Ali</p>
-      <h3 id={`${id}-title`} tabIndex={-1} data-dialog-initial-focus>Datos y fotos para preparar imagen</h3>
+      <h3 id={`${id}-title`} tabIndex={-1} data-dialog-initial-focus data-advisor-control="ad-studio-review-inputs">Datos y fotos para preparar imagen</h3>
       <p className={styles.help}>Revisa el material del próximo turno. Abrir este panel no envía nada a OpenAI.</p>
     </header>
     <div className={studio.dialogBody}>{children}</div>
@@ -234,7 +242,8 @@ function turnReply(turn) {
 
 export default function AdvertisingGeneration({ api, campaignId = null, campaignVersion = null, threadId = null, baseAsset = null, assets = [],
   onThreadCreated, onUseAsset, onOpenCampaign, onRefreshContext, onSkip, onExit, contextDirty = false, onInteractionStateChange, onMutation,
-  active = true, instructions, onInstructionsChange, allowGeneration = true, allowPublishAsset }) {
+  active = true, instructions, onInstructionsChange, allowGeneration = true, allowPublishAsset, advisorStudioEntry = false, catalogRequest }) {
+  const skipInitialHeading = useRef(advisorStudioEntry || Boolean(catalogRequest));
   const [localPrompt, setLocalPrompt] = useState(''), prompt = instructions ?? localPrompt;
   const [format, setFormat] = useState('png'), [frames, setFrames] = useState(9), [duration, setDuration] = useState(400);
   const [thread, setThread] = useState(null), [turns, setTurns] = useState([]), [cursor, setCursor] = useState(null);
@@ -247,6 +256,7 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
   const request = useRef(null), writer = useRef(false), creation = useRef(null), creationId = useRef(null), currentThread = useRef(null), olderLoaded = useRef(false);
   const mounted = useRef(false), callbacks = useRef(null), errorRef = useRef(null), composerRef = useRef(null), studioRef = useRef(null), headingRef = useRef(null), previewHeading = useRef(null), id = useId();
   const transcriptRef = useRef(null), chatHeadingRef = useRef(null);
+  const contextTrigger = useRef(null);
   callbacks.current = { onThreadCreated, onInteractionStateChange };
   const activeThreadId = threadId || thread?.id;
   const linked = thread?.campaignId && thread.campaignId !== campaignId ? thread.campaignId : null;
@@ -257,9 +267,11 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
   const focusedAsset = focused === false ? null : variants.get(focused || thread?.selectedAsset?.id || baseAsset?.id || [...variants.keys()].findLast(key => !Object.hasOwn(referenceSelection, key))) ?? null;
   const base = editable(focusedAsset) ? focusedAsset : null, baseId = base?.id ?? null;
   const original = variants.get(turns.find(turn => turn.asset?.id === focusedAsset?.id)?.baseAssetId);
-  const pending = turns.some(isPending) || thread?.attachments?.some(pendingAsset);
+  const hasProgress = Boolean(turns.length || thread?.attachments?.length);
   const latestTurn = turns[0];
   const scopeReady = !loading && !readError && !linked;
+  const catalogFocus = catalogRequest?.focus;
+  const catalogReferences = !campaignId && ['ad-studio-search-references', 'ad-studio-choose-references'].includes(catalogFocus) ? catalogRequest.id : null;
   const briefKey = JSON.stringify([campaignId, campaignVersion, baseId, base?.version, briefRefresh]);
   const context = review?.key === briefKey ? review.data : null;
   const briefMatches = context?.campaignId === campaignId && context?.campaignVersion === campaignVersion &&
@@ -300,6 +312,10 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
   }, [active, latestTurn?.id]);
   useEffect(() => {
     if (!active) return;
+    if (skipInitialHeading.current) {
+      skipInitialHeading.current = false;
+      return;
+    }
     // Let the enclosing workspace finish the route's focus handoff first.
     const frame = requestAnimationFrame(() => {
       headingRef.current?.focus({ preventScroll: true });
@@ -307,6 +323,11 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
     });
     return () => cancelAnimationFrame(frame);
   }, [active]);
+  useEffect(() => {
+    if (!active || !allowGeneration || !scopeReady || locked || !(catalogReferences || catalogFocus === 'ad-studio-review-inputs')) return;
+    contextTrigger.current?.focus({ preventScroll: true });
+    setContextOpen(mode => mode || 'review');
+  }, [active, allowGeneration, catalogFocus, catalogReferences, locked, scopeReady]);
   useEffect(() => {
     if (!active || !window.visualViewport) return;
     const viewport = window.visualViewport, studio = studioRef.current;
@@ -458,15 +479,18 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
   }
   return <section ref={studioRef} className={studio.root} hidden={!active} aria-label="Estudio visual" aria-busy={loading}>
     {active && contextOpen && <CreativeContextDialog id={`${id}-context`} busy={locked} dirty={Boolean(uploadState?.dirty)} onClose={() => setContextOpen(null)}>
+      <p className={availability?.available ? styles.help : styles.warning}>
+        {availability?.available ? 'Servicio de imágenes de OpenAI disponible.' : availability?.reason || 'Comprobando disponibilidad de imágenes…'}
+      </p>
       <section className={studio.contextCard} aria-label="Fotos para este turno">
         <div className={studio.contextTitle}><h4>Fotos para este turno</h4>{!campaignId && <span>{selectedSources.length} {selectedSources.length === 1 ? 'adicional' : 'adicionales'}</span>}</div>
         {!campaignId && attachedPhotos.length > 0 && <ul role="list" className={studio.appliedReferences} aria-label="Fotos adjuntas en el chat">{attachedPhotos.map(asset => <li key={asset.id} className={studio.uploadedReference}>
           {asset.previewUrl && <img className={studio.thumbnail} src={asset.previewUrl} alt="" width={56} height={56} />}
-          <div><strong>{asset.name}</strong><p>{!referenceSelection[asset.id] ? 'No se enviará' : asset.state === 'ready' ? 'Referencia para el próximo envío' : pendingAsset(asset) ? 'Preparando referencia…' : 'No se puede enviar. Quita esta foto o adjunta otra.'}</p></div>
+          <div><strong>{asset.name} · Versión {asset.version}</strong><p>{!referenceSelection[asset.id] ? 'No se enviará' : asset.state === 'ready' ? 'Referencia para el próximo envío' : pendingAsset(asset) ? 'Preparando referencia…' : 'No se puede enviar. Quita esta foto o adjunta otra.'}</p></div>
           <button type="button" className="button subtle" aria-label={`${referenceSelection[asset.id] ? 'Quitar' : 'Incluir'} ${asset.name}`} disabled={locked || !referenceSelection[asset.id] && (asset.state !== 'ready' || selectedSources.length >= referenceLimit)}
             onClick={() => change(setReferenceSelection, { ...referenceSelection, [asset.id]: !referenceSelection[asset.id] })}>{referenceSelection[asset.id] ? 'Quitar' : 'Incluir'}</button>
         </li>)}</ul>}
-        {!campaignId && <ReferencePicker api={api} baseId={baseId} items={pickedSources} limit={Math.max(0, referenceLimit - uploadedReferences.length)} onChange={value => change(setSources, value)}/>}
+        {!campaignId && <ReferencePicker api={api} baseId={baseId} items={pickedSources} limit={Math.max(0, referenceLimit - uploadedReferences.length)} onChange={value => change(setSources, value)} catalogFocus={catalogReferences}/>}
         <p className={styles.help}>{campaignId ? 'En este borrador se incluyen las fotos de la oferta y la imagen a modificar. Una carga nueva cambia la imagen a modificar.' : 'Adjunta una foto para orientar el resultado sin sustituir la imagen a modificar. Solo se envía al autorizar el turno.'}</p>
         {contextOpen === 'upload' ? <AdvertisingAssetUpload api={api} onBeforeUpload={ensureThread} onAssetReserved={asset => reserveAttachment(asset, !campaignId)}
           onAsset={completeContextUpload} onMutation={onMutation} onInteractionStateChange={setUploadState} accept="image/jpeg,image/png,image/webp"
@@ -476,25 +500,25 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
       {brief || <p className={styles.help}>{contextDirty ? 'Guarda el borrador para actualizar los datos de la pieza.' : 'Los datos verificados se mostrarán cuando estén disponibles.'}</p>}
     </CreativeContextDialog>}
     <header className={styles.heading}>
-      <div><p className={styles.eyebrow}>Preparar la imagen o video</p><h2 ref={headingRef} tabIndex={-1}>Estudio visual</h2></div>
+      <div><p className={styles.eyebrow}>Preparar la imagen o video</p><h2 ref={headingRef} tabIndex={-1} data-advisor-control="Estudio visual">Estudio visual</h2></div>
       {onExit && <button type="button" className="text-button" disabled={locked} onClick={onExit}>Volver a publicaciones</button>}
     </header>
     {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}
-    {readError && <div role="alert" className={styles.error}><p>{readError}</p><button type="button" className="button subtle" onClick={refreshAll}>Volver a cargar el estudio</button></div>}
+    {readError && <div role="alert" className={styles.error}><p>{readError}</p><button type="button" className="button subtle" data-advisor-control={hasProgress ? 'ad-studio-progress' : undefined} onClick={refreshAll}>Volver a cargar el estudio</button></div>}
     {linked ? <div className={styles.notice}><p>Esta pieza ya tiene un borrador.</p><button type="button" className="button primary" onClick={() => onOpenCampaign?.(linked)}>Continuar borrador</button></div> : <>
       <section className={studio.fileAccess} aria-label="Añadir una pieza">
         <div className={studio.fileBar}>
           <h3>Usar un archivo que ya tienes</h3>
           <div className={studio.fileActions}>
-            <button type="button" className="button subtle" disabled={locked || !scopeReady} aria-expanded={choice === 'upload'} aria-controls={choice === 'upload' ? `${id}-file-options` : undefined} onClick={() => setChoice(value => value === 'upload' ? null : 'upload')}>Adjuntar foto o video</button>
-            <button type="button" className="button subtle" disabled={locked || !scopeReady} aria-expanded={choice === 'library'} aria-controls={choice === 'library' ? `${id}-file-options` : undefined} onClick={() => setChoice(value => value === 'library' ? null : 'library')}>Elegir de biblioteca</button>
-            {onSkip && <button type="button" className="text-button" disabled={locked || !scopeReady} onClick={onSkip}>Definir primero, sin imagen aún</button>}
+            <button type="button" className="button subtle" data-advisor-control="ad-studio-upload" disabled={locked || !scopeReady} aria-expanded={choice === 'upload'} aria-controls={choice === 'upload' ? `${id}-file-options` : undefined} onClick={() => setChoice(value => value === 'upload' ? null : 'upload')}>Adjuntar foto o video</button>
+            <button type="button" className="button subtle" data-advisor-control={choice==='library'?undefined:'ad-studio-choose-library'} disabled={locked || !scopeReady} aria-expanded={choice === 'library'} aria-controls={choice === 'library' ? `${id}-file-options` : undefined} onClick={() => setChoice(value => value === 'library' ? null : 'library')}>Elegir de biblioteca</button>
+            {onSkip && <button type="button" className="text-button" data-advisor-control="ad-campaign-skip" disabled={locked || !scopeReady} onClick={onSkip}>Definir primero, sin imagen aún</button>}
           </div>
         </div>
         {choice && <div id={`${id}-file-options`} className={studio.fileOptions}>
           {choice === 'upload' ? <AdvertisingAssetUpload api={api} onBeforeUpload={ensureThread} onAssetReserved={asset => reserveAttachment(asset)} onAsset={updateUpload}
             onMutation={onMutation} onInteractionStateChange={setUploadState} disabled={busy || !scopeReady}/>
-            : <label className="field">Archivo de biblioteca<select value="" disabled={locked || !scopeReady} onChange={event => {
+            : <label className="field">Archivo de biblioteca<select data-advisor-control="ad-studio-choose-library" value="" disabled={locked || !scopeReady} onChange={event => {
               const asset = library.find(item => item.id === event.target.value);
               if (asset) void attach('attach', asset);
             }}><option value="">Selecciona una imagen o video</option>{library.map(asset => <option key={asset.id} value={asset.id}>{asset.name} · {asset.kind === 'video' ? 'Video' : 'Imagen'}{asset.state !== 'ready' ? ' · Solo para ajustar' : ''}</option>)}</select></label>}
@@ -523,7 +547,7 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
             </li>)}</ol>}
             <span className={styles.visuallyHidden} role="status">{latestTurn ? `Último turno: ${jobStatus(latestTurn)}` : ''}</span>
             {notice && <p className={styles.notice} role="status">{notice}</p>}
-            {pending && <button type="button" className="button subtle" onClick={refreshAll}>Actualizar progreso</button>}
+            {hasProgress && !readError && <button type="button" className="button subtle" data-advisor-control="ad-studio-progress" onClick={refreshAll}>Actualizar progreso</button>}
           </div>
           {allowGeneration && <section className={studio.composer} aria-label="Compositor">
             <h4 className={studio.directoryLabel}>{base ? 'Siguiente ajuste' : 'Nueva idea'}</h4>
@@ -538,7 +562,7 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
               <legend className={styles.visuallyHidden}>{base ? 'Indica qué quieres cambiar' : 'Cuéntanos qué quieres ver'}</legend>
               <div className={studio.composerFields}>
                 <label htmlFor={`${id}-prompt`} className={studio.promptLabel}>Escríbele a Ali</label>
-                <textarea className={studio.prompt} id={`${id}-prompt`} ref={composerRef} rows={3} maxLength={4000} value={prompt} placeholder={base ? '¿Qué quieres ajustar?' : 'Describe cómo imaginas la pieza…'} aria-describedby={`${id}-consent`} onChange={event => setPrompt(event.target.value)}
+                <textarea className={studio.prompt} id={`${id}-prompt`} ref={composerRef} data-advisor-control="ad-studio-prepare-creative" rows={3} maxLength={4000} value={prompt} placeholder={base ? '¿Qué quieres ajustar?' : 'Describe cómo imaginas la pieza…'} aria-describedby={`${id}-consent`} onChange={event => setPrompt(event.target.value)}
                   onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && checked) { event.preventDefault(); void submit(); } }}/>
                 <div className={studio.examples} role="group" aria-label="Ejemplos de indicaciones">{(base ? EXAMPLES.slice(-1) : EXAMPLES.slice(0, 2)).map(example => <button type="button" className="button subtle" key={example} onClick={() => {
                   setPrompt(example); composerRef.current?.focus();
@@ -552,17 +576,17 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
                   </div>}
                 </details>}
                 <div className={studio.contextActions}>
-                  <button type="button" className="button subtle" aria-haspopup="dialog" aria-controls={contextOpen ? `${id}-context` : undefined} onClick={event => openContext(event, 'review')}>Datos y fotos para preparar imagen</button>
+                  <button ref={contextTrigger} type="button" className="button subtle" aria-haspopup="dialog" aria-controls={contextOpen ? `${id}-context` : undefined} onClick={event => openContext(event, 'review')}>Datos y fotos para preparar imagen</button>
                   <button type="button" className="button subtle" aria-haspopup="dialog" disabled={!canAttachPhoto} onClick={event => openContext(event, 'upload')}>Adjuntar foto</button>
                   {selectedSources.length > 0 && <p role="status">{selectedSources.length} {selectedSources.length === 1 ? 'foto adicional' : 'fotos adicionales'}{!referencesReady && ' · Falta preparar una referencia'}</p>}
                 </div>
-                <label id={`${id}-consent`} className={styles.checkRow}><input type="checkbox" disabled={!canConsent} checked={checked} onChange={event => setConsent(event.target.checked ? payloadKey : null)}/>
+                <label id={`${id}-consent`} className={styles.checkRow}><input type="checkbox" data-advisor-control={base ? 'ad-studio-consent-adjust' : 'ad-studio-consent-new'} disabled={!canConsent} checked={checked} onChange={event => setConsent(event.target.checked ? payloadKey : null)}/>
                   <span>Autorizo el envío a <strong>OpenAI</strong> de mis indicaciones, los datos y las fotos mostradas, con un posible cargo variable sin tope garantizado. No contienen datos de clientes ni información personal. Revisaré el resultado y los derechos. Nada se publica automáticamente.</span>
                 </label>
                 {!checked && <p className={styles.help}>{!prompt.trim() ? 'Escribe una idea o usa un ejemplo para empezar.' : !validFormat ? 'Corrige la duración y los fotogramas en Opciones de formato.' : canConsent ? 'Revisa lo que se enviará antes de marcar la autorización.' : 'Aún no se puede autorizar. Revisa los datos y los avisos de esta imagen.'}</p>}
                 <button type="button" className="button primary" disabled={!checked || locked} onClick={submit}>{busy ? 'Registrando turno…' : base ? 'Enviar ajuste' : 'Enviar idea'}</button>
               </div>
-            </fieldset> : <button type="button" className="button subtle" aria-haspopup="dialog" onClick={event => openContext(event, 'review')}>Datos y fotos para preparar imagen</button>}
+            </fieldset> : <button ref={contextTrigger} type="button" className="button subtle" aria-haspopup="dialog" onClick={event => openContext(event, 'review')}>Datos y fotos para preparar imagen</button>}
           </section>}
         </section>
         <section className={`${studio.preview} ${styles.card} ${styles.stack}`} aria-labelledby={`${id}-preview`}>
@@ -571,7 +595,7 @@ export default function AdvertisingGeneration({ api, campaignId = null, campaign
           <StudioPreview key={`${focusedAsset?.id}:${focusedAsset?.version}`} asset={focusedAsset} original={original} disabled={locked || !scopeReady}
             onUse={onUseAsset && (asset => void attach('select', asset))} publishable={!allowPublishAsset || Boolean(focusedAsset && allowPublishAsset(focusedAsset))}
             onFresh={allowGeneration && focusedAsset ? () => { inspect(false); (composerRef.current || chatHeadingRef.current)?.focus(); } : null}/>
-          {pieceVariants.length > 0 && <details className={styles.technicalDetails} open={pieceVariants.length < 4}><summary>Original y variantes ({pieceVariants.length})</summary>
+          {pieceVariants.length > 0 && <details className={styles.technicalDetails} open={pieceVariants.length < 4}><summary data-advisor-control="ad-studio-review-assets">Original y variantes ({pieceVariants.length})</summary>
             <ul className={styles.choiceList}>{pieceVariants.map((asset, index) => <li key={asset.id}>
               <button type="button" className="button subtle" aria-pressed={focusedAsset?.id === asset.id} disabled={locked} onClick={() => inspect(asset.id, true)}>
                 {index === 0 ? 'Original' : `Variante ${index}`} · {asset.name}{asset.state !== 'ready' && editable(asset) ? ' · Solo para ajustar' : ''}

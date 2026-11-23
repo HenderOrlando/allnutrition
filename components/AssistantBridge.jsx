@@ -3,10 +3,165 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { filterAssistantPatch, serializeAssistantDraft, serializeAssistantHumanAcknowledgements, validateAssistantSubmission, formatAssistantChangeValue } from '../lib/assistant/forms.mjs';
 import { validateAssistantReceipt } from '../lib/assistant/contracts.mjs';
-import { adminHref } from '../lib/admin-view.mjs';
+import { adminHref, readAdminView } from '../lib/admin-view.mjs';
 import { validateAssistantSelection } from '../lib/assistant/context.mjs';
 
 const BridgeContext = createContext(null);
+const advisorTabs = new Map([
+  ['order-search','list'], ['order-create','list'], ['order-compare','list'],
+  ['order-shipment-create','list'], ['shipment-link-order','shipments'],
+  ['shipment-event','shipments'], ['shipment-detail','shipments'],
+]);
+const shipmentCatalogFocus=new Map([
+  ['shipments.update-metadata','shipment-metadata'],
+  ['shipments.correct-notes','shipment-notes-correction'],
+  ['shipments.find-order-to-link','shipment-order-lookup'],
+  ['shipments.link-orphan','shipment-link-order'],
+]);
+export function isShipmentCatalogTarget(capabilityId) { return shipmentCatalogFocus.has(capabilityId); }
+const advisorText = (value,max) => typeof value==='string' && value.length<=max
+  && !/[\u0000-\u001f\u007f]/.test(value) ? value.trim() : '';
+const advisorId = value => {
+  const id=advisorText(value,100);
+  return id===value && id!=='new' && id!=='.' && id!=='..' ? id : '';
+};
+const advisorVersion = value => Number.isSafeInteger(value) && value>=1;
+const cashClosingFocuses = new Set(['cash-close-account','cash-close-form','cash-close-proof']);
+const importFocuses = new Set(['import-row','import-review','import-pending','import-result']);
+const advisorCivilDate = value => typeof value==='string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+const advisorMoney = value => Number.isSafeInteger(value);
+
+function advisorCashTarget({capabilityId,view,focus,selection}) {
+  if(!cashClosingFocuses.has(focus)||view?.section!=='cash'||view.tab!=='overview')return null;
+  const route={section:'cash',tab:'overview'};
+  if(focus==='cash-close-account'&&selection==null){
+    return view.account==null&&view.record==null?{capabilityId,view:route,focus,selection:null}:null;
+  }
+  const {kind,id:rawId,version}=selection??{},id=advisorId(rawId);
+  if(!id||view.record!==id||!advisorVersion(version))return null;
+  const canonical={kind,id,version};
+  if(focus==='cash-close-proof'){
+    const accountId=advisorId(selection.accountId);
+    if(kind!=='cash-closing'||!accountId||view.account!==accountId||!advisorCivilDate(selection.closingOn))return null;
+    Object.assign(canonical,{accountId,closingOn:selection.closingOn});
+    route.account=accountId;
+  }else{
+    if(kind!=='cash-account'||view.account!==id)return null;
+    route.account=id;
+    if(focus==='cash-close-form'){
+      const {closingOn,countedMinor,expectedMinor,reviewKey}=selection;
+      if(!advisorCivilDate(closingOn)||!advisorMoney(countedMinor)||countedMinor<0||!advisorMoney(expectedMinor)
+        ||typeof reviewKey!=='string'||!(/^[0-9a-f]{64}$/).test(reviewKey))return null;
+      Object.assign(canonical,{closingOn,countedMinor,expectedMinor,reviewKey});
+    }
+  }
+  route.record=id;
+  const checked=readAdminView(route);
+  return checked.account===route.account&&checked.record===id?{capabilityId,view:route,focus,selection:canonical}:null;
+}
+
+function advisorImportTarget({capabilityId,view,focus,selection}) {
+  if(!importFocuses.has(focus)||view?.section!=='orders'||view.tab!=='imports'||selection?.kind!=='import')return null;
+  const {batchId,version,previewHash,revision,sheet,rowNumber}=selection;
+  if(!advisorId(batchId)||view.batch!==batchId||!advisorVersion(version))return null;
+  const route={section:'orders',tab:'imports',batch:batchId};
+  if(readAdminView(route).batch!==batchId)return null;
+  const canonical={kind:'import',batchId,version};
+  if(previewHash!=null){
+    if(typeof previewHash!=='string'||!(/^[0-9a-f]{64}$/).test(previewHash))return null;
+    canonical.previewHash=previewHash;
+  }
+  if(revision!=null){
+    if(!advisorVersion(revision))return null;
+    canonical.revision=revision;
+  }
+  if(focus==='import-row'){
+    if(typeof sheet!=='string'||!sheet||sheet.length>31||/[\u0000-\u001f\u007f]/.test(sheet)
+      ||!Number.isSafeInteger(rowNumber)||rowNumber<1||rowNumber>10001||!canonical.previewHash)return null;
+    Object.assign(canonical,{sheet,rowNumber});
+  }else if(sheet!=null||rowNumber!=null)return null;
+  return {capabilityId,view:route,focus,selection:canonical};
+}
+
+function advisorLocalTarget({capabilityId,view,focus,selection}) {
+  const route=readAdminView(view);
+  if(!view||Object.entries(view).some(([key,value])=>route[key]!==value))return null;
+  if(capabilityId==='advisor.recommendations'){
+    if(focus!=null||selection!=null)return null;
+    const source=route.section==='business'&&route.tab==='alerts'&&route.record&&route.status==='all'
+      ||route.section==='orders'&&route.tab==='imports'&&route.batch&&route.batch!=='new'
+      ||route.section==='reports'&&route.record&&route.period&&route.anchor
+      ||route.section==='advertising'&&route.tab==='results'&&route.record&&route.resultsFocus==='recommendations';
+    return source?{capabilityId,view:route,focus:null,selection:null}:null;
+  }
+  if(capabilityId==='heka.read-journal'){
+    return route.section==='orders'&&route.tab==='heka'&&focus==='heka-operation-journal'&&selection==null
+      ?{capabilityId,view:route,focus,selection:null}:null;
+  }
+  if(capabilityId==='reports.request-copy'){
+    return route.section==='reports'&&route.mode!=='saved'&&!route.record&&!route.issue&&focus==='report-request-copy'&&selection==null
+      ?{capabilityId,view:route,focus,selection:null}:null;
+  }
+  if(capabilityId==='reports.check-copy-status'){
+    return route.section==='reports'&&route.mode==='saved'&&!route.record&&focus==='report-copy-job-status'&&selection==null
+      ?{capabilityId,view:route,focus,selection:null}:null;
+  }
+  if(capabilityId==='reports.export-live'){
+    return route.section==='reports'&&route.mode!=='saved'&&!route.record&&focus==='report-download-excel'&&selection==null
+      ?{capabilityId,view:route,focus,selection:null}:null;
+  }
+  if(capabilityId==='reports.export-snapshot'){
+    return route.section==='reports'&&route.mode==='saved'&&advisorId(route.record)&&focus==='report-download-excel'
+      &&selection?.kind==='report'&&selection.snapshotId===route.record&&selection.metric==null&&selection.issue==null
+      ?{capabilityId,view:route,focus,selection:{kind:'report',snapshotId:route.record,metric:null,issue:null}}:null;
+  }
+  const expected=capabilityId==='advertising.duplicate-campaign'?'campaign-duplicate'
+    :capabilityId==='advertising.publish-organic-now'?'campaign-publish':null;
+  if(!expected||focus!==expected||route.section!=='advertising'||route.tab!=='campaigns'||route.source==='meta')return null;
+  if(!route.record&&selection==null)return {capabilityId,view:route,focus,selection:null};
+  if(selection?.kind!=='campaign'||!advisorId(selection.id)||selection.id!==route.record||!advisorVersion(selection.version))return null;
+  return {capabilityId,view:route,focus,selection:{kind:'campaign',id:selection.id,version:selection.version}};
+}
+
+export function validateAdvisorTarget(target) {
+  const {capabilityId,view,focus,selection}=target ?? {};
+  if(capabilityId==='cash.close-day')return advisorCashTarget(target);
+  if(capabilityId==='imports.resolve-issues')return advisorImportTarget(target);
+  if(shipmentCatalogFocus.has(capabilityId)){
+    const id=advisorId(selection?.id),version=selection?.version;
+    if(focus!==shipmentCatalogFocus.get(capabilityId)||view?.section!=='orders'||view.tab!=='shipments'||view.record!==id||!id
+      ||selection?.kind!=='shipment'||!advisorVersion(version)||selection.orderId!=null||selection.orderVersion!=null)return null;
+    return {capabilityId,view:readAdminView(view),focus,selection:{kind:'shipment',id,version}};
+  }
+  if(capabilityId!=='orders.ship-order')return advisorLocalTarget(target??{});
+  const tab=advisorTabs.get(focus);
+  if(!tab||view?.section!=='orders'||view.tab!==tab)return null;
+  const route={section:'orders',tab};
+  if(focus==='order-search'||focus==='order-create'){
+    if(selection!=null||(focus==='order-search'?view.record!=null:view.record!=='new'))return null;
+    if(focus==='order-create')route.record='new';
+    return {capabilityId,view:route,focus,selection:null};
+  }
+  const kind=tab==='list'?'order':'shipment';
+  const id=advisorId(selection?.id),version=selection?.version;
+  if(selection?.kind!==kind||!id||view.record!==id||!advisorVersion(version))return null;
+  route.record=id;
+  const canonical={kind,id,version};
+  if(focus==='order-shipment-create'){
+    for(const field of ['carrier','tracking']){
+      if(selection[field]==null)continue;
+      const value=advisorText(selection[field],200);
+      if(!value)return null;
+      canonical[field]=value;
+    }
+  }else if(focus==='shipment-link-order'){
+    const orderId=advisorId(selection.orderId),orderVersion=selection.orderVersion;
+    if(!orderId||!advisorVersion(orderVersion))return null;
+    Object.assign(canonical,{orderId,orderVersion});
+  }
+  return {capabilityId,view:route,focus,selection:canonical};
+}
+
 const cleanIdentity = value => value == null ? null : String(value);
 const cloneSnapshot = snapshot => snapshot ? { ...snapshot, values: structuredClone(snapshot.values) } : null;
 const sameRecord = (left, right) => Boolean(left && right && left.formId === right.formId && left.target === right.target
@@ -545,6 +700,8 @@ export function useAssistantForm({ target, entityId = null, recordVersion = null
   return {
     formId, generation:generation.current, openAssistant, bindProposal, applyProposal, cancelAssisted,
     get assistantBusy(){return Boolean((entry.locked && !entry.applyingPatch) || bridge.getAutomaticLock(entry.renderSnapshot.target,entry.renderSnapshot.entityId));},
+    nativeProposalSave: Boolean(entry.assistedProposal && entry.assistedProposal.execution !== 'human-only'
+      && sameRecord(entry.assistedProposal,currentSnapshot) && sameSnapshot(entry.assistedBinding,currentSnapshot)),
     submitAssisted,
   };
 }

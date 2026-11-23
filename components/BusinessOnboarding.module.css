@@ -197,6 +197,10 @@
   margin-top: 0;
 }
 
+.trial > :global(.field) {
+  margin-block: 20px;
+}
+
 .records {
   list-style: none;
   padding: 0;
@@ -237,6 +241,7 @@
   }
 
   .fields > :global(.button),
+  .trial > :global(.button),
   .card > :global(.button) {
     width: 100%;
   }

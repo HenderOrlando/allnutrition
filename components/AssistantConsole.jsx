@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { validateAssistantSettings, validateProposalDTO, validateTurnResult, validateAssistantTurnStatus, validateAssistantReadPage } from '../lib/assistant/contracts.mjs';
+import { validateAssistantSettings, validateProposalDTO, validateTurnResult, validateAssistantTurnStatus, validateAssistantReadPage, validateAssistantReceipt } from '../lib/assistant/contracts.mjs';
 import { assistantFieldLabel, formatAssistantChangeValue } from '../lib/assistant/forms.mjs';
 import { useAssistantBridge } from './AssistantBridge.jsx';
+import { AdvisorActionCard } from './AdvisorDirectory.jsx';
 import { adminLocationLabel } from './admin-tasks.mjs';
 import { adminHref, readAdminView } from '../lib/admin-view.mjs';
 import useDialog from './useDialog.js';
@@ -17,6 +18,17 @@ const quickStarts=[
   {label:'Recomendar próximos pasos',message:'Con lo que sabes de este negocio, ¿qué debería revisar o hacer después?'},
   {label:'Explicar esta sección',message:'Explícame qué puedo hacer aquí y cómo empezar.'},
 ];
+const resultControls=new Map([
+  ['assistant.read-records','registros consultados'],['assistant.sources','fuentes'],
+  ['assistant.proposal-review','detalle de la propuesta'],['assistant.proposal-form','formulario de la propuesta'],
+  ['assistant.proposal-apply','valores de la propuesta'],['assistant.proposal-rebase','revisión de la propuesta'],
+  ['assistant.proposal-confirm','confirmación de la propuesta'],['assistant.proposal-cancel','cancelación de la propuesta'],
+  ['assistant.receipt','comprobante guardado'],['assistant.thread-follow-up','objetivo y siguientes pasos'],
+  ['assistant.answer-question','respuesta pendiente'],['assistant.extend-analysis','ampliación del análisis'],['assistant.context-destination','destino contextual'],
+  ['assistant.continue-running','continuación del turno'],['assistant.stop-analysis','detención del turno'],
+]);
+const activeWorkControls=new Set(['assistant.continue-running','assistant.stop-analysis']);
+const consoleControls=['assistant.open-console','assistant.suggested-message','assistant.ask','assistant.literal-draft'];
 const topicLabels={catalog:'Catálogo',orders:'Pedidos',shipments:'Envíos',cash:'Caja',reports:'Informes',recommendations:'Recomendaciones',business:'Configuración',alerts:'Alertas',imports:'Importaciones',advertising:'Publicidad',access:'Accesos',application:'Uso de la aplicación'};
 const rows = value => Array.isArray(value) ? value : Array.isArray(value?.records) ? value.records : Array.isArray(value?.threads) ? value.threads : [];
 const displayValue = value => value == null ? 'Sin dato' : typeof value === 'object' ? JSON.stringify(value) : String(value);
@@ -24,6 +36,12 @@ const bindingFor = form => form ? ({ formId:form.formId,target:form.target,entit
 const historyCursor = value => value?.pagination?.before ?? value?.pagination?.nextBefore ?? value?.nextBefore ?? null;
 const historyMore = value => Boolean(value?.pagination?.hasMore ?? value?.hasMore);
 const proposalPending = proposal => ['prepared','applied'].includes(proposal?.state);
+const advisorCommands = {
+  'campaign-duplicate': { title:'Duplicar como borrador', confirm:'Confirmar duplicación', prompt:'¿Crear el borrador a partir de la campaña revisada?', review:'Revisa el origen y su versión. Se creará un borrador sin publicar ni activar gasto.' },
+  'report-snapshot': { title:'Solicitar copia del informe', confirm:'Confirmar solicitud', prompt:'¿Solicitar la copia con el período y los filtros revisados?', review:'Confirma la consulta que se enviará. Recibir la solicitud aún no significa que la copia esté lista.' },
+};
+const isCopyRequest = receipt => receipt.operation==='request-copy';
+const duplicateSourceBlocked = (proposal,form) => proposal.target==='campaign-duplicate'&&form.target==='campaign-draft'&&form.entityId===proposal.entityId&&(form.dirty||form.busy);
 function internalView(href) {
   if (typeof href!=='string' || href.split('?',1)[0]!=='/admin' || /[#\\\u0000-\u0020\u007f]/.test(href)) return null;
   const params=new URLSearchParams(href.includes('?')?href.slice(href.indexOf('?')+1):'');
@@ -47,12 +65,14 @@ function publicTurns(value) {
   });
 }
 
-export default function AssistantConsole({ api, view, onNavigate, brandName, open = false, onClose = () => {} }) {
+export default function AssistantConsole({ api, view, onNavigate, onReminderRequest, advisorReady, onAdvisorTaskRequest, onAdvisorAction, onAdvisorDirectory, onAdvisorTasks, onAdvisorPreferences, advisorTaskId, onClearAdvisorTask, brandName, open = false, catalogConsoleRequest, onClose = () => {} }) {
   const bridge=useAssistantBridge();
   const [settings,setSettings]=useState(null), [threads,setThreads]=useState([]), [thread,setThread]=useState(null);
   const [messages,setMessages]=useState([]), [message,setMessage]=useState(''), [answerText,setAnswerText]=useState(''), [answerOption,setAnswerOption]=useState('');
   const [loading,setLoading]=useState(false), [sending,setSending]=useState(false), [error,setError]=useState('');
+  const [openingAction,setOpeningAction]=useState(false);
   const [historyPage,setHistoryPage]=useState(1), [historyHasMore,setHistoryHasMore]=useState(false);
+  const [historyLoading,setHistoryLoading]=useState(false);
   const [turnsBefore,setTurnsBefore]=useState(null), [turnsHasMore,setTurnsHasMore]=useState(false);
   const [notice,setNotice]=useState('');
   const [work,setWork]=useState(null),[stopping,setStopping]=useState(false),[readPage,setReadPage]=useState(null),[reading,setReading]=useState(false);
@@ -60,11 +80,18 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
   openRef.current=open;
   const seenReceipts=useRef(new Set()), automaticAttempts=useRef(new Set()), executeAttempts=useRef(new Map()), rebaseAttempts=useRef(new Map());
   const historyRequest=useRef(0), preserveScroll=useRef(null);
+  const historyHeading=useRef(null),newConversationButton=useRef(null),deleteConversationButton=useRef(null),handledConsoleRequest=useRef(null);
+  const consoleHeading=useRef(null),ideasGroup=useRef(null);
+  const [controlFocus,setControlFocus]=useState(null),[ideasOpen,setIdeasOpen]=useState(false);
   const messageRef=useRef(null), listRef=useRef(null), dialogRef=useRef(null), requestRef=useRef(null), requestController=useRef(null), mounted=useRef(false);
   useDialog(dialogRef,{open,busy:false,dirty:false,onClose});
+  const actionBusy=openingAction||sending||work?.state==='running';
   const activeForm=bridge.getActiveForm();
+  const literalDraftAvailable=Boolean(activeForm?.entityId&&!activeForm.dirty&&!activeForm.busy&&(activeForm.target.startsWith('record:')||activeForm.target==='campaign-draft'));
   const selectedThreadId=thread?.thread?.id || thread?.id || null;
   const pendingOpen=bridge.pendingOpen;
+  const contextualForm=pendingOpen?.formId?bridge.getForm(pendingOpen.formId):null;
+  const canReturnToForm=Boolean(contextualForm&&contextualForm.target===pendingOpen.target&&contextualForm.entityId===pendingOpen.entityId&&contextualForm.recordVersion===pendingOpen.recordVersion);
   const threadData=thread?.thread?.data || thread?.data || {};
   const pendingQuestion=threadData.pendingQuestion || thread?.question || null;
   const workMemory=threadData.workMemory||{},followUps=Array.isArray(workMemory.followUps)?workMemory.followUps:[];
@@ -85,8 +112,9 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
   useEffect(()=>()=>{pumpEpoch.current+=1;requestController.current?.abort();},[]);
   useEffect(()=>{
     if(!open)return;
-    let live=true;setLoading(true);setError('');
-    Promise.all([loadSettings(),loadThreads()]).catch(cause=>{if(live)setError(cause.message || 'No se pudo cargar Ali.');}).finally(()=>{if(live)setLoading(false);});
+    let live=true;setLoading(true);setHistoryLoading(true);setError('');
+    void loadSettings().catch(cause=>{if(live)setError(cause.message || 'No se pudo cargar Ali.');}).finally(()=>{if(live)setLoading(false);});
+    void loadThreads().catch(cause=>{if(live)setError(cause.message || 'No se pudo cargar el historial de Ali.');}).finally(()=>{if(live)setHistoryLoading(false);});
     return()=>{live=false;};
   },[open,loadSettings,loadThreads]);
   useEffect(()=>{
@@ -96,7 +124,7 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
     return()=>window.removeEventListener('focus',refreshOnFocus);
   },[open,loadSettings,loadThreads]);
   useEffect(()=>{
-    if (!open || loading) return;
+    if (!open || loading || document.activeElement === messageRef.current) return;
     const question=listRef.current?.querySelector('[data-assistant-question]');
     (question?.querySelector('input:not(:disabled),button:not(:disabled)') || messageRef.current)?.focus({preventScroll:true});
   },[open,loading,pendingQuestion?.id,settings?.enabled]);
@@ -120,7 +148,7 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
       const response=fresh.find(item=>item.receipt.proposalId===row.result?.proposal?.id);
       return response?{...row,result:{...row.result,receipt:response.receipt,proposal:{...row.result.proposal,state:'executed'}}}:row;
     }));
-    setNotice('Cambio guardado. El comprobante está disponible en la conversación.');
+    setNotice(isCopyRequest(fresh.at(-1).receipt)?'Solicitud recibida. Consulta su estado antes de dar la copia por lista.':'Cambio guardado. El comprobante está disponible en la conversación.');
     if(selectedThreadId) void api(`/api/admin/assistant/threads/${encodeURIComponent(selectedThreadId)}`).then(value=>{
       setThread(current=>(current?.thread?.id||current?.id)===selectedThreadId?value:current);
     }).catch(()=>{});
@@ -156,14 +184,53 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
     }catch(cause){setError(cause.message || 'No se pudo cargar el historial anterior.');}
     finally{if(sequence===historyRequest.current)setLoading(false);}
   }
-  function startThread(){
+  const pauseWork=useCallback(()=>{pumpEpoch.current+=1;requestController.current?.abort();setSending(false);},[]);
+  const startThread=useCallback(()=>{
     pauseWork();setWork(null);workRef.current=null;setReadPage(null);
     historyRequest.current+=1;requestRef.current=null;setThread(null);setMessages([]);
     setTurnsBefore(null);setTurnsHasMore(false);setAnswerText('');setAnswerOption('');setError('');setNotice('');
-  }
+  },[pauseWork]);
+  const goToConsoleControl=useCallback(id=>{
+    if(consoleControls.includes(id)||resultControls.has(id)){
+      if(id==='assistant.suggested-message')setIdeasOpen(true);
+      setControlFocus(id);
+      return;
+    }
+    if(id==='assistant.thread-delete'&&selectedThreadId){
+      setControlFocus(id);
+      return;
+    }
+    startThread();
+    setControlFocus(id);
+  },[selectedThreadId,startThread]);
+  useEffect(()=>{
+    if(!open||!catalogConsoleRequest||handledConsoleRequest.current===catalogConsoleRequest.token)return;
+    handledConsoleRequest.current=catalogConsoleRequest.token;
+    goToConsoleControl(catalogConsoleRequest.id);
+  },[open,catalogConsoleRequest,goToConsoleControl]);
+  useEffect(()=>{
+    if(!open||loading||!controlFocus)return;
+    const resultLabel=resultControls.get(controlFocus);
+    const matches=resultLabel&&dialogRef.current?.querySelectorAll(`[data-assistant-result-control="${controlFocus}"]:not(:disabled)`);
+    const control=controlFocus==='assistant.open-console'?consoleHeading.current
+      :controlFocus==='assistant.suggested-message'?ideasGroup.current
+      :controlFocus==='assistant.ask'?(settings?.enabled?messageRef.current:null)
+      :controlFocus==='assistant.literal-draft'?(settings?.enabled&&literalDraftAvailable?messageRef.current:null)
+      :resultLabel?(matches?.length===1?matches[0]:null)
+      :thread?deleteConversationButton.current:controlFocus==='assistant.thread-new'?newConversationButton.current:historyHeading.current;
+    (control||consoleHeading.current)?.focus();
+    if(controlFocus==='assistant.literal-draft'){
+      setNotice(control?'Escribe el campo y el texto exacto. Los cambios no descriptivos se revisan antes de guardar.':'Abre un borrador existente sin cambios y vuelve desde «Ayúdame con este formulario».');
+    }else if(!control&&consoleControls.includes(controlFocus))setNotice('Habilita Ali para usar las ideas o enviar una consulta.');
+    if(!control&&resultLabel)setNotice(`No hay un control inequívoco para «${resultLabel}». Abre la conversación exacta o usa el botón que corresponda en su tarjeta.`);
+    if(!thread&&controlFocus==='assistant.thread-delete')setNotice('Abre la conversación exacta antes de borrarla.');
+    setControlFocus(null);
+  },[open,loading,controlFocus,thread,settings?.enabled,literalDraftAvailable]);
   async function deleteThread(item) {
     const identity=item?.thread || item;
-    if(sending || !identity?.id || !window.confirm('¿Borrar esta conversación y sus propuestas?'))return;
+    if(sending || !identity?.id)return;
+    const title=identity.data?.title||identity.title||'Conversación';
+    if(!window.confirm(`¿Borrar «${title}» y sus propuestas? Los cambios que ya guardaste en el negocio se conservan.`))return;
     setLoading(true);setError('');
     try {
       await api(`/api/admin/assistant/threads/${encodeURIComponent(identity.id)}`,{method:'DELETE',body:JSON.stringify({version:identity.version})});
@@ -182,7 +249,6 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
     const form=bridge.getActiveForm();
     return {view,selection:bridge.getSelection?.(view)??null,form:form?{formId:form.formId,target:form.target,entityId:form.entityId,recordVersion:form.recordVersion,generation:form.generation,values:form.values,dirty:form.dirty,busy:form.busy}:null};
   }
-  function pauseWork(){pumpEpoch.current+=1;requestController.current?.abort();setSending(false);}
   useEffect(()=>{if(!open)pauseWork();else if(workRef.current?.state==='running')void recoverStatus(workRef.current.turnId).catch(cause=>setError(cause.message));},[open]);
   function publishStatus(status,{epoch=pumpEpoch.current,force=false}={}){
     const prior=workRef.current;
@@ -256,7 +322,7 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
     const selectedLabel=answer&&pendingQuestion?.id===answer.questionId?pendingQuestion.options?.find(option=>option.id===answer.optionId)?.label:null;
     const content=continueFromTurnId?'Completar análisis':String(answer?(text||answer.text||selectedLabel||'Respuesta a la pregunta'):(text??message)).trim();
     if(!settings?.enabled||sending||loading||workRef.current?.state==='running'||!content)return;
-    const body=continueFromTurnId?{threadId:selectedThreadId,threadVersion:thread?.thread?.version??thread?.version??null,continueFromTurnId}:{threadId:selectedThreadId,threadVersion:thread?.thread?.version??thread?.version??null,message:content,context:contextNow(),answer};
+    const body=continueFromTurnId?{threadId:selectedThreadId,threadVersion:thread?.thread?.version??thread?.version??null,continueFromTurnId}:{threadId:selectedThreadId,threadVersion:thread?.thread?.version??thread?.version??null,message:content,context:contextNow(),answer,...(advisorTaskId?{advisorTaskId}:{})};
     const key=fingerprint(body),prior=requestRef.current;
     const input=prior?.fingerprint===key?prior.body:JSON.parse(fingerprint({requestId:uid(),...body}));
     requestRef.current={body:input,fingerprint:key,turnId:prior?.fingerprint===key?prior.turnId:null,initialForms:prior?.fingerprint===key?prior.initialForms:bridge.snapshot()};
@@ -378,7 +444,20 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
     finally{setLoading(false);}
   }
   function openProposal(proposal){
-    bridge.handleProposalOpen({requestId:uid(),proposalId:proposal.id,open:proposal.open});
+    bridge.handleProposalOpen({requestId:uid(),proposalId:proposal.id,recordVersion:proposal.recordVersion,open:proposal.open});
+  }
+  async function openAdvisorAction({id}){
+    if(openingAction||actionBusy&&!activeWorkControls.has(id))return;
+    if(consoleControls.includes(id)||resultControls.has(id)||['assistant.thread-list','assistant.thread-new','assistant.thread-open','assistant.thread-delete'].includes(id)){
+      goToConsoleControl(id);
+      return;
+    }
+    setOpeningAction(true);setError('');
+    try {
+      if(await onAdvisorAction({id}))onClose();
+      else setError('El control no se abrió. La conversación sigue disponible.');
+    } catch {setError('No se pudo abrir el control. La conversación sigue disponible.');}
+    finally {setOpeningAction(false);}
   }
   function guardedLink(event,href){
     event.preventDefault();
@@ -387,12 +466,16 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
     if(onNavigate?.(next)===true)onClose();
   }
   async function executeProposal(proposal){
-    if(loading||sending)return;
-    if(bridge.snapshot().some(form=>form.target===proposal.target && form.entityId===(proposal.entityId??null))){
+    if(loading||sending||workRef.current?.state==='running')return;
+    const forms=bridge.snapshot();
+    if(forms.some(form=>duplicateSourceBlocked(proposal,form))){
+      setError('La campaña de origen tiene cambios sin guardar o está ocupada. Revísala antes de duplicar.');return;
+    }
+    if(forms.some(form=>form.target===proposal.target && form.entityId===(proposal.entityId??null))){
       setError('Revisa y guarda desde el formulario abierto para conservar sus cambios y confirmaciones.');return;
     }
     const prior=executeAttempts.current.get(proposal.id);
-    if(!prior && !window.confirm(`¿Confirmar este cambio?\n\n${proposal.moneyCurrency.before!==proposal.moneyCurrency.after?`Moneda: ${proposal.moneyCurrency.before||'Sin verificar'} → ${proposal.moneyCurrency.after||'Sin verificar'}\n`:''}${[...(proposal.diff||[]),...(proposal.humanDiff||[])].map(item=>`${item.label||item.field}: ${formatAssistantChangeValue(item.field,item.before,proposal.moneyCurrency.before)} → ${formatAssistantChangeValue(item.field,item.after,proposal.moneyCurrency.after)}`).join('\n')}`))return;
+    if(!prior && !window.confirm(`${advisorCommands[proposal.target]?.prompt||'¿Confirmar este cambio?'}\n\n${proposal.moneyCurrency.before!==proposal.moneyCurrency.after?`Moneda: ${proposal.moneyCurrency.before||'Sin verificar'} → ${proposal.moneyCurrency.after||'Sin verificar'}\n`:''}${[...(proposal.diff||[]),...(proposal.humanDiff||[])].map(item=>`${item.label||item.field}: ${formatAssistantChangeValue(item.field,item.before,proposal.moneyCurrency.before)} → ${formatAssistantChangeValue(item.field,item.after,proposal.moneyCurrency.after)}`).join('\n')}`))return;
     const confirmation=prior ? prior.confirmation : (proposal.execution==='automatic'?null:{proposalId:proposal.id,payloadHash:proposal.payloadHash});
     executeAttempts.current.set(proposal.id,{proposal,confirmation});
     setLoading(true);setError('');
@@ -403,58 +486,149 @@ export default function AssistantConsole({ api, view, onNavigate, brandName, ope
   function renderResult(result,preview=false){
     const evidence=new Map((result.evidence||[]).map(item=>[item.id,item]));
     return <div className={styles.result} data-testid="assistant-result">
-      {result.analysis&&<section className={styles.analysisScope} aria-label="Alcance consultado"><strong>{result.analysis.status==='partial'?'Respuesta parcial':result.analysis.status==='empty'?'Sin datos consultados':'Análisis completado'}</strong><p>Contexto de origen: {adminLocationLabel(result.analysis.scope.view||{section:'home'})}</p>{result.analysis.scope.datasets.map((dataset,index)=><p key={index}>{topicLabels[dataset.domain]||dataset.domain}{dataset.resource?` · ${dataset.resource}`:''}{dataset.recordId?` · Registro: ${dataset.recordId}`:''}{dataset.startDate?` · Desde ${dataset.startDate} hasta ${dataset.endDateExclusive} (exclusivo)`:''}{dataset.asOf?` · Corte: ${dataset.asOf}`:''}{dataset.filters&&Object.entries(dataset.filters).map(([key,value])=><span key={key}> · {key}: {displayValue(value)}</span>)}</p>)}{result.analysis.reason&&<p>{({quick_budget:'Se completó la revisión rápida. Queda trabajo por revisar.',work_budget:'Se alcanzó el presupuesto de esta ampliación.',user_stopped:'Análisis detenido. Esto es lo revisado.',provider_unavailable:'No se pudo completar la interpretación con el proveedor.',context_capacity:'Queda información por analizar.',invalid_answer:'No se pudo validar la interpretación.',no_progress:'No se obtuvo información nueva.',source_changed:'La fuente cambió durante la revisión.',interrupted:'La revisión se interrumpió.'})[result.analysis.reason]}</p>}{result.analysis.remaining.length>0&&<><strong>Pendiente de revisar</strong><ul>{result.analysis.remaining.map(item=><li key={item.id}>{item.label}</li>)}</ul></>}{!preview&&result.analysis.canContinue&&<button type="button" disabled={sending||loading||work?.state==='running'} onClick={()=>void sendTurn({continueFromTurnId:result.turnId})}>{result.analysis.reason==='user_stopped'?'Retomar análisis':'Completar análisis'}</button>}{!preview&&result.analysis.scope.datasets.length>0&&<button type="button" disabled={reading} onClick={()=>void showRecords(result)}>Ver registros consultados</button>}</section>}
+      {result.analysis&&<section className={styles.analysisScope} aria-label="Alcance consultado">
+        <strong>{result.analysis.status==='partial'?'Respuesta parcial':result.analysis.status==='empty'?'Sin datos consultados':'Análisis completado'}</strong><p>Contexto de origen: {adminLocationLabel(result.analysis.scope.view||{section:'home'})}</p>{result.analysis.scope.datasets.map((dataset,index)=><p key={index}>{topicLabels[dataset.domain]||dataset.domain}{dataset.resource?` · ${dataset.resource}`:''}{dataset.recordId?` · Registro: ${dataset.recordId}`:''}{dataset.startDate?` · Desde ${dataset.startDate} hasta ${dataset.endDateExclusive} (exclusivo)`:''}{dataset.asOf?` · Corte: ${dataset.asOf}`:''}{dataset.filters&&Object.entries(dataset.filters).map(([key,value])=><span key={key}> · {key}: {displayValue(value)}</span>)}</p>)}{result.analysis.reason&&<p>{({quick_budget:'Se completó la revisión rápida. Queda trabajo por revisar.',work_budget:'Se alcanzó el presupuesto de esta ampliación.',user_stopped:'Análisis detenido. Esto es lo revisado.',provider_unavailable:'No se pudo completar la interpretación con el proveedor.',context_capacity:'Queda información por analizar.',invalid_answer:'No se pudo validar la interpretación.',no_progress:'No se obtuvo información nueva.',source_changed:'La fuente cambió durante la revisión.',interrupted:'La revisión se interrumpió.'})[result.analysis.reason]}</p>}{result.analysis.remaining.length>0&&<><strong>Pendiente de revisar</strong><ul>{result.analysis.remaining.map(item=><li key={item.id}>{item.label}</li>)}</ul></>}
+        {!preview&&result.analysis.canContinue&&<button type="button" data-assistant-result-control="assistant.extend-analysis" disabled={sending||loading||work?.state==='running'} onClick={()=>void sendTurn({continueFromTurnId:result.turnId})}>{result.analysis.reason==='user_stopped'?'Retomar análisis':'Completar análisis'}</button>}
+        {!preview&&result.analysis.scope.datasets.length>0&&<button type="button" data-assistant-result-control="assistant.read-records" disabled={reading} onClick={()=>void showRecords(result)}>Ver registros consultados</button>}
+      </section>}
       {(result.blocks||[]).map((block,index)=><section className={styles.block} key={`${result.turnId}-block-${index}`}>
         {block.type==='analysis'&&<><strong>{block.kind==='interpretation'?'Interpretación de Ali':block.kind==='recommendation'?'Sugerencia':'Explicación'}</strong><p>{block.segments.map((segment,segmentIndex)=>{if(segment.type==='text')return <span key={segmentIndex}>{segment.text}</span>;const item=evidence.get(segment.evidenceId);return item?<button type="button" className={styles.evidenceReference} key={segmentIndex} onClick={event=>{const source=event.currentTarget.closest('[data-testid=assistant-result]')?.querySelector(`[data-source-id="${CSS.escape(item.id)}"]`);if(source){source.closest('details').open=true;source.focus();source.scrollIntoView({block:'nearest'});}}}>{segment.display==='label'?item.label:(item.formattedValue??displayValue(item.value))}</button>:null;})}</p></>}
         {block.type==='text'&&<p>{block.text}</p>}
+        {block.type==='action'&&<AdvisorActionCard capability={{id:block.capabilityId,label:block.label,area:block.area,mode:block.mode,prerequisite:block.prerequisite}} onOpen={!preview&&onAdvisorAction?capability=>void openAdvisorAction(capability):null} disabled={openingAction||actionBusy&&!activeWorkControls.has(block.capabilityId)}/>}
+        {block.type==='advisor_navigation'&&(block.destination==='tasks'?<>
+          <p>Abre tus tareas guardadas y elige cuál quieres retomar.</p>
+          {!preview&&onAdvisorTasks&&<button type="button" disabled={actionBusy} onClick={onAdvisorTasks}>Abrir Mis tareas</button>}
+        </>:<>
+          <p>Prueba otras palabras o selecciona un área en el directorio.</p>
+          {!preview&&onAdvisorDirectory&&<button type="button" disabled={actionBusy} onClick={onAdvisorDirectory}>Buscar en el directorio</button>}
+        </>)}
         {block.type==='fact'&&<><strong>{block.title}</strong><ul>{block.evidenceIds.map(id=>{const item=evidence.get(id);return item?<li key={id}>{item.label}: {item.formattedValue ?? displayValue(item.value)}{safeHref(item.href)&&<> · <a href={safeHref(item.href)}>{item.domain==='application'?'Abrir ayuda':'Abrir registro'}</a></>}</li>:null;})}</ul></>}
-        {block.type==='recommendation'&&<><strong>{block.title}</strong><p>{block.reason}</p>{block.evidenceIds.map(id=>{const item=evidence.get(id);return item?<div className={styles.source} key={id}><span>{item.label}: {item.formattedValue ?? displayValue(item.value)}</span>{safeHref(item.href)&&<a href={safeHref(item.href)}>Fuente</a>}</div>:null;})}<a className={styles.actionLink} href={safeHref(block.href)}>{block.actionLabel}</a></>}
+        {block.type==='recommendation'&&<><strong>{block.title}</strong><p>{block.reason}</p>{block.evidenceIds.map(id=>{const item=evidence.get(id);return item?<div className={styles.source} key={id}><span>{item.label}: {item.formattedValue ?? displayValue(item.value)}{item.asOf?` · Corte: ${item.asOf}`:''}{item.coverage.state!=='complete'?` · Cobertura ${item.coverage.state==='partial'?'parcial':'desconocida'}`:''}</span>{safeHref(item.href)&&<a href={safeHref(item.href)}>Fuente</a>}</div>:null;})}<a className={styles.actionLink} href={safeHref(block.href)}>{block.actionLabel}</a></>}
         {block.type==='guide'&&<><strong>{block.title}</strong><ol>{block.steps.map(step=><li key={step.id}>{step.text}</li>)}</ol><a href={safeHref(block.href)}>Ir a esta sección</a></>}
       </section>)}
-      {result.evidence?.length>0&&<details className={styles.evidence}><summary>Fuentes ({result.evidence.length})</summary><ul>{result.evidence.map(item=><li key={item.id} data-source-id={item.id} tabIndex={-1}><span>{item.label}: {item.formattedValue ?? displayValue(item.value)}</span>{item.unit&&<small>Unidad: {item.unit}</small>}{item.asOf&&<small>Corte: {item.asOf}</small>}{item.coverage?.state!=='complete'&&<small>Cobertura {item.coverage?.state==='partial'?'parcial':'desconocida'}{item.coverage?.reasons?.length?`: ${item.coverage.reasons.join('; ')}`:''}</small>}{safeHref(item.href)&&<a href={safeHref(item.href)}>Abrir fuente</a>}</li>)}</ul></details>}
-      {!preview&&result.proposal&&!result.receipt&&<ProposalCard proposal={result.proposal} onOpen={()=>openProposal(result.proposal)} onApply={()=>void applyProposal(result.proposal)} onRevise={()=>void reviseProposal(result.proposal)} onExecute={()=>void executeProposal(result.proposal)} onCancel={()=>void cancelProposal(result.proposal)} busy={loading||sending||!settings?.enabled} activeForm={activeForm}/>}
-      {!preview&&result.receipt&&<section className={styles.receipt} aria-label="Comprobante de cambio guardado"><strong>Cambio guardado</strong><p>{result.receipt.summary}</p><small>{result.receipt.committedAt}</small>{safeHref(result.receipt.href)&&<a href={safeHref(result.receipt.href)}>Abrir registro guardado</a>}</section>}
+      {result.evidence?.length>0&&<details className={styles.evidence}><summary data-assistant-result-control={preview?undefined:'assistant.sources'}>Fuentes ({result.evidence.length})</summary><ul>{result.evidence.map(item=><li key={item.id} data-source-id={item.id} tabIndex={-1}><span>{item.label}: {item.formattedValue ?? displayValue(item.value)}</span>{item.unit&&<small>Unidad: {item.unit}</small>}{item.asOf&&<small>Corte: {item.asOf}</small>}{item.coverage?.state!=='complete'&&<small>Cobertura {item.coverage?.state==='partial'?'parcial':'desconocida'}{item.coverage?.reasons?.length?`: ${item.coverage.reasons.join('; ')}`:''}</small>}{safeHref(item.href)&&<a href={safeHref(item.href)}>Abrir fuente</a>}</li>)}</ul></details>}
+      {!preview&&result.proposal&&!result.receipt&&<ProposalCard proposal={result.proposal} onOpen={()=>openProposal(result.proposal)} onApply={()=>void applyProposal(result.proposal)} onRevise={()=>void reviseProposal(result.proposal)} onExecute={()=>void executeProposal(result.proposal)} onCancel={()=>void cancelProposal(result.proposal)} busy={loading||actionBusy||!settings?.enabled} activeForm={activeForm} sourceBlocked={result.proposal.target==='campaign-duplicate'&&bridge.snapshot().some(form=>duplicateSourceBlocked(result.proposal,form))}/>}
+      {!preview&&result.receipt&&<ReceiptCard api={api} receipt={result.receipt} showDate/>}
     </div>;
   }
   return <dialog ref={dialogRef} className={styles.dialog} aria-label="Ali, asistente del negocio">
     <div className={styles.console} onClick={event=>{const link=event.target.closest?.('a[href]');if(link)guardedLink(event,link.getAttribute('href'));}}>
-      <header className={styles.header}><div><span className={styles.eyebrow}>Ali</span><h2>{brandName?`Asistente de ${brandName}`:'Asistente del negocio'}</h2><p>{settings?.enabled?'Consulta con información de tu negocio.':'Configura y habilita Ali para iniciar una conversación.'}</p></div><button type="button" data-dialog-initial-focus className={styles.close} onClick={onClose} aria-label="Cerrar asistente">×</button></header>
-      {!thread&&<section className={styles.history} aria-label="Conversaciones anteriores"><div className={styles.historyHead}><h3>Conversaciones</h3><button type="button" disabled={loading} onClick={startThread}>Nueva conversación</button></div>{loading&&<p role="status">Cargando…</p>}{threads.map(item=>{const row=item.thread||item;return <div className={styles.threadRow} key={row.id}><button type="button" disabled={sending||loading} onClick={()=>void openThread(row.id)}><span>{row.data?.title || row.title || 'Conversación'}</span><small>{topicLabels[row.data?.topic || row.topic] || ''}</small></button><button type="button" disabled={sending||loading} aria-label="Borrar conversación" onClick={()=>void deleteThread(item)}>Borrar</button></div>;})}{historyHasMore&&<button type="button" disabled={sending||loading} onClick={()=>void loadOlderThreads()}>Ver conversaciones anteriores</button>}</section>}
-      {thread&&<div className={styles.threadTools}><button type="button" disabled={loading} onClick={startThread}>‹ Conversaciones</button><strong>{threadData.title || 'Conversación'}</strong><button type="button" disabled={sending||loading} onClick={()=>void deleteThread(thread)}>Borrar</button></div>}
-      <p className={styles.contextLine}>Estás en: {adminLocationLabel(view || {section:'home'})}{threadData.topic&&<> · Estamos revisando: {topicLabels[threadData.topic] || 'Negocio'}</>}</p>
-      {thread&&(workMemory.goal||followUps.length>0)&&<details className={styles.workPlan} aria-label="Objetivo y siguientes pasos"><summary className={styles.workPlanHead}><strong>Objetivo y siguientes pasos</strong><span>{followUps.length?` · ${followUps.length} por revisar`:' · Sin seguimientos'}</span></summary>{workMemory.goal&&<p>{workMemory.goal}</p>}{followUps.length>0&&<ol className={styles.workPlanList}>{followUps.map(item=><li key={item.id}>{['action','task','receipt'].includes(item.kind)&&safeHref(item.href)?<a href={safeHref(item.href)}><span>{item.title}</span><small>{item.description}</small><em>{item.kind==='receipt'?'Guardado':'Sugerido'}</em></a>:<button type="button" onClick={event=>focusFollowUp(item,event)}><span>{item.title}</span><small>{item.description}</small><em>{item.state==='pending'?'Pendiente':'Sugerido'}</em></button>}</li>)}</ol>}<small className={styles.memoryNote}>Ali recuerda el objetivo y las respuestas de esta conversación. Verifica los datos actuales antes de actuar.</small></details>}
-      {pendingOpen&&<div className={styles.contextLine} role="status"><span>Solicitud contextual pendiente: {pendingOpen.target || pendingOpen.type || 'formulario'}.</span>{pendingOpen.view&&<button type="button" onClick={()=>onNavigate?.(pendingOpen.view)}>Ir a la sección</button>}<button type="button" onClick={()=>bridge.acknowledgeOpen(pendingOpen.requestId)}>Descartar aviso</button></div>}
+      <header className={styles.header}><div><span className={styles.eyebrow}>Ali</span><h2 ref={consoleHeading} tabIndex={-1}>{brandName?`Asistente de ${brandName}`:'Asistente del negocio'}</h2><p>{settings?.enabled?'Consulta con información de tu negocio.':'Configura y habilita Ali para iniciar una conversación.'}</p></div><button type="button" data-dialog-initial-focus className={styles.close} onClick={onClose} aria-label="Cerrar asistente">×</button></header>
       <div className={styles.messages} ref={listRef} aria-live="off">
+      {!thread&&<section className={styles.history} aria-label="Conversaciones anteriores"><div className={styles.historyHead}><h3 ref={historyHeading} tabIndex={-1}>Conversaciones</h3><button ref={newConversationButton} type="button" disabled={loading||sending} onClick={()=>{startThread();messageRef.current?.focus();}}>Nueva conversación</button></div>{(loading||historyLoading)&&<p role="status">Cargando…</p>}{!loading&&!historyLoading&&!threads.length&&<p>Todavía no hay conversaciones guardadas.</p>}{threads.map(item=>{const row=item.thread||item;return <div className={styles.threadRow} key={row.id}><button type="button" disabled={sending||loading||historyLoading} onClick={()=>void openThread(row.id)}><span>{row.data?.title || row.title || 'Conversación'}</span><small>{topicLabels[row.data?.topic || row.topic] || ''}</small></button><button type="button" disabled={sending||loading||historyLoading} aria-label="Borrar conversación" onClick={()=>void deleteThread(item)}>Borrar</button></div>;})}{historyHasMore&&<button type="button" disabled={sending||loading||historyLoading} onClick={()=>void loadOlderThreads()}>Ver conversaciones anteriores</button>}</section>}
+      {thread&&<div className={styles.threadTools}><button type="button" disabled={loading} onClick={()=>goToConsoleControl('assistant.thread-list')}>‹ Conversaciones</button><strong>{threadData.title || 'Conversación'}</strong><button ref={deleteConversationButton} type="button" disabled={sending||loading} onClick={()=>void deleteThread(thread)}>Borrar</button></div>}
+      <p className={styles.contextLine}>Estás en: {adminLocationLabel(view || {section:'home'})}{threadData.topic&&<> · Estamos revisando: {topicLabels[threadData.topic] || 'Negocio'}</>}</p>
+      {(onAdvisorDirectory||onAdvisorPreferences)&&<div className={`${styles.threadTools} ${styles.advisorTools}`} aria-label="Opciones de Ali">
+        {onAdvisorDirectory&&<button type="button" disabled={openingAction} onClick={()=>onAdvisorDirectory({keepConsole:work?.state==='running'})}>¿Qué quieres hacer?</button>}
+        {onAdvisorPreferences&&<button type="button" disabled={actionBusy} onClick={onAdvisorPreferences}>Mis preferencias</button>}
+      </div>}
+      {onReminderRequest&&<div className={`${styles.threadTools} ${styles.advisorTools}`} aria-label="Recordatorios personales">
+        {advisorReady&&<button type="button" disabled={sending} onClick={()=>onReminderRequest('reminder')}>Recordarme</button>}
+        <button type="button" disabled={sending} onClick={()=>onReminderRequest('reminders')}>Mis recordatorios</button>
+      </div>}
+      {(onAdvisorTaskRequest||onAdvisorTasks)&&<div className={`${styles.threadTools} ${styles.advisorTools}`} aria-label="Acompañamiento operativo">
+        {advisorReady&&onAdvisorTaskRequest&&<button type="button" disabled={actionBusy} onClick={()=>onAdvisorTaskRequest('ship-order',activeForm?.target==='order'&&activeForm.entityId?{kind:'order',id:activeForm.entityId}:undefined)}>Empezar envío de un pedido</button>}
+        {advisorReady&&onAdvisorTaskRequest&&<button type="button" disabled={actionBusy} onClick={()=>onAdvisorTaskRequest('close-cash')}>Empezar cierre de caja</button>}
+        {onAdvisorTasks&&<button type="button" disabled={actionBusy} onClick={onAdvisorTasks}>Mis tareas</button>}
+      </div>}
+      {advisorTaskId&&<div className={styles.contextLine}><span>Tarea de envío seleccionada para este turno.</span><button type="button" disabled={sending} onClick={onClearAdvisorTask}>Quitar selección</button></div>}
+      {thread&&(workMemory.goal||followUps.length>0)&&<details className={styles.workPlan} aria-label="Objetivo y siguientes pasos">
+        <summary className={styles.workPlanHead} data-assistant-result-control="assistant.thread-follow-up"><strong>Objetivo y siguientes pasos</strong><span>{followUps.length?` · ${followUps.length} por revisar`:' · Sin seguimientos'}</span></summary>
+        {workMemory.goal&&<p>{workMemory.goal}</p>}
+        {followUps.length>0&&<ol className={styles.workPlanList}>{followUps.map(item=><li key={item.id}>{['action','task','receipt'].includes(item.kind)&&safeHref(item.href)?<a href={safeHref(item.href)}><span>{item.title}</span><small>{item.description}</small><em>{item.kind==='receipt'?'Guardado':'Sugerido'}</em></a>:<button type="button" onClick={event=>focusFollowUp(item,event)}><span>{item.title}</span><small>{item.description}</small><em>{item.state==='pending'?'Pendiente':'Sugerido'}</em></button>}</li>)}</ol>}
+        <small className={styles.memoryNote}>Ali recuerda el objetivo y las respuestas de esta conversación. Verifica los datos actuales antes de actuar.</small>
+      </details>}
+      {pendingOpen&&<div className={styles.contextLine} role="status"><span>Solicitud contextual pendiente: {pendingOpen.target || pendingOpen.type || 'formulario'}.</span>
+        {(canReturnToForm||pendingOpen.view)&&<button type="button" data-assistant-result-control="assistant.context-destination" disabled={actionBusy||contextualForm?.busy} onClick={()=>{
+          if(!canReturnToForm&&onNavigate?.(pendingOpen.view)!==true)return;
+          bridge.acknowledgeOpen(pendingOpen.requestId);
+          onClose();
+        }}>{canReturnToForm?'Volver al formulario':'Ir a la sección'}</button>}
+        <button type="button" onClick={()=>bridge.acknowledgeOpen(pendingOpen.requestId)}>Descartar aviso</button>
+      </div>}
+      <div className={styles.messageBody}>
         {turnsHasMore&&<button type="button" className={styles.olderTurns} disabled={loading||sending||!turnsBefore} onClick={()=>void loadOlderTurns()}>Cargar mensajes anteriores</button>}
-        {!messages.length&&<div className={styles.empty}><h3>¿Qué necesitas revisar?</h3><p>Puedo consultar información registrada y ayudarte con formularios. Los cambios descriptivos autorizados pueden guardarse si el formulario está limpio; los demás se revisan antes de confirmar.</p>{settings&&!settings.enabled&&<><p role="status">Ali está deshabilitado o no tiene una conexión lista.</p><button type="button" onClick={()=>onNavigate?.({section:'business',tab:'assistant'})}>Abrir configuración de Ali</button></>}{settings?.enabled&&<div className={styles.quickStarts} aria-label="Ideas para empezar">{activeForm&&<button type="button" onClick={()=>startSuggestedMessage('Ayúdame a completar este formulario con los datos disponibles; pregunta lo que falte.')}>Completar este formulario</button>}{quickStarts.map(item=><button type="button" key={item.label} onClick={()=>startSuggestedMessage(item.message)}>{item.label}</button>)}</div>}</div>}
+        {!messages.length&&<div className={styles.empty}><h3>¿Qué necesitas revisar?</h3><p>Puedo consultar información registrada y ayudarte con formularios. Los cambios descriptivos autorizados pueden guardarse si el formulario está limpio; los demás se revisan antes de confirmar.</p>{settings&&!settings.enabled&&<><p role="status">Ali está deshabilitado o no tiene una conexión lista.</p><button type="button" onClick={()=>onNavigate?.({section:'business',tab:'assistant'})}>Abrir configuración de Ali</button></>}</div>}
+        {settings?.enabled&&<div>
+          {messages.length>0&&<button className="button subtle" type="button" aria-expanded={ideasOpen} aria-controls="ali-ideas" onClick={()=>setIdeasOpen(value=>!value)}>Ideas para empezar</button>}
+          <div ref={ideasGroup} id="ali-ideas" role="group" className={styles.quickStarts} tabIndex={-1} hidden={messages.length>0&&!ideasOpen} aria-label="Ideas para empezar">
+            {activeForm&&<button type="button" onClick={()=>startSuggestedMessage('Ayúdame a completar este formulario con los datos disponibles; pregunta lo que falte.')}>Completar este formulario</button>}
+            {quickStarts.map(item=><button type="button" key={item.label} onClick={()=>startSuggestedMessage(item.message)}>{item.label}</button>)}
+          </div>
+        </div>}
         {messages.map(row=><article className={`${styles.message} ${row.role==='user'?styles.userMessage:styles.assistantMessage}`} key={row.key} data-assistant-turn={row.result?.turnId||undefined}><span className={styles.speaker}>{row.role==='user'?'Tú':'Ali'}</span>{row.role==='user'?<p>{row.text}</p>:renderResult(row.result)}</article>)}
-        {pendingQuestion&&<form className={styles.question} data-assistant-question={pendingQuestion.id} onSubmit={event=>submitAnswer(event,pendingQuestion)}><label htmlFor={`answer-${pendingQuestion.id}`}>{pendingQuestion.prompt}</label>{pendingQuestion.options?.length>0&&<div className={styles.options}>{pendingQuestion.options.map(option=><label key={option.id}><input type="radio" disabled={!settings?.enabled||sending||loading||work?.state==='running'} name={`answer-${pendingQuestion.id}`} checked={answerOption===option.id} onChange={()=>{setAnswerOption(option.id);setAnswerText('');}}/>{option.label}</label>)}</div>}{pendingQuestion.allowText&&<input id={`answer-${pendingQuestion.id}`} disabled={!settings?.enabled||sending||loading||work?.state==='running'} type={pendingQuestion.input} value={answerText} onChange={event=>{setAnswerText(event.target.value);setAnswerOption(null);}} placeholder="Escribe tu respuesta" maxLength={pendingQuestion.input==='text'?8000:undefined}/>}<button type="submit" disabled={!settings?.enabled||sending||loading||(!pendingQuestion.options?.some(option=>option.id===answerOption)&&(!pendingQuestion.allowText||!answerText.trim()))}>Responder</button></form>}
-        {work?.state==='running'&&<section className={styles.progress} data-testid="assistant-progress" aria-label="Progreso del análisis"><p role="status">{stopping?'Deteniendo…':phaseLabels[work.phase]}</p><ol>{['planning','reading','analyzing','answering'].map(phase=><li key={phase} aria-current={phase===work.phase?'step':undefined}>{phaseLabels[phase]}</li>)}</ol><p aria-live="off">Lecturas completadas: {work.progress.readsCompleted} · Registros revisados: {work.progress.recordsRead}{work.progress.recordsTotal!==null?` de ${work.progress.recordsTotal}`:''}{work.progress.currentLabel?` · ${work.progress.currentLabel}`:''}</p>{!sending&&<><button type="button" disabled={stopping} onClick={()=>void continueWork()}>Continuar</button><button type="button" disabled={stopping} onClick={()=>void cancelTurn()}>Responder con lo revisado</button></>}{work.preview&&renderResult(work.preview,true)}</section>}
+        {pendingQuestion&&<form className={styles.question} data-assistant-question={pendingQuestion.id} onSubmit={event=>submitAnswer(event,pendingQuestion)}>
+          <p id={`question-${pendingQuestion.id}`} data-assistant-result-control={settings?.enabled&&!sending&&!loading&&work?.state!=='running'?'assistant.answer-question':undefined} tabIndex={-1}>{pendingQuestion.prompt}</p>
+          {pendingQuestion.options?.length>0&&<div className={styles.options} role="group" aria-labelledby={`question-${pendingQuestion.id}`}>{pendingQuestion.options.map(option=><label key={option.id}><input type="radio" disabled={!settings?.enabled||sending||loading||work?.state==='running'} name={`answer-${pendingQuestion.id}`} checked={answerOption===option.id} onChange={()=>{setAnswerOption(option.id);setAnswerText('');}}/>{option.label}</label>)}</div>}
+          {pendingQuestion.allowText&&<input id={`answer-${pendingQuestion.id}`} aria-labelledby={`question-${pendingQuestion.id}`} disabled={!settings?.enabled||sending||loading||work?.state==='running'} type={pendingQuestion.input} value={answerText} onChange={event=>{setAnswerText(event.target.value);setAnswerOption(null);}} placeholder="Escribe tu respuesta" maxLength={pendingQuestion.input==='text'?8000:undefined}/>}
+          <button type="submit" disabled={!settings?.enabled||sending||loading||(!pendingQuestion.options?.some(option=>option.id===answerOption)&&(!pendingQuestion.allowText||!answerText.trim()))}>Responder</button>
+        </form>}
+        {work?.state==='running'&&<section className={styles.progress} data-testid="assistant-progress" aria-label="Progreso del análisis">
+          <p role="status">{stopping?'Deteniendo…':phaseLabels[work.phase]}</p>
+          <ol>{['planning','reading','analyzing','answering'].map(phase=><li key={phase} aria-current={phase===work.phase?'step':undefined}>{phaseLabels[phase]}</li>)}</ol>
+          <p aria-live="off">Lecturas completadas: {work.progress.readsCompleted} · Registros revisados: {work.progress.recordsRead}{work.progress.recordsTotal!==null?` de ${work.progress.recordsTotal}`:''}{work.progress.currentLabel?` · ${work.progress.currentLabel}`:''}</p>
+          {!sending&&<><button type="button" data-assistant-result-control="assistant.continue-running" disabled={stopping} onClick={()=>void continueWork()}>Continuar</button><button type="button" data-assistant-result-control="assistant.stop-analysis" disabled={stopping} onClick={()=>void cancelTurn()}>Responder con lo revisado</button></>}
+          {work.preview&&renderResult(work.preview,true)}
+        </section>}
         {readPage&&<section className={styles.readPage} data-testid="assistant-read-page" aria-label="Registros consultados"><h3 tabIndex={-1}>Registros consultados</h3><ul>{readPage.records.map((record,index)=><li key={record.id||index}>{Object.entries(record).map(([key,value])=><p key={key}><strong>{key}: </strong>{displayValue(value)}</p>)}</li>)}</ul><p>{readPage.retrieval.recordsRead} registros revisados{readPage.pagination.total!==null?` · Total: ${readPage.pagination.total}`:''}</p>{readPage.pagination.nextCursor&&<button type="button" disabled={reading} onClick={()=>void showRecords({turnId:readPage.turnId},readPage.pagination.nextCursor)}>Siguiente página</button>}<button type="button" onClick={()=>setReadPage(null)}>Cerrar registros</button></section>}
-        {bridge.receipts.slice(-1).filter(response=>!messages.some(row=>row.result?.receipt?.id===response.receipt.id)).map(({receipt})=><section className={styles.receipt} key={receipt.id} aria-label="Último comprobante guardado"><strong>Cambio guardado</strong><p>{receipt.summary}</p>{safeHref(receipt.href)&&<a href={safeHref(receipt.href)}>Abrir registro guardado</a>}</section>)}
+        {bridge.receipts.slice(-1).filter(response=>!messages.some(row=>row.result?.receipt?.id===response.receipt.id)).map(({receipt})=><ReceiptCard api={api} receipt={receipt} key={receipt.id}/>)}
+      </div>
       </div>
       {notice&&<div className={styles.notice} role="status"><span>{notice}</span>{selectedThreadId&&<button type="button" disabled={loading||sending} onClick={()=>void openThread(selectedThreadId)}>Recuperar historial</button>}<button type="button" onClick={()=>setNotice('')}>Cerrar aviso</button></div>}
       {error&&<div className={styles.error} role="alert"><span>{error}</span><button type="button" onClick={()=>setError('')}>Cerrar aviso</button></div>}
       <p className={styles.privacyNotice}>Tu consulta, la memoria y los campos asistibles pueden enviarse al proveedor configurado. Evita datos sensibles.</p>
-      <form className={styles.composer} onSubmit={submitMessage}><label className={styles.visuallyHidden} htmlFor="assistant-message">Mensaje para Ali</label><textarea id="assistant-message" ref={messageRef} value={message} onChange={event=>setMessage(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing){event.preventDefault();event.currentTarget.form?.requestSubmit();}}} maxLength={8000} rows={2} placeholder="Escribe tu consulta…" disabled={!settings?.enabled||sending||loading||work?.state==='running'}/><div className={styles.composerActions}><span>Enter para enviar · Shift+Enter para una línea nueva</span><div>{work?.state==='running'&&<button type="button" disabled={stopping} onClick={()=>void cancelTurn()}>{stopping?'Deteniendo…':'Detener'}</button>}<button type="submit" disabled={!settings?.enabled||sending||loading||!message.trim()}>Enviar</button></div></div></form>
+      {pendingQuestion&&<p className={styles.contextLine}>Puedes dejar esta pregunta pendiente. <button type="button" disabled={loading||sending||work?.state==='running'} onClick={startThread}>Empezar otra consulta</button></p>}
+      <form className={styles.composer} onSubmit={submitMessage}><label className={styles.visuallyHidden} htmlFor="assistant-message">Mensaje para Ali</label><textarea id="assistant-message" ref={messageRef} value={message} onChange={event=>setMessage(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing){event.preventDefault();event.currentTarget.form?.requestSubmit();}}} maxLength={8000} rows={2} placeholder="Escribe tu consulta…" disabled={!settings?.enabled||sending||loading||work?.state==='running'}/><div className={styles.composerActions}><span>Enter para enviar · Shift+Enter para una línea nueva</span><div>{work?.state==='running'&&<button type="button" data-assistant-result-control={sending?'assistant.stop-analysis':undefined} disabled={stopping} onClick={()=>void cancelTurn()}>{stopping?'Deteniendo…':'Detener'}</button>}<button type="submit" disabled={!settings?.enabled||sending||loading||!message.trim()}>Enviar</button></div></div></form>
     </div>
   </dialog>;
 }
 
-function ProposalCard({proposal,onOpen,onApply,onRevise,onExecute,onCancel,busy,activeForm}) {
+function ReceiptCard({api,receipt,showDate=false}) {
+  const [checking,setChecking]=useState(false),[copyNotice,setCopyNotice]=useState('');
+  const copyRequest=isCopyRequest(receipt);
+  const label=copyRequest?'Solicitud recibida':receipt.target==='campaign-duplicate'?'Borrador creado':'Cambio guardado';
+  async function checkCopy(){
+    setChecking(true);setCopyNotice('');
+    const unverified='Aún no se pudo comprobar una copia de esta solicitud. El comprobante de recepción se conserva.';
+    try {
+      const response=await api(`/api/admin/assistant/proposals/${encodeURIComponent(receipt.proposalId)}`);
+      const confirmed=validateAssistantReceipt(response.receipt),status=response.reportStatus;
+      if(confirmed?.id!==receipt.id||confirmed.jobKey!==receipt.jobKey||confirmed.queryKey!==receipt.queryKey||confirmed.runId!==receipt.runId
+        ||status?.key!==receipt.jobKey||status.queryKey!==receipt.queryKey||status.runId!==receipt.runId) {
+        setCopyNotice(unverified);return;
+      }
+      if(status.state==='succeeded'&&status.snapshotId&&Number.isSafeInteger(status.revision)&&status.revision>0&&status.finishedAt){
+        setCopyNotice(status.unchanged?`La consulta conservó la misma copia, versión ${status.revision}.`:`Copia de esta consulta comprobada, versión ${status.revision}.`);
+      } else setCopyNotice(({queued:'La solicitud sigue en cola; la copia aún no está comprobada.',running:'La solicitud se está procesando; la copia aún no está comprobada.',failed:'La solicitud falló. No se comprobó una copia de esta consulta.'})[status.state]||unverified);
+    } catch {setCopyNotice(unverified);}
+    finally {setChecking(false);}
+  }
+  return <section className={styles.receipt} tabIndex={-1} data-assistant-result-control="assistant.receipt" aria-label={copyRequest||receipt.target==='campaign-duplicate'?label:showDate?'Comprobante de cambio guardado':'Último comprobante guardado'}>
+    <strong>{label}</strong><p>{receipt.summary}</p>{showDate&&<small>{receipt.committedAt}</small>}
+    {copyRequest&&<><button type="button" disabled={checking} onClick={()=>void checkCopy()}>{checking?'Comprobando…':'Comprobar esta solicitud'}</button>{copyNotice&&<p role="status">{copyNotice}</p>}</>}
+    {safeHref(receipt.href)&&<a href={safeHref(receipt.href)}>{copyRequest?'Consultar estado de la copia':'Abrir registro guardado'}</a>}
+  </section>;
+}
+
+function ProposalCard({proposal,onOpen,onApply,onRevise,onExecute,onCancel,busy,activeForm,sourceBlocked}) {
   const sameIdentity=Boolean(activeForm && activeForm.target===proposal.target && (activeForm.entityId??null)===(proposal.entityId??null));
   const exact=Boolean(sameIdentity && (proposal.recordVersion??null)===(activeForm?.recordVersion??null) && (proposal.formId==null || proposal.formId===activeForm.formId) && (proposal.generation==null || proposal.generation===activeForm?.generation));
   const executable=['automatic','confirm'].includes(proposal.execution) && !proposal.missingFields?.length;
-  return <section className={styles.proposal} aria-label="Propuesta de cambio">
+  const command=advisorCommands[proposal.target];
+  return <section className={styles.proposal} tabIndex={-1} data-assistant-result-control={proposalPending(proposal)?'assistant.proposal-review':undefined} aria-label="Propuesta de cambio">
     <div className={styles.proposalHeader}><strong>Propuesta</strong><small>{proposal.state==='executed'?'Guardada':proposal.state==='cancelled'?'Cancelada':proposal.state==='stale'?'Requiere nueva revisión':proposal.state==='applied'?'Valores entregados; aún sin guardar':'Pendiente de revisión'}</small></div>
-    <p>Destino: {proposal.target}{proposal.entityId?` · ${proposal.entityId}`:''}</p>
+    <p>{command?command.title:`Destino: ${proposal.target}`}{proposal.entityId?` · ${proposal.entityId}`:''}</p>
     {proposal.moneyCurrency.before!==proposal.moneyCurrency.after&&<p>Moneda: {proposal.moneyCurrency.before||'Sin verificar'} → {proposal.moneyCurrency.after||'Sin verificar'}. No se convierten importes.</p>}
-    {proposal.diff?.length>0?<ul className={styles.diff}>{proposal.diff.map((change,index)=><li key={`${change.field}-${index}`}><strong>{change.label||assistantFieldLabel(proposal.target,change.field)}</strong><del>{formatAssistantChangeValue(change.field,change.before,proposal.moneyCurrency.before)}</del><span aria-hidden="true">→</span><ins>{formatAssistantChangeValue(change.field,change.after,proposal.moneyCurrency.after)}</ins></li>)}</ul>:<p>No hay campos modificados.</p>}
+    {proposal.diff?.length>0?<ul className={styles.diff}>{proposal.diff.map((change,index)=><li key={`${change.field}-${index}`}><strong>{change.label||assistantFieldLabel(proposal.target,change.field)}</strong><del>{formatAssistantChangeValue(change.field,change.before,proposal.moneyCurrency.before)}</del><span aria-hidden="true">→</span><ins>{formatAssistantChangeValue(change.field,change.after,proposal.moneyCurrency.after)}</ins></li>)}</ul>:!command&&<p>No hay campos modificados.</p>}
     {proposal.humanDiff?.length>0&&<><strong>Controles y revisión humana</strong><ul className={styles.diff}>{proposal.humanDiff.map((change,index)=><li key={`human-${change.field}-${index}`}><strong>{change.label||assistantFieldLabel(proposal.target,change.field)}</strong><del>{formatAssistantChangeValue(change.field,change.before,proposal.moneyCurrency.before)}</del><span aria-hidden="true">→</span><ins>{formatAssistantChangeValue(change.field,change.after,proposal.moneyCurrency.after)}</ins></li>)}</ul></>}
     {proposal.missingFields?.length>0&&<p>Falta información: {proposal.missingFields.map(field=>assistantFieldLabel(proposal.target,field)).join(', ')}</p>}
-    <div className={styles.proposalActions}><button type="button" onClick={onOpen} disabled={busy}>Revisar formulario</button>
-      {proposalPending(proposal)&&<><button type="button" onClick={onApply} disabled={busy||!exact||activeForm?.busy}>Aplicar valores</button><button type="button" onClick={onRevise} disabled={busy||!sameIdentity||activeForm?.busy}>Actualizar revisión</button>{executable&&<button type="button" onClick={onExecute} disabled={busy||sameIdentity}>Confirmar cambio / recuperar</button>}<button type="button" onClick={onCancel} disabled={busy}>Cancelar propuesta</button></>}
+    <div className={styles.proposalActions}><button type="button" data-assistant-result-control="assistant.proposal-form" onClick={onOpen} disabled={busy}>Revisar formulario</button>
+      {proposalPending(proposal)&&<>
+        {!command&&<><button type="button" data-assistant-result-control="assistant.proposal-apply" onClick={onApply} disabled={busy||!exact||activeForm?.busy}>Aplicar valores</button><button type="button" data-assistant-result-control="assistant.proposal-rebase" onClick={onRevise} disabled={busy||!sameIdentity||activeForm?.busy}>Actualizar revisión</button></>}
+        {executable&&<button type="button" data-assistant-result-control="assistant.proposal-confirm" onClick={onExecute} disabled={busy||sameIdentity||sourceBlocked}>{command?.confirm||'Confirmar cambio / recuperar'}</button>}
+        <button type="button" data-assistant-result-control="assistant.proposal-cancel" onClick={onCancel} disabled={busy}>Cancelar propuesta</button>
+      </>}
     </div>
-    {proposalPending(proposal)&&<small>{sameIdentity?'Guarda desde el formulario para confirmar exactamente sus valores y controles humanos.':'Abre el formulario correcto para aplicar los valores sin guardar.'}</small>}
+    {proposalPending(proposal)&&<small>{sourceBlocked?'La campaña de origen tiene cambios sin guardar o está ocupada.':command?.review||(sameIdentity?'Guarda desde el formulario para confirmar exactamente sus valores y controles humanos.':'Abre el formulario correcto para aplicar los valores sin guardar.')}</small>}
   </section>;
 }

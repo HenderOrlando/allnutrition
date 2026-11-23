@@ -8,6 +8,7 @@ const read = view => scope(view).reads[0];
 test('home freezes the Bogotá period and attention severity',()=>{
   assert.deepEqual(read({section:'home'}).query,{period:'month',anchor:'2026-11-11'});
   assert.deepEqual(read({section:'home',issue:'attention',status:'warning'}).query,{page:1,severity:'warning'});
+  assert.deepEqual(scope({section:'home'}).reads[1].query,{resource:'automation'});
 });
 test('catalog sections preserve kind, gifts, search and concrete identities',()=>{
   for(const kind of ['products','combos','catalogs','faqs','messages','shipping']) assert.equal(read({section:kind}).query.kind,kind);
@@ -21,6 +22,12 @@ test('orders and shipping preserve applied filters with distinct identities',()=
   assert.deepEqual(read({section:'orders',record:'o',q:'ignored'}).query,{id:'o'});
   const shipping=read({section:'orders',tab:'shipments',source:'s',platform:'p',status:'delivered'});
   assert.equal(shipping.query.sourceId,'s');assert.equal(shipping.query.platformId,'p');assert.equal(shipping.query.status,'delivered');
+});
+test('Heka scope reads the official configuration and local journal, never a guessed order',()=>{
+  const heka=scope({section:'orders',tab:'heka',record:'unrelated-order',q:'private'});
+  assert.deepEqual(heka.guideTaskIds,['heka']);
+  assert.deepEqual(heka.reads.map(({domain,query})=>[domain,query]),[['business',{resource:'heka-status'}],['business',{resource:'heka-journal',page:1}]]);
+  assert.equal(read({section:'business',tab:'shipping'}).query.resource,'heka-status');
 });
 test('cash uses real period bounds, translates person and distinguishes accounts from closings',()=>{
   const expense=read({section:'cash',tab:'expenses',seller:'person',category:'advertising',period:'week',anchor:'2026-11-11'}).query;
@@ -38,6 +45,15 @@ test('report savedMetric binds to snapshot and ignores live controls',()=>{
   assert.equal(read({section:'reports',mode:'saved'}).query.mode,'list');
   assert.equal(read({section:'reports',seller:'s'}).query.filters.seller,'s');
 });
+test('only a visible live report can carry its source data revision',()=>{
+  const live={section:'reports'}, selection={kind:'report',snapshotId:null,metric:null,issue:null};
+  assert.deepEqual(validateAssistantSelection(live,selection),selection);
+  assert.equal(validateAssistantSelection(live,{...selection,dataRevision:0}).dataRevision,0);
+  assert.equal(validateAssistantSelection(live,{...selection,dataRevision:null}).dataRevision,null);
+  assert.throws(()=>validateAssistantSelection(live,{...selection,dataRevision:'1'}));
+  assert.throws(()=>validateAssistantSelection({...live,mode:'saved'},{...selection,dataRevision:1}));
+  assert.throws(()=>validateAssistantSelection({...live,record:'snapshot'},{...selection,snapshotId:'snapshot',dataRevision:1}));
+});
 test('import selection contains persisted row filters only and new is never a persisted ID',()=>{
   const view={section:'orders',tab:'imports',batch:'b'};
   const selection={kind:'import',batchId:'b',sheet:'Pedidos',rowNumber:65,state:'conflict',q:'texto',page:4};
@@ -52,6 +68,16 @@ test('advertising uses applied view dates, dimensions and source',()=>{
   assert.equal(query.from,'2026-10-01');assert.equal(query.to,'2026-10-31');assert.equal(query.dimension,'daily');assert.equal(query.integrationMethod,'browser');
   assert.equal(read({section:'advertising',tab:'assets',status:'ready'}).query.state,'ready');
   assert.equal(read({section:'advertising',mode:'organic',network:'instagram'}).query.network,'instagram');
+  const record='aabcfd33-1edc-468a-8a38-5bd1f93933c4',view={section:'advertising',tab:'results'};
+  assert.deepEqual(read({...view,record,resultsFocus:'learnings'}).query,{kind:'learnings',campaignId:record});
+  assert.deepEqual(read({...view,record,resultsFocus:'recommendations'}).query,{kind:'analysis',campaignId:record});
+  assert.equal(read({...view,record:'ambiguous',resultsFocus:'learnings'}).query.kind,'results');
+});
+test('the Meta source keeps its account, connection and exact snapshot separate from local campaigns',()=>{
+  const connection='aabcfd33-1edc-468a-8a38-5bd1f93933c4',snapshot='bbcfd733-1edc-468a-8a38-5bd1f93933a4';
+  const view={section:'advertising',source:'meta',connection,account:'act_501',metaCampaign:'9007199254740993',snapshot,page:2};
+  assert.deepEqual(read(view).query,{kind:'meta-inventory',connection,account:view.account,metaCampaign:view.metaCampaign,snapshot,page:1});
+  assert.deepEqual(read({...view,account:null}).query,{kind:'meta-inventory',connection,page:2});
 });
 test('configuration, storefront and access remain closed resources',()=>{
   for(const resource of ['people','accounts','platforms']) assert.equal(read({section:'business',tab:resource}).query.resource,resource);

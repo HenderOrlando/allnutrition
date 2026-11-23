@@ -6,7 +6,7 @@ import styles from './AdvertisingSelectionDialog.module.css';
 
 const fold = value => value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('es');
 
-export default function AdvertisingSelectionDialog({ triggerId, title, triggerLabel, value, onChange, options, emptySummary = 'Sin seleccionar', disabled = false, searchLabel, emptyResults = 'No hay opciones disponibles.', children }) {
+export default function AdvertisingSelectionDialog({ triggerId, title, triggerLabel, value, onChange, options, emptySummary = 'Sin seleccionar', disabled = false, searchLabel, emptyResults = 'No hay opciones disponibles.', advisorControl, children }) {
   const id = useId();
   const trigger = useRef(null), dialog = useRef(null), list = useRef(null);
   const [draft, setDraft] = useState(null), [query, setQuery] = useState('');
@@ -47,7 +47,7 @@ export default function AdvertisingSelectionDialog({ triggerId, title, triggerLa
       const option = options.find(entry => entry.value === item);
       return option?.summaryLabel ?? option?.label ?? item;
     }).join(', ') : emptySummary}</p>
-    <button ref={trigger} id={triggerId} type="button" className="button subtle" aria-haspopup="dialog" aria-controls={`${id}-dialog`} aria-describedby={`${id}-summary`} disabled={disabled} onClick={start}>{triggerLabel}</button>
+    <button ref={trigger} id={triggerId} type="button" className="button subtle" aria-haspopup="dialog" aria-controls={`${id}-dialog`} aria-describedby={`${id}-summary`} data-advisor-control={advisorControl} disabled={disabled} onClick={start}>{triggerLabel}</button>
     <dialog ref={dialog} id={`${id}-dialog`} className={styles.dialog} aria-labelledby={`${id}-title`} onKeyDown={handleKeyDown}>
       {open && <><header className={styles.header}>
         <h2 id={`${id}-title`} tabIndex={-1} data-dialog-initial-focus>{title}</h2>

@@ -57,7 +57,7 @@ export default function ReportsGuide({ mode = 'live', isSnapshot = false }) {
 
   return (
     <details className={styles.reportHelp}>
-      <summary>Cómo usar Informes</summary>
+      <summary data-advisor-control="report-workspace-guide">Cómo usar Informes</summary>
       <p className={styles.guideRoutine}>
         Elige el período y los filtros, revisa las cifras y sus pendientes, y guarda o descarga cuando lo necesites.
       </p>

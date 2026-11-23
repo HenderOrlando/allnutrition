@@ -80,7 +80,7 @@ export default function HekaFreight({ mode, setMode, draft, onDraft, client, onC
     review('createGuide', input);
   }
   return <section className="settings-card" aria-label="Cotizar o emitir guía">
-    <h3>Cotizar o emitir guía</h3>
+    <h3 tabIndex={create ? undefined : -1} data-advisor-control={create ? undefined : 'heka-quote-form'}>{create ? 'Emitir guía' : 'Cotizar envío'}</h3>
     <div className="admin-actions" role="group" aria-label="Acción de despacho">
       <button type="button" className={`button ${!create ? 'primary' : 'subtle'}`} aria-pressed={!create} disabled={busy} onClick={() => { setMode('quote'); setValidation(''); }}>Cotizar envío</button>
       <button type="button" className={`button ${create ? 'primary' : 'subtle'}`} aria-pressed={create} disabled={busy} onClick={() => { setMode('create'); setValidation(''); }}>Emitir guía</button>
@@ -99,7 +99,7 @@ export default function HekaFreight({ mode, setMode, draft, onDraft, client, onC
           <HekaFields fields={CLIENT} values={client} onChange={onClient}/>
         </> : <details className={styles.details}><summary>Contexto adicional de cotización</summary><HekaFields fields={QUOTE} values={draft} onChange={update}/></details>}
         {validation && <p className="error" role="alert">{validation}</p>}
-        <button type="submit" className="button primary">{create ? 'Revisar antes de emitir' : 'Solicitar cotización'}</button>
+        <button type="submit" className="button primary" data-advisor-control={create?'heka-guide-review':undefined}>{create ? 'Revisar antes de emitir' : 'Solicitar cotización'}</button>
       </fieldset>
     </form>
     {!create && quote && <section className="settings-subform" aria-label="Respuesta de cotización" aria-live="polite">

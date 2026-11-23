@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { openStore } from '../lib/db/index.mjs';
 import { hash, insertRow } from '../lib/business/commands.mjs';
 import { getSavedMetaCampaigns } from '../lib/business/social-meta-campaigns.mjs';
+import { readAssistantBusiness, resumeAssistantBusinessRead } from '../lib/assistant/readers.mjs';
 import { connectionFence } from '../lib/business/social-account-projection.mjs';
 import { listSocialCampaigns } from '../lib/business/social.mjs';
 
@@ -132,6 +133,33 @@ test('exact snapshot membership, partial coverage, decimal reports and historica
   await store.db.run(`DELETE FROM ${store.t('social_account_analyses')} WHERE connection_id=?`, [source.id]);
   assert.deepEqual((await get({ connection: source.id })).items, []);
   assert.equal((await listSocialCampaigns(store)).campaigns.find(row => row.id === local).metaCampaign, null);
+}));
+
+test('Ali reads exact saved Meta captures without returning private fields or selecting an ambiguous identity', () => fixture(async ({ store, connection, snapshot }) => {
+  const source=await connection('PRIVATE_SOURCE_NAME',{userName:'PRIVATE_META_USER'}),other=await connection('Other connection');
+  const first=await snapshot(source,OLD,[campaign(EXTERNAL,ACC,{status:'ACTIVE',name:'PRIVATE_CAMPAIGN_NAME'}),paid(EXTERNAL),adset('801',EXTERNAL)]);
+  await snapshot(source,NEW,[campaign(EXTERNAL)],{state:'partial',coverageState:'partial'});
+  const query={kind:'meta-inventory',connection:source.id,account:ACC,metaCampaign:EXTERNAL,snapshot:first};
+  const read=(query,actor=ACTOR)=>readAssistantBusiness(store,{user:{id:actor}},{domain:'advertising',query,select:{fields:['snapshot','status','metrics','adsets']}});
+  const result=await read(query);
+  assert.equal(result.records[0].status,'ACTIVE');
+  assert.equal(result.records[0].snapshot.id,first);
+  const fragments=[result];
+  while(fragments.at(-1)._continuation) {
+    assert.ok(fragments.length<20, 'La lectura acotada debe terminar');
+    fragments.push(await resumeAssistantBusinessRead(store,{user:{id:ACTOR}},fragments.at(-1)._continuation));
+  }
+  const records=fragments.flatMap(fragment=>fragment.records);
+  assert.deepEqual(records.flatMap(record=>(record.metrics||[]).flatMap(row=>row.values?.spend?.value??[])),['1000.25']);
+  assert.deepEqual(records.flatMap(record=>(record.adsets||[]).map(row=>row.resourceId).filter(Boolean)),['801']);
+  assert.equal(fragments.flatMap(fragment=>fragment.evidence).find(item=>item.field==='status').coverage.state,'partial');
+  assert.equal(result._dataset.recordId,EXTERNAL);
+  assert.deepEqual(result._dataset.filters,{connection:source.id,account:ACC,metaCampaign:EXTERNAL,snapshot:first});
+  assert.doesNotMatch(JSON.stringify(fragments),/PRIVATE_SOURCE_NAME|PRIVATE_META_USER|PRIVATE_CAMPAIGN_NAME|configuration|ciphertext/);
+  await assert.rejects(()=>read({...query,connection:other.id}),{status:404});
+  await assert.rejects(()=>read({...query,account:OTHER}),{status:404});
+  await assert.rejects(()=>read({kind:'meta-inventory',metaCampaign:EXTERNAL}),/cuenta exactas/);
+  await assert.rejects(()=>read(query,'not-an-active-admin'),{status:403});
 }));
 
 test('ambiguous or unverified references fail closed; a verified preparation proves the identity only', () => fixture(async ({ store, get, connection, snapshot, own }) => {

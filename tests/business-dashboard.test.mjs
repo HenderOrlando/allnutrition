@@ -105,6 +105,18 @@ test('persisted acknowledgement remains actionable and priority/date/id paginati
   assert.equal(critical.attention.total,2);assert.equal(critical.attention.page,1);assert.ok(critical.attention.records.every(row=>row.severity==='critical'));
 });
 
+test('an active order alert does not remove the exact metric and period from attention',async t=>{
+  const store=await fixture(t),id=await order(store,'2026-10-10',{cost:null});
+  await store.db.run("UPDATE alert_rules SET enabled=1 WHERE id='business_data_missing'");
+  await insertRow(store,'alerts',{id:'missing-cost',rule_id:'business_data_missing',entity_type:'order',entity_id:id,episode:1,
+    state:'open',severity:'info',first_seen_at:now,last_seen_at:now,responsible_id:null,version:1,created_at:now,updated_at:now,
+    data:JSON.stringify({reason:'Falta el costo histórico.',count:1})});
+  const {attention}=await buildDashboard(store,{period:'quarter',anchor:'2026-10-12',issue:'attention'},{now});
+  assert.equal(attention.records.find(task=>task.id==='missing-cost')?.action.orderId,id);
+  const task=attention.records.find(task=>task.action?.view?.record==='costOfGoods');
+  assert.deepEqual(task?.action.view,{section:'reports',period:'quarter',anchor:'2026-10-01',record:'costOfGoods',issue:'missing'});
+});
+
 test('missing-data drill is the exact unknown subset and cannot show the complete grand total',async t=>{
   const store=await fixture(t);await order(store,'2026-09-01');const unknown=await order(store,'2026-09-02',{cost:null});
   const data=await liveReportClientData(store,{period:'month',anchorDate:'2026-09-01',asOf:now},{metric:'operatingResult',issue:'missing'});

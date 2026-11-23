@@ -90,7 +90,7 @@ export default function ImportColumnMapping({ config, headers, sampleRows, colum
     if (!disabled) setSelector({ ...column, trigger });
   }
   return <section ref={rootRef} className={styles.importMapping} aria-label="Asignación de columnas">
-    <h3 className={styles.subheading}>Asignación de columnas</h3>
+    <h3 className={styles.subheading} tabIndex={-1} data-advisor-control={disabled?undefined:'import-column-destination'}>Asignación de columnas</h3>
     <p>Compara cada columna del archivo con su destino. Las columnas sin decidir bloquean la revisión: asigna un dato o ignóralas explícitamente. Los encabezados repetidos se conservan por posición.</p>
     <div className={styles.importMappingSummary} aria-live="polite">
       <strong>{counts.Asignadas} asignadas</strong><span>{counts['Sin decidir']} sin decidir</span><span>{counts.Ignoradas} ignoradas</span>
@@ -99,7 +99,7 @@ export default function ImportColumnMapping({ config, headers, sampleRows, colum
       {issues.length ? <><strong>{issues.length} {issues.length === 1 ? 'problema de asignación' : 'problemas de asignación'}</strong><p>Cambia el destino, el grupo o el nombre adicional, o ignora la columna. Los problemas aparecen en todas las columnas afectadas.</p><button type="button" className="button subtle" onClick={() => { setQuery(''); setFilter('Con problemas'); setFocusIssue(true); }}>Ir al primer problema</button></> : 'Sin problemas de asignación de destinos.'}
     </div>
     <div className={styles.importMappingToolbar}>
-      <label className="field" htmlFor={searchId}>Buscar columnas<input ref={filterRef} id={searchId} type="search" value={query} placeholder="Encabezado, A, número o destino" onChange={event => setQuery(event.target.value)} /></label>
+      <label className="field" htmlFor={searchId}>Buscar columnas<input ref={filterRef} data-advisor-control="import-column-search" id={searchId} type="search" value={query} placeholder="Encabezado, A, número o destino" onChange={event => setQuery(event.target.value)} /></label>
       <label className="field" htmlFor={filterId}>Mostrar columnas<select id={filterId} value={filter} onChange={event => setFilter(event.target.value)}>{filters.map(value => <option key={value}>{value}</option>)}</select></label>
       <button data-import-next-column type="button" className="button subtle" disabled={disabled || !columnData.some(column => column.state === 'Sin decidir' || column.issues.length) && !onNextSheet} onClick={nextPendingColumn}>Ir a la siguiente columna pendiente</button>
       <button type="button" className="button subtle" disabled={disabled || !counts['Sin decidir'] || !onIgnoreUnassigned} onClick={ignoreUnassigned}>Ignorar columnas sin decidir</button>

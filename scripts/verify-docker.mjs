@@ -387,34 +387,39 @@ async function playwrightChecks(selectors) {
   const commonEnv = {
     E2E_BASE_URL: values.APP_URL, E2E_ALLOW_SELF_SIGNED: '1', PLAYWRIGHT_MEDIA_SMOKE_FILE: join(artifacts, 'media-smoke.json'),
     ALI_FIXTURE_CONTROL_URL: `http://127.0.0.1:${portMapping.fixture}`, ALI_FIXTURE_BASE_URL: 'http://127.0.0.1:3339/v1',
+    ALI_FIXTURE_SCHEDULER: '1',
     TEST_DATABASE_URL: `postgresql://postgres:${values.POSTGRES_PASSWORD}@localhost:${portMapping.db}/allnutrition_test`,
     TEST_ALLOW_DATABASE_RESET: 'allnutrition_test', TEST_DB_SSL: 'verify', TEST_DB_CA_CERT_FILE: join(values.DEPLOY_TLS_DIR, 'ca.crt'),
   };
   const refs = { appImage: { tag: expected.web.imageId, id: expected.web.imageId }, checksImage: { tag: checksImage.imageId, id: checksImage.imageId }, dbImage: { tag: expected.db.imageId, id: expected.db.imageId }, configRoot, run, availablePort, suffix: id };
   const advertising = full || selectors.includes('advertising');
   const advertisingSource = advertising && existsSync('tests/e2e/advertising.spec.mjs') ? readFileSync('tests/e2e/advertising.spec.mjs', 'utf8') : '';
-  let guided, count = 0, advertisingStart;
-  try {
-    if (advertisingSource.includes('ADVERTISING_IMAGE_E2E_URL')) guided = await setupGuidedImageFixture(refs);
-    if (full) {
-      const start = performance.now();
-      count = testOptions('full', { ...commonEnv, ...guided?.environment }, advertisingSource.includes(organicCase) ? ['--grep-invert', organicCase] : []);
-      advertisingStart = start;
-    } else {
-      for (const selector of selectors) {
-        if (selector === 'privacy') continue;
-        const start = performance.now();
-        const [spec] = selector.split(':');
-        const file = `tests/e2e/${spec}.spec.mjs`;
-        const filter = browserFilters[selector];
-        // A pre-tag candidate still runs its full existing spec.
-        const hasTags = !filter?.startsWith('@') || readFileSync(file, 'utf8').includes(filter.split('|')[0]);
-        const executed = testOptions(selector.replace(':', '-'), { ...commonEnv, ...guided?.environment }, [file, ...(filter && hasTags ? ['--grep', filter] : []), ...(spec === 'advertising' && advertisingSource.includes(organicCase) ? ['--grep-invert', organicCase] : [])]);
-        if (spec === 'advertising') { count += executed; advertisingStart = start; }
-        else record(`playwright:${selector}`, start, executed);
-      }
+  const guidedRequired = advertisingSource.includes('ADVERTISING_IMAGE_E2E_URL');
+  const organicFilter = advertisingSource.includes(organicCase) ? ['--grep-invert', organicCase] : [];
+  let count = 0, advertisingStart;
+  async function runProfiles(tag, args) {
+    advertisingStart = performance.now();
+    for (const project of ['desktop', 'mobile']) {
+      // A browser worker claims globally, so each profile needs a fresh queue.
+      const guided = guidedRequired ? await setupGuidedImageFixture({ ...refs, suffix: `${id}-${project}` }) : null;
+      try {
+        count += testOptions(`${tag}-${project}`, { ...commonEnv, ...guided?.environment }, [...args, '--project', project, ...organicFilter]);
+      } finally { await guided?.cleanup(); }
     }
-  } finally { await guided?.cleanup(); }
+  }
+  if (full) await runProfiles('full', []);
+  else for (const selector of selectors) {
+    if (selector === 'privacy') continue;
+    const start = performance.now();
+    const [spec] = selector.split(':');
+    const file = `tests/e2e/${spec}.spec.mjs`;
+    const filter = browserFilters[selector];
+    // A pre-tag candidate still runs its full existing spec.
+    const hasTags = !filter?.startsWith('@') || readFileSync(file, 'utf8').includes(filter.split('|')[0]);
+    const args = [file, ...(filter && hasTags ? ['--grep', filter] : [])];
+    if (spec === 'advertising') await runProfiles(selector, args);
+    else record(`playwright:${selector}`, start, testOptions(selector.replace(':', '-'), commonEnv, args));
+  }
   if (advertisingSource.includes(organicCase)) {
     const approval = await setupOrganicApprovalFixture(refs);
     try { count += testOptions('organic-approval', { ...commonEnv, ...approval.environment }, ['tests/e2e/advertising.spec.mjs', '--project', 'desktop', '--grep', organicCase]); }
@@ -671,7 +676,7 @@ try {
   const required = requiredChecks(plan, mode);
   const has = gate => required.includes(`gate:${gate}`);
   const browser = full || plan.playwright.some(spec => spec !== 'privacy');
-  const browserWorker = browser && (full || plan.playwright.some(spec => spec === 'advertising' || spec !== 'app:media' && /^(?:app|workbook)(?::|$)/.test(spec)));
+  const browserWorker = browser && (full || plan.playwright.some(spec => spec === 'advertising' || spec !== 'app:media' && /^(?:app|assistant|workbook)(?::|$)/.test(spec)));
   const web = has('https') || has('restore') || has('migration');
   const sandboxed = (full ? readdirSync('tests').map(name => `tests/${name}`) : plan.node).filter(nodeSandboxed);
   const databaseChecks = full || browser || Boolean(plan.postgres.length) || has('postgres') || has('scheduler') || has('migration') || has('restore');

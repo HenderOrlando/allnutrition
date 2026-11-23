@@ -324,3 +324,18 @@ test('derived facts preserve exact signs, null comparison base and incompatible-
   assert.throws(()=>calculate('ratio_bps',fact(12),fact(3,{unit:'count'})),{code:'invalid_query'});
   assert.throws(()=>calculate('difference',fact(null),fact(3)),{code:'invalid_query'});
 });
+
+test('C5 el modelo solo ofrece acciones consultadas en este turno y no define el destino', () => {
+  const action = { type: 'action', capabilityId: 'cash.close-day' };
+  const payload = { topic: 'application', blocks: [action], question: null, proposalId: null, remainingReads: [] };
+  const capabilityIds = new Set(['cash.close-day']);
+  const { blocks } = resolveAssistantModelResult(payload, { capabilityIds });
+  assert.deepEqual(blocks.map(({ type, capabilityId, area, mode }) => ({ type, capabilityId, area, mode })),
+    [{ ...action, area: 'cash', mode: 'confirm' }]);
+  assert.deepEqual(Object.keys(blocks[0]).sort(), ['area', 'capabilityId', 'label', 'mode', 'prerequisite', 'type']);
+  assert.throws(() => resolveAssistantModelResult(payload));
+  assert.throws(() => resolveAssistantModelResult(payload, { capabilityIds: new Set(['heka.read-journal']) }));
+  for (const invalid of [[action, action], [{ ...action, href: '/admin?section=users' }]]) {
+    assert.throws(() => resolveAssistantModelResult({ ...payload, blocks: invalid }, { capabilityIds }));
+  }
+});

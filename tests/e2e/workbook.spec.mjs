@@ -302,7 +302,12 @@ async function businessFacts(page, f) {
     }
   }
   const report = await get(page, `/api/admin/reports?period=month&anchor=${f.year}-09-01`);
-  for (const [metric, value] of Object.entries({ netProductSales: 11000000, costOfGoods: 4000000, shippingCosts: 1300000, advertisingExpenses: 2500000, operatingExpenses: 1000000, contribution: 5700000, operatingResult: 2200000 })) expect(report.metrics[metric].value, metric).toBe(value);
+  for (const [metric, value] of Object.entries({ netProductSales: 11000000, costOfGoods: 4000000, shippingCosts: 1300000, advertisingExpenses: 2500000, operatingExpenses: 1000000, contribution: 5700000, operatingResult: 2200000 })) {
+    const before = f.reportBefore.metrics[metric], after = report.metrics[metric];
+    expect(after.knownValue - before.knownValue, metric).toBe(value);
+    expect(after.exclusionReasons, metric).toEqual(before.exclusionReasons);
+    expect(after.value, metric).toBe(before.complete ? before.knownValue + value : null);
+  }
   return { order, shipment, expenses: expenses.records.map(expense => ({ id: expense.id, category: expense.category, amountMinor: expense.amountMinor, identity: expense.importIdentity, campaign: expense.campaign, quantity: expense.quantity, unitCostMinor: expense.unitCostMinor })).sort((a, b) => a.id.localeCompare(b.id)), product, report };
 }
 async function inspectDownloads(page, f, original) {
@@ -356,6 +361,8 @@ test('libro sintético: cuatro pasos, apertura, corrección, perfil y reimportac
   const year = Array.from({ length: 20 }, (_, index) => 2001 + index).find(year => !usedYears.has(year));
   expect(year, 'Se necesita un septiembre sintético sin otra vigencia de esta prueba').toBeTruthy();
   const f = { marker, year, customer: `Cliente sintético ${marker}`, phone: '3001234567', productKey: `SKU-${marker}`, productName: `Producto sintético ${marker}`, campaign: `CAMP-${marker}`, orderKey: `ORDER-${marker}`, shipmentKey: `SHIP-${marker}`, tracking: `GUIA-${marker}`, expenseKey: `OP-${marker}`, expenseConcept: `Operación sintética ${marker}`, cutoff: `${year}-10-03`, opening: `${year}-10-01`, profileName: `Perfil sintético ${marker}` };
+  // Undated facts from other fixtures can still affect coverage in this month.
+  f.reportBefore = await get(page, `/api/admin/reports?period=month&anchor=${year}-09-01`);
   const consoleErrors = [], pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
@@ -449,7 +456,9 @@ test('libro sintético: cuatro pasos, apertura, corrección, perfil y reimportac
     await button(page.locator('.cash-detail'), 'Cerrar detalle').click();
     await navigate(page, 'Informes');
     await page.getByLabel('Fecha de referencia', { exact: true }).fill(`${year}-09-01`);
-    await expect(page.locator('.report-metrics')).toContainText(formatMoneyMinor(2200000), { timeout });
+    const result = first.report.metrics.operatingResult;
+    await expect(page.locator('.report-metrics')).toContainText(formatMoneyMinor(result.knownValue), { timeout });
+    if (!result.complete) await expect(page.locator('.report-metrics')).toContainText('Subtotal conocido:');
     await noOverflow(page);
     await page.screenshot({ path: info.outputPath('synthetic-workbook-report.png') });
   });
@@ -965,7 +974,12 @@ test('los problemas abren su fila exacta entre hojas y conservan filtros y búsq
   const locations = card.locator('details').filter({ has: page.locator('summary').filter({ hasText: /^Ubicaciones de las posibles repeticiones$/ }) }).first();
   await locations.locator('summary').click();
   const copyLocation = locations.locator(':scope > div').filter({ has: page.getByText(`${copySheet} · fila 2`, { exact: true }) });
-  response = waitForRows(page, reviewed.id, { sheet: copySheet, rowNumber: '2' });
+  response = page.waitForResponse(received => {
+    const url = new URL(received.url());
+    const request = received.request();
+    return url.pathname === path && !url.search && request.method() === 'POST'
+      && request.postDataJSON()?.sheet === copySheet && request.postDataJSON()?.rowNumber === 2;
+  }, { timeout });
   await button(copyLocation, 'Ver fila original').click();
   const exact = await rowsFromResponse(await response);
   expect(exact.total).toBe(1);

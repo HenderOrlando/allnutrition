@@ -54,18 +54,20 @@ export default function HekaOfficialSettings({ api, onNavigate, onInteractionSta
   return <section className="settings-card" aria-label="Conexión oficial de Heka">
     <h3>Heka · API oficial</h3>
     <p>Genera una llave API desde tu cuenta Heka para configurar la conexión. Los despachos diarios no requieren abrir el portal, usar Electron ni compartir tu contraseña. La llave solo se envía al servidor al guardar y no vuelve a mostrarse.</p>
-    <p><a href="https://new.hekaentrega.co/api/docs" target="_blank" rel="noreferrer">Documentación oficial de Heka</a></p>
+    <p><a href="https://new.hekaentrega.co/api/docs" target="_blank" rel="noreferrer" data-advisor-control="heka-official-documentation-link">Documentación oficial de Heka</a></p>
     {!saved && (busy ? <p role="status">Consultando configuración Heka…</p> : <button type="button" className="button subtle" onClick={read}>Consultar configuración Heka</button>)}
     {!confirmation && <HekaAlert error={error}/>}
     {notice && <p role="status">{notice}</p>}
     {saved && <>
-      <HekaEnvironment environment={saved.environment}/>
-      <p>{saved.configured ? 'Hay una llave guardada. El acceso depende de las autorizaciones de la cuenta en Heka.' : 'No hay una llave guardada. Las operaciones oficiales están deshabilitadas.'} Para gestionar novedades, usa una llave vinculada a una cuenta seller.</p>
+      <section aria-label="Estado guardado de Heka oficial" tabIndex={-1} data-advisor-control="heka-official-connection-status">
+        <HekaEnvironment environment={saved.environment}/>
+        <p>{saved.configured ? 'Hay una llave guardada. El acceso depende de las autorizaciones de la cuenta en Heka.' : 'No hay una llave guardada. Las operaciones oficiales están deshabilitadas.'} Para gestionar novedades, usa una llave vinculada a una cuenta seller.</p>
+      </section>
       <form ref={form} aria-label="Configurar API oficial de Heka" onSubmit={save} autoComplete="off">
         <fieldset className="editor-fieldset" disabled={busy}>
           <div className="product-form-grid">
-            <label className="field">Entorno<select value={environment} onChange={event => setEnvironment(event.target.value)}><option value="test">Pruebas</option><option value="production">Producción</option></select></label>
-            <label className="field">Llave API de Heka<input ref={key} type="password" autoComplete="new-password" required={!saved.configured || saved.environment !== environment} maxLength={4096} onInput={event => setHasKeyInput(Boolean(event.target.value.trim()))}/></label>
+            <label className="field">Entorno<select data-advisor-control="heka-official-environment" value={environment} onChange={event => setEnvironment(event.target.value)}><option value="test">Pruebas</option><option value="production">Producción</option></select></label>
+            <label className="field">Llave API de Heka<input ref={key} type="password" data-advisor-control={environment==='test'?'heka-official-test-key-form':'heka-official-production-confirmation'} autoComplete="new-password" required={!saved.configured || saved.environment !== environment} maxLength={4096} onInput={event => setHasKeyInput(Boolean(event.target.value.trim()))}/></label>
           </div>
           {saved.configured && saved.environment === environment && <p className="hint">Deja la llave en blanco para conservar la guardada. Para reemplazarla, genera otra en Heka y guárdala aquí.</p>}
           {saved.environment !== environment && <p className="hint">Cambiar de entorno requiere una llave para el nuevo entorno. No se reutilizará la llave anterior.</p>}
@@ -73,8 +75,8 @@ export default function HekaOfficialSettings({ api, onNavigate, onInteractionSta
             <button type="submit" className="button primary" disabled={!dirty}>Guardar conexión Heka</button>
             {dirty && <button type="button" className="button subtle" onClick={discard}>Descartar cambios</button>}
             {saved.configured && <>
-              <button type="button" className="button subtle" disabled={dirty} onClick={check}>Comprobar acceso</button>
-              <button type="button" className="button subtle" disabled={dirty} onClick={() => { setError(''); setConfirmation('disconnect'); }}>Retirar llave del panel</button>
+              <button type="button" className="button subtle" data-advisor-control="heka-official-check-access" disabled={dirty} onClick={check}>Comprobar acceso</button>
+              <button type="button" className="button subtle" data-advisor-control="heka-official-withdraw-key" disabled={dirty} onClick={() => { setError(''); setConfirmation('disconnect'); }}>Retirar llave del panel</button>
               <button type="button" className="button subtle" disabled={dirty} onClick={() => onNavigate({ section: 'orders', tab: 'heka' })}>Abrir operaciones Heka</button>
             </>}
           </div>

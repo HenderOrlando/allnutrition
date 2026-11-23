@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import WorkspaceTabs from './WorkspaceTabs';
 import styles from './AdvertisingWorkspace.module.css';
 import accountStyles from './AdvertisingResults.module.css';
+import useDialog from './useDialog';
 
 const ROOT = '/api/admin/social/connections';
 const objectives = { reach: 'Alcance', engagement: 'Interacción', traffic: 'Tráfico', whatsapp: 'WhatsApp', sales: 'Ventas' };
@@ -57,7 +58,8 @@ function useAccountAnalysis({ api, connectionId, objective, content, revision, o
     lock.current = true; setBusy(true); setActionError(null);
     const controller = new AbortController(); mutations.current.add(controller);
     try {
-      await api(`${ROOT}/${encodeURIComponent(connectionId)}/analysis`, { method: 'POST', body: JSON.stringify({ action }), signal: controller.signal });
+      const next = await api(`${ROOT}/${encodeURIComponent(connectionId)}/analysis`, { method: 'POST', body: JSON.stringify({ action }), signal: controller.signal });
+      if (page === 1 && !content) setRead({ key, report: next, error: '', loading: false });
       setPage(1); setRefresh(value => value + 1); await onMutation?.();
     } catch (cause) { if (cause.name !== 'AbortError') setActionError({ key, message: cause.message }); }
     finally { mutations.current.delete(controller); lock.current = false; setBusy(false); }
@@ -70,35 +72,54 @@ function useAccountAnalysis({ api, connectionId, objective, content, revision, o
 
 export default function MetaAccountAnalysis({ api, connections = [], onInteractionStateChange, onMutation }) {
   const eligible = connections.filter(connection => connection.provider === 'meta' && connection.integrationMethod === 'api');
-  const [selected, setSelected] = useState('');
-  const connection = eligible.find(item => item.id === selected) || eligible[0];
+  const [selected, setSelected] = useState(''), [consent, setConsent] = useState(null);
+  const connection = selected ? eligible.find(item => item.id === selected) : eligible.length === 1 ? eligible[0] : null;
   const connectionId = connection?.id || '', objective = connection?.measurementConfig?.objective || 'reach';
   const { report, analysis, page, setPage, act, busy, active, loading, readError, actionError, retry } = useAccountAnalysis({ api, connectionId, objective, onInteractionStateChange, onMutation });
   const progress = analysis?.progress, error = readError || actionError, errorRef = useRef(null);
+  const dialog = useRef(null);
+  const closeConsent = useDialog(dialog, { open: Boolean(consent), onClose: () => setConsent(null) });
+  const canRefresh = Boolean(report && !readError && !busy && !active && connection?.state === 'connected' && !connection.revalidationRequired && !connection.disconnectStatus);
+  const canCancel = Boolean(active && !readError && !busy);
+  const rules = analysis?.rules.current ?? [];
+  const consentCurrent = consent?.connectionId === connectionId && consent.analysisId === (analysis?.id ?? null);
+  const requestConsent = action => setConsent({ action, connectionId, analysisId: analysis?.id ?? null });
+  const confirmConsent = () => {
+    if (!consentCurrent || !(consent.action === 'refresh' ? canRefresh : canCancel)) return;
+    setConsent(null);
+    void act(consent.action);
+  };
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
-  return <section className={`${styles.panel} ${accountStyles.accountPanel}`} aria-label="Análisis histórico de las cuentas Meta">
+  return <section className={`${styles.panel} ${accountStyles.accountPanel}`} aria-label="Análisis histórico de las cuentas Meta"
+    data-account-analysis-connection={connectionId || undefined} data-account-analysis-state={connectionId ? (readError ? 'error' : analysis?.state || (report ? 'missing' : 'loading')) : undefined}>
     <header className={accountStyles.stageTitle}><p className={styles.eyebrow}>Lectura de la cuenta</p><h3>Análisis histórico y contenido actual</h3>
       <p>Examina los recursos profesionales accesibles de los últimos 12 meses calendario y su configuración actual. El análisis no publica ni cambia anuncios.</p>
     </header>
-    {!eligible.length ? <p>Conecta Meta mediante OAuth o token manual para iniciar el análisis de solo lectura.</p> : <>
-      <label className="field">Conexión<select value={connectionId} disabled={busy} onChange={event => { setSelected(event.target.value); setPage(1); }}>
+    {!eligible.length ? <p tabIndex={-1} data-advisor-control="ad-account-analysis-connection">Conecta Meta mediante OAuth o token manual para iniciar el análisis de solo lectura.</p> : <>
+      <label className="field">Conexión<select data-advisor-control="ad-account-analysis-connection" value={connectionId} disabled={busy} onChange={event => { setSelected(event.target.value); setPage(1); }}>
+        <option value="" disabled>Elige la conexión Meta exacta</option>
         {eligible.map(item => <option key={item.id} value={item.id}>{item.name || item.id}{item.authenticationMethod === 'token' || item.readOnly ? ' · Token / solo lectura' : ' · OAuth'}</option>)}
       </select></label>
+    </>}
+    {connection && <>
       <p>Objetivo configurado: <strong>{objectives[report?.objective || objective] || 'Alcance'}</strong>. Se lee de la medición de esta conexión; cambiar el objetivo reevalúa propuestas locales sin repetir las consultas del año.</p>
       {(report?.readOnly || connection?.authenticationMethod === 'token' || connection?.readOnly) && <p className={styles.notice}>Token manual · Solo lectura. Este panel no activa ni publica contenido.</p>}
       {loading && <p role="status">{report ? 'Actualizando estado local…' : 'Consultando análisis guardado…'}</p>}
       {!loading && !analysis && !error && <p>Aún no existe un análisis guardado para esta conexión.</p>}
       <div className={accountStyles.refreshActions}>
         <div className={accountStyles.operation}>
-          <button type="button" className="button subtle" disabled={busy || active || connection?.state !== 'connected' || connection?.revalidationRequired || Boolean(connection?.disconnectStatus)} onClick={() => act('refresh')}>{analysis ? 'Actualizar análisis desde Meta' : 'Iniciar análisis desde Meta'}</button>
+          <button type="button" className="button subtle" data-advisor-control={canRefresh ? 'ad-account-analysis-refresh' : undefined} disabled={!canRefresh} onClick={() => requestConsent('refresh')}>{analysis ? 'Actualizar análisis desde Meta' : 'Iniciar análisis desde Meta'}</button>
           <p className={styles.help}>Solicita una nueva lectura de los recursos accesibles. Está sujeta a permisos y límites de Meta.</p>
-          {active && <button type="button" className="button subtle" disabled={busy} onClick={() => act('cancel')}>Cancelar lectura local</button>}
+          {report && !busy && !readError && !canRefresh && <p tabIndex={-1} data-advisor-control="ad-account-analysis-refresh">{active ? 'Ya hay una lectura histórica en curso para esta conexión.' : 'Reconecta o valida esta cuenta antes de iniciar otra lectura histórica.'}</p>}
+          {active && <button type="button" className="button subtle" data-advisor-control={canCancel ? 'ad-account-analysis-cancel' : undefined} disabled={!canCancel} onClick={() => requestConsent('cancel')}>Cancelar lectura local</button>}
+          {report && !active && !busy && !readError && <p tabIndex={-1} data-advisor-control="ad-account-analysis-cancel">No hay una lectura histórica en curso para esta conexión.</p>}
         </div>
         <div className={accountStyles.operation}>
           <button type="button" className="button subtle" disabled={busy || loading} onClick={retry}>Reintentar estado local</button>
           <p className={styles.help}>Consulta el estado guardado aquí. No inicia un nuevo análisis en Meta.</p>
         </div>
       </div>
+      {report && !analysis && !readError && <p tabIndex={-1} data-advisor-control="ad-account-analysis-rule-source">Esta conexión aún no tiene una lectura guardada con fuentes de Meta.</p>}
       {analysis && <>
         <div className={accountStyles.accountStatus}>
           <h4>Estado de la lectura</h4>
@@ -116,9 +137,12 @@ export default function MetaAccountAnalysis({ api, connections = [], onInteracti
           <p>Permisos confirmados en la última lectura: {analysis.permissions?.join(', ') || 'Sin permisos confirmados todavía'}. Ads requiere ads_read o ads_management y tareas de análisis; Facebook requiere pages_read_engagement y read_insights para métricas; Instagram requiere instagram_basic, instagram_manage_insights y pages_read_engagement. Descubrir páginas requiere pages_show_list.</p>
           <ul>{analysis.coverage.map((item, index) => <li key={`${item.kind}:${item.resourceId || 'discovery'}:${index}`}><strong>{item.kind} {item.resourceId || '· Descubrimiento'}: {coverageStates[item.state] || item.state}</strong>{item.notice && <p>{item.notice}</p>}{item.missing?.length > 0 && <ul>{item.missing.map((missing, i) => <li key={i}>{missing.stage || 'Acceso'}: {missing.reason} · {missing.count || 1} incidencias{missing.sampleObjectIds?.length ? ` · Muestra: ${missing.sampleObjectIds.join(', ')}` : ''}</li>)}</ul>}</li>)}</ul>
         </details>
-        <details className={`${styles.technicalDetails} ${accountStyles.disclosure}`}><summary>Reglas actuales, evidencia y límites históricos</summary>
+        <details className={`${styles.technicalDetails} ${accountStyles.disclosure}`} data-advisor-disclosure>
+          <summary data-advisor-control={rules.length > 1 ? 'ad-account-analysis-rule-source' : undefined}>Reglas actuales, evidencia y límites históricos</summary>
           <p>Fuentes revisadas: {analysis.rules.sourceReviewedAt}. Captura: {date(analysis.rules.observedAt)}. API {analysis.rules.apiVersion}; no constituye certificación legal ni aprobación de Meta.</p>
-          <ul>{analysis.rules.current.map(rule => <li key={rule.id}>{rule.rule} <a href={rule.source} target="_blank" rel="noreferrer">Fuente Meta</a></li>)}</ul>
+          {rules.length > 1 && <p>Elige la fuente de la regla exacta que quieres revisar. El enlace abre Meta en otra pestaña.</p>}
+          {rules.length ? <ul>{rules.map(rule => <li key={rule.id}>{rule.rule} <a aria-label={`Fuente Meta: ${rule.rule}`} data-advisor-control={rules.length === 1 ? 'ad-account-analysis-rule-source' : undefined} href={rule.source} target="_blank" rel="noopener noreferrer">Fuente Meta</a></li>)}</ul>
+            : <p tabIndex={-1} data-advisor-control="ad-account-analysis-rule-source">La lectura guardada no contiene fuentes de reglas vigentes.</p>}
           <p><strong>Histórico: no verificable.</strong> {analysis.rules.historical.notice}</p>
           <ul>{analysis.rules.limits.map(limit => <li key={limit}>{limit}</li>)}</ul>
         </details>
@@ -142,6 +166,16 @@ export default function MetaAccountAnalysis({ api, connections = [], onInteracti
         </details>
       </>}
     </>}
+    {consent && <dialog ref={dialog} className={`admin-dialog ${styles.dialog}`} aria-labelledby="account-analysis-consent-title" aria-describedby="account-analysis-consent-detail">
+      <header className={styles.dialogHeader}><h2 id="account-analysis-consent-title">{consent.action === 'refresh' ? 'Autorizar una nueva lectura histórica' : 'Confirmar cancelación de la lectura local'}</h2></header>
+      <p id="account-analysis-consent-detail">{consent.action === 'refresh'
+        ? <>Cuenta: <strong>{connection?.name || consent.connectionId}</strong>. Se encolará una lectura de los recursos accesibles de Meta. No se publicará ni se cambiarán anuncios o permisos.</>
+        : <>Cuenta: <strong>{connection?.name || consent.connectionId}</strong>. Se detendrá la lectura local {consent.analysisId}. No se modificarán publicaciones, accesos ni medición en Meta.</>}</p>
+      <div className={styles.actions}>
+        <button type="button" className="button subtle" data-dialog-initial-focus onClick={closeConsent}>Volver sin cambios</button>
+        <button type="button" className="button primary" disabled={!consentCurrent || !(consent.action === 'refresh' ? canRefresh : canCancel)} onClick={confirmConsent}>{consent.action === 'refresh' ? 'Autorizar consulta histórica a Meta' : 'Confirmar cancelación local'}</button>
+      </div>
+    </dialog>}
     {error && <p ref={errorRef} tabIndex={-1} className={styles.error} role="alert">{error}</p>}
   </section>;
 }

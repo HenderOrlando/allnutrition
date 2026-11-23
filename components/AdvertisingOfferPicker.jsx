@@ -22,7 +22,7 @@ export function OfferSummary({ item, gift = false }) {
 }
 export const readAdvertisingOffer = async (api, { kind, id }, options) => (await api(`${ROOT}?${new URLSearchParams({ kind, id })}`, options)).offer;
 
-export default function AdvertisingOfferPicker({ api, giftOnly = false, selected, onSelect, onClose }) {
+export default function AdvertisingOfferPicker({ api, giftOnly = false, selected, advisorControl, onSelect, onClose }) {
   const [kind, setKind] = useState(giftOnly ? 'gift' : 'product'), [query, setQuery] = useState('');
   const [offset, setOffset] = useState(0), [page, setPage] = useState(null), [error, setError] = useState(''), [retry, setRetry] = useState(0), [picking, setPicking] = useState(false);
   const input = useRef(null), inFlight = useRef(null);
@@ -51,7 +51,7 @@ export default function AdvertisingOfferPicker({ api, giftOnly = false, selected
   }
   return <div className={styles.stack} role="group" aria-label={giftOnly ? 'Elegir obsequio adicional' : 'Elegir oferta del catálogo'}>
     {!giftOnly && <label>Tipo de oferta<select disabled={picking} value={kind} onChange={event => { change(setKind, event.target.value); setOffset(0); }}>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
-    <label>{giftOnly ? 'Buscar obsequios' : 'Buscar oferta por nombre, presentación, sabor o SKU'}<input type="search" ref={input} disabled={picking} value={query} maxLength={100} onChange={event => { change(setQuery, event.target.value); setOffset(0); }}/></label>
+    <label>{giftOnly ? 'Buscar obsequios' : 'Buscar oferta por nombre, presentación, sabor o SKU'}<input type="search" ref={input} data-advisor-control={advisorControl} disabled={picking} value={query} maxLength={100} onChange={event => { change(setQuery, event.target.value); setOffset(0); }}/></label>
     {error && <div role="alert"><p>{error}</p><button type="button" className="button subtle" onClick={() => change(setRetry, retry + 1)}>Reintentar</button></div>}
     {!page && !error && <p role="status">Buscando ofertas…</p>}
     {page && !page.offers.length && <p role="status">No hay coincidencias. Prueba otro sabor, nombre o tipo.</p>}

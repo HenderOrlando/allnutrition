@@ -26,52 +26,52 @@ const NOVELTY_FIELDS = [field('guide_number', 'Número de guía', { maxLength: 1
 const NOVELTY_MORE = [id('id', 'ID de la guía Heka'), field('label', 'Etiqueta exacta de la guía', { maxLength: 160 })];
 const HISTORY_FIELDS = [phone, field('document', 'Documento del destinatario', { inputMode: 'numeric', pattern: '[0-9]+', maxLength: 32 })];
 
-function GuideResults({ guides, busy, onStickers, linking }) {
+function GuideResults({ guides, busy, onStickers, linking, unique }) {
   const [selected, setSelected] = useState([]);
   const guidesAvailable = guides.filter(guide => isHekaId(guide._id));
   function toggle(id, active) { setSelected(current => active ? [...current, id] : current.filter(value => value !== id)); }
   return <>
-    {guidesAvailable.length > 0 && <div className="admin-actions"><button type="button" className="button subtle" disabled={busy || !selected.length} onClick={() => onStickers(selected)}>Preparar etiquetas seleccionadas ({selected.length})</button></div>}
+    {guidesAvailable.length > 0 && <div className="admin-actions"><p tabIndex={-1} data-advisor-control="heka-guide-label-selection">Selecciona las guías que quieres incluir. Prepararlas no descarga el PDF.</p><button type="button" className="button subtle" disabled={busy || !selected.length} onClick={() => onStickers(selected)}>Preparar etiquetas seleccionadas ({selected.length})</button></div>}
     <HekaCards rows={guides}>{guide => <>
       <h4>Guía {guide.guide_number ?? 'sin número informado'}</h4>
       <HekaValues items={[
         ['ID Heka', guide._id], ['Transportadora', carrierLabel(guide.distributor_id)], ['Estado informado por Heka', guide.status],
       ]}/>
       {isHekaId(guide._id) && <label className="checkbox-field"><input type="checkbox" checked={selected.includes(guide._id)} disabled={busy} onChange={event => toggle(guide._id, event.target.checked)}/>Incluir guía {guide.guide_number ?? guide._id} en etiquetas</label>}
-      <HekaGuideOrderLink guide={guide} busy={busy} linking={linking}/>
+      <HekaGuideOrderLink guide={guide} busy={busy} linking={linking} unique={unique}/>
     </>}</HekaCards>
   </>;
 }
 
 export function HekaGuides({ busy, perform, onStickers, linking }) {
-  return <HekaSearch title="Buscar guías" operation="guides" fields={GUIDE_FIELDS} more={GUIDE_MORE} busy={busy} perform={perform}
+  return <HekaSearch title="Buscar guías" operation="guides" advisorControl="heka-guide-search" fields={GUIDE_FIELDS} more={GUIDE_MORE} busy={busy} perform={perform}
     intro="Consulta el estado registrado por Heka. Pago, conciliación y recaudo son filtros de búsqueda, no acciones financieras. Esta consulta no actualiza pedidos locales ni ofrece un historial de rastreo independiente.">
-    {rows => <GuideResults guides={rows} busy={busy} onStickers={onStickers} linking={linking}/>}
+    {(rows, unique) => <GuideResults guides={rows} busy={busy} onStickers={onStickers} linking={linking} unique={unique}/>}
   </HekaSearch>;
 }
 
 export function HekaLookups({ busy, perform, onCity, onWarehouse, onTemplate }) {
   return <>
-    <HekaSearch title="Buscar ciudades" operation="cities" fields={CITY_FIELDS} more={CITY_MORE} busy={busy} perform={perform}>
-      {rows => <HekaCards rows={rows}>{city => <>
+    <HekaSearch title="Buscar ciudades" operation="cities" advisorControl="heka-city-search" fields={CITY_FIELDS} more={CITY_MORE} busy={busy} perform={perform}>
+      {(rows, unique) => <HekaCards rows={rows}>{city => <>
         <h4>{city.label ?? 'Ciudad sin nombre informado'}</h4>
         <HekaValues items={ [['Código DANE', city.dane], ['ID Heka', city._id]] }/>
-        {city.dane && <div className="admin-actions"><button type="button" className="button subtle" disabled={busy} onClick={() => onCity('city_origin', city.dane)}>Usar como origen</button><button type="button" className="button subtle" disabled={busy} onClick={() => onCity('city_destination', city.dane)}>Usar como destino</button></div>}
+        {city.dane && <div className="admin-actions"><button type="button" className="button subtle" data-advisor-control={unique?'heka-copy-origin-city':undefined} disabled={busy} onClick={() => onCity('city_origin', city.dane)}>Usar como origen</button><button type="button" className="button subtle" data-advisor-control={unique?'heka-copy-destination-city':undefined} disabled={busy} onClick={() => onCity('city_destination', city.dane)}>Usar como destino</button></div>}
       </>}</HekaCards>}
     </HekaSearch>
-    <HekaSearch title="Listar bodegas" operation="warehouses" fields={WAREHOUSE_FIELDS} more={WAREHOUSE_MORE} busy={busy} perform={perform}>
-      {rows => <HekaCards rows={rows}>{warehouse => <>
+    <HekaSearch title="Listar bodegas" operation="warehouses" advisorControl="heka-warehouse-search" fields={WAREHOUSE_FIELDS} more={WAREHOUSE_MORE} busy={busy} perform={perform}>
+      {(rows, unique) => <HekaCards rows={rows}>{warehouse => <>
         <h4>{warehouse.name ?? 'Bodega sin nombre informado'}</h4>
         <HekaValues items={ [['ID de bodega', warehouse._id], ['Estado', warehouse.status]] }/>
-        {isHekaId(warehouse._id) && <button type="button" className="button subtle" disabled={busy} onClick={() => onWarehouse(warehouse._id)}>Usar bodega para el envío</button>}
+        {isHekaId(warehouse._id) && <button type="button" className="button subtle" data-advisor-control={unique?'heka-copy-warehouse':undefined} disabled={busy} onClick={() => onWarehouse(warehouse._id)}>Usar bodega para el envío</button>}
       </>}</HekaCards>}
     </HekaSearch>
-    <HekaSearch title="Consultar plantillas" operation="templates" fields={TEMPLATE_FIELDS} page={false} busy={busy} perform={perform}>
-      {rows => <HekaCards rows={rows}>{template => <>
+    <HekaSearch title="Consultar plantillas" operation="templates" advisorControl="heka-template-search" fields={TEMPLATE_FIELDS} page={false} busy={busy} perform={perform}>
+      {(rows, unique) => <HekaCards rows={rows}>{template => <>
         <h4>{template.label ?? 'Plantilla sin nombre informado'}</h4>
         <HekaValues items={ [['ID de plantilla', template._id], ['Código DANE de destino', template.city_destination], ['Tipo de pago', PAYMENT_TYPES.find(([value]) => value === String(template.type_payment))?.[1]],
           ['Valor declarado', template.declared_value], ['Peso', template.weight], ['Alto', template.height], ['Largo', template.long], ['Ancho', template.width], ['Sumar costo del envío', template.withshipping_cost]] }/>
-        <button type="button" className="button subtle" disabled={busy} onClick={() => onTemplate(template)}>Aplicar a los datos de envío</button>
+        <button type="button" className="button subtle" data-advisor-control={unique?'heka-apply-template':undefined} disabled={busy} onClick={() => onTemplate(template)}>Aplicar a los datos de envío</button>
       </>}</HekaCards>}
     </HekaSearch>
   </>;
@@ -84,12 +84,12 @@ export function HekaCustomers({ busy, perform }) {
     perform('clientRating', { phone: Number(values.phone), limit: 1 }, result => setRating({ result }));
   }
   return <>
-    <HekaSearch title="Consultar historial de destinatario" operation="clientHistory" fields={HISTORY_FIELDS} busy={busy} perform={perform}
+    <HekaSearch title="Consultar historial de destinatario" operation="clientHistory" advisorControl="heka-recipient-history-form" fields={HISTORY_FIELDS} busy={busy} perform={perform}
       intro="Usa un teléfono o documento autorizado para consultar guías previas. Heka puede enmascarar datos.">
       {rows => <HekaCards rows={rows}>{row => <><h4>Guía {row.guide_number ?? 'sin número informado'}</h4><HekaValues items={ [['Destinatario', person(row)], ['Documento', row.document]] }/></>}</HekaCards>}
     </HekaSearch>
     <section className="settings-card" aria-label="Calificación del destinatario">
-      <h3>Calificación del destinatario</h3>
+      <h3 tabIndex={-1} data-advisor-control="heka-recipient-rating-form">Calificación del destinatario</h3>
       <form aria-label="Consultar calificación del destinatario" onSubmit={rate}>
         <fieldset className="editor-fieldset" disabled={busy}>
           <HekaField {...phone} required value={values.phone} onChange={(name, value) => setValues({ [name]: value })}/>
@@ -105,7 +105,7 @@ export function HekaCustomers({ busy, perform }) {
   </>;
 }
 
-function NoveltyCard({ guide, busy, review }) {
+function NoveltyCard({ guide, busy, review, unique }) {
   const [solution, setSolution] = useState('');
   const last = guide.last_novelty, canSolve = isHekaId(guide._id) && isHekaId(last?._id) && ['in_novelty', 'in_review'].includes(guide.status_novelty);
   function submit(event) {
@@ -121,7 +121,7 @@ function NoveltyCard({ guide, busy, review }) {
     </ol></details>}
     {canSolve && <form aria-label={`Solucionar novedad: ${guide.guide_number ?? last._id}`} onSubmit={submit}>
       <fieldset className="editor-fieldset" disabled={busy}>
-        <HekaField name="solution" type="textarea" label="Solución para Heka" maxLength={2000} required value={solution} onChange={(_, value) => setSolution(value.replaceAll(/[\r\n\t]/g, ' '))}/>
+        <HekaField name="solution" type="textarea" label="Solución para Heka" data-advisor-control={unique?'heka-novelty-review':undefined} maxLength={2000} required value={solution} onChange={(_, value) => setSolution(value.replaceAll(/[\r\n\t]/g, ' '))}/>
         <button type="submit" className="button subtle" disabled={!solution.trim()}>Revisar solución</button>
       </fieldset>
     </form>}
@@ -129,18 +129,18 @@ function NoveltyCard({ guide, busy, review }) {
 }
 
 export function HekaNovelties({ busy, perform, review }) {
-  return <HekaSearch title="Consultar novedades" operation="novelties" fields={NOVELTY_FIELDS} more={NOVELTY_MORE} busy={busy} perform={perform}
+  return <HekaSearch title="Consultar novedades" operation="novelties" advisorControl="heka-novelty-search" fields={NOVELTY_FIELDS} more={NOVELTY_MORE} busy={busy} perform={perform}
     intro="Se requiere una llave de una cuenta seller. Heka solo acepta soluciones en novedad o en revisión. Una solución aprobada por la API pasa a revisión, no queda resuelta automáticamente.">
-    {rows => <HekaCards rows={rows}>{guide => <NoveltyCard guide={guide} busy={busy} review={review}/>}</HekaCards>}
+    {(rows, unique) => <HekaCards rows={rows}>{guide => <NoveltyCard guide={guide} busy={busy} review={review} unique={unique}/>}</HekaCards>}
   </HekaSearch>;
 }
 
-export function HekaStickers({ busy, perform, ids, onIds }) {
-  const [mode, setMode] = useState('guide'), [documentId, setDocumentId] = useState(''), [validation, setValidation] = useState(''), [downloaded, setDownloaded] = useState(false);
+export function HekaStickers({ busy, perform, ids, onIds, mode, onMode, documentId, onDocumentId }) {
+  const [validation, setValidation] = useState(null), [downloadedMode, setDownloadedMode] = useState(null);
   function download(event) {
-    event.preventDefault(); setValidation(''); setDownloaded(false);
-    const guides = [...new Set(ids.trim().toLowerCase().split(/[\s,]+/))];
-    if (mode === 'guide' && (!guides.every(isHekaId) || guides.length > 20)) {
+    event.preventDefault(); setValidation(null); setDownloadedMode(null);
+    const guides = mode === 'guide' ? [...new Set(ids.trim().toLowerCase().split(/[\s,]+/))] : null;
+    if (guides && (!guides.every(isHekaId) || guides.length > 20)) {
       setValidation('Ingresa de 1 a 20 IDs de guía Heka de 24 caracteres hexadecimales.'); return;
     }
     perform('sticker', mode === 'guide' ? { type: mode, guides } : { type: mode, id: documentId }, blob => {
@@ -148,7 +148,7 @@ export function HekaStickers({ busy, perform, ids, onIds }) {
       const url = URL.createObjectURL(blob), link = document.createElement('a');
       try { link.href = url; link.download = 'etiquetas-heka.pdf'; document.body.append(link); link.click(); }
       finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-      setDownloaded(true);
+      setDownloadedMode(mode);
     });
   }
   return <section className="settings-card" aria-label="Etiquetas PDF de Heka">
@@ -156,13 +156,13 @@ export function HekaStickers({ busy, perform, ids, onIds }) {
     <p>El PDF puede agrupar hasta 20 guías de tu cuenta si comparten transportadora y tipo de pago. Usa los IDs internos de Heka, no los números de guía. También puedes consultar un documento guardado por ID.</p>
     <form aria-label="Generar etiquetas PDF" onSubmit={download}>
       <fieldset className="editor-fieldset" disabled={busy}>
-        <HekaField name="type" label="Origen de etiquetas" options={ [['guide', 'Guías'], ['document', 'Documento guardado']] } required value={mode} onChange={(_, value) => { setMode(value); setValidation(''); setDownloaded(false); }}/>
-        {mode === 'guide' ? <HekaField name="guides" type="textarea" label="IDs de guías Heka" required maxLength={1500} value={ids} onChange={(_, value) => onIds(value)}/>
-          : <HekaField name="id" label="ID de documento Heka" required pattern={HEKA_ID} value={documentId} onChange={(_, value) => setDocumentId(value)}/>}
-        {validation && <p role="alert" className="error">{validation}</p>}
+        <HekaField name="type" label="Origen de etiquetas" options={ [['guide', 'Guías'], ['document', 'Documento guardado']] } required value={mode} onChange={(_, value) => { onMode(value); setValidation(null); setDownloadedMode(null); }}/>
+        {mode === 'guide' ? <HekaField name="guides" type="textarea" label="IDs de guías Heka" data-advisor-control="heka-guide-label-download" required maxLength={1500} value={ids} onChange={(_, value) => onIds(value)}/>
+          : <HekaField name="id" label="ID de documento Heka" data-advisor-control="heka-saved-label-download" required pattern={HEKA_ID} value={documentId} onChange={(_, value) => onDocumentId(value)}/>}
+        {mode==='guide' && validation && <p role="alert" className="error">{validation}</p>}
         <button type="submit" className="button primary">Descargar etiquetas PDF</button>
       </fieldset>
     </form>
-    {downloaded && <p role="status">Se inició la descarga del PDF de Heka.</p>}
+    {downloadedMode===mode && <p role="status">Se inició la descarga del PDF de Heka.</p>}
   </section>;
 }

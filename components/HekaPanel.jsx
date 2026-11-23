@@ -55,14 +55,15 @@ export function HekaEnvironment({ environment }) {
   return <p className={`${styles.environment} ${environment === 'production' ? styles.production : ''}`}><strong>Entorno Heka: {hekaEnvironment(environment)}.</strong>{environment === 'production' ? ' Las acciones confirmadas operan en la cuenta real.' : ' Usa datos de prueba, no datos de clientes reales.'}</p>;
 }
 
-export function HekaConfirmation({ title, children, busy, error, onClose, onConfirm, action, acknowledgement, disabled = false, confirmationKey = 'intent' }) {
+export function HekaConfirmation({ title, children, busy, error, onClose, onConfirm, action, acknowledgement, disabled = false, confirmationKey = 'intent', advisorControl, onStartAdvisor }) {
   const ref = useRef(null), [confirmedKey, setConfirmedKey] = useState(null);
   const confirmed = confirmedKey === confirmationKey;
   const close = useDialog(ref, { busy, onClose });
   return <dialog ref={ref} className={`editor-drawer ${styles.confirmation}`} aria-labelledby="heka-confirm-title" aria-busy={busy}>
-    <header><h2 id="heka-confirm-title" tabIndex={-1} data-dialog-initial-focus>{title}</h2></header>
+    <header><h2 id="heka-confirm-title" tabIndex={-1} data-advisor-control={advisorControl} data-dialog-initial-focus>{title}</h2></header>
     <div className="drawer-body">
       {children}
+      {onStartAdvisor&&<button type="button" className="button subtle" disabled={busy} onClick={onStartAdvisor}>Ayúdame con esta revisión</button>}
       {acknowledgement && <label className="checkbox-field"><input type="checkbox" checked={confirmed} disabled={busy || disabled} onChange={event => setConfirmedKey(event.target.checked ? confirmationKey : null)}/>{acknowledgement}</label>}
       <HekaAlert error={error}/>
       {busy && <p role="status">Enviando solicitud…</p>}

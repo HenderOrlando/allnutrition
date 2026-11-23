@@ -67,7 +67,7 @@ function Account({ user, onSignOut, interactionLocked }) {
     <div className="user-avatar" aria-hidden="true">AN</div>
     <div><strong>Administrador</strong><span>{user.email}</span></div>
     <button type="button" className="icon-button" disabled={interactionLocked}
-      aria-label="Cerrar sesión" title="Cerrar sesión" onClick={onSignOut}>
+      aria-label="Cerrar sesión" title="Cerrar sesión" data-advisor-control="admin-sign-out" onClick={onSignOut}>
       <Icon name="logout" size={20} />
     </button>
   </div>;
@@ -218,9 +218,14 @@ function KeyboardShortcuts({ shortcut }) {
   </details>;
 }
 
-export default function AdminNavigation({ view, user, onNavigate, onCreate, onSignOut, onOpenAssistant, interactionLocked }) {
+export default function AdminNavigation({ view, user, onNavigate, onCreate, onSignOut, onOpenAssistant, advisorUnread = 0, interactionLocked, showSignOut }) {
   const [dialog, setDialog] = useState(null);
   const [shortcut, setShortcut] = useState('Ctrl K');
+  const advisorStatus = useId();
+  const sidebar = useRef(null);
+  useEffect(() => {
+    if (showSignOut && !interactionLocked && sidebar.current?.getClientRects().length === 0) setDialog('menu');
+  }, [showSignOut, interactionLocked]);
   useEffect(() => {
     if (/Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform)) setShortcut('⌘ K');
   }, []);
@@ -248,7 +253,8 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
   const secondarySection = !quickSections.some(section => section.id === activeArea);
   return <>
     <a className="admin-skip-link" href="#admin-workspace">Saltar al contenido</a>
-    <aside className="admin-sidebar">
+    <span id={advisorStatus} className="sr-only" aria-live="polite" aria-atomic="true">{advisorUnread > 0 ? `${advisorUnread} ${advisorUnread === 1 ? 'aviso sin leer' : 'avisos sin leer'} en Hoy con Ali` : ''}</span>
+    <aside ref={sidebar} className="admin-sidebar">
       <button type="button" className="admin-brand" disabled={interactionLocked}
         aria-label="All Nutrition, ir al Inicio" onClick={() => navigate({ section: 'home' })}>
         <ImageByUrl src="/brand/logo.jpg" alt="" width={44} height={44} />
@@ -264,15 +270,15 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
       </button>
       <p className="topbar-location"><span>Administración</span><Icon name="chevron" size={14} /><strong>{view.section === 'business' && (!view.tab || view.tab === 'setup') ? 'Configuración' : adminLocationLabel(view)}</strong></p>
       <div className="topbar-actions">
-        <button type="button" className="button subtle launcher-trigger" disabled={interactionLocked}
+        <button type="button" className="button subtle launcher-trigger" data-advisor-control="admin-navigation-launcher" disabled={interactionLocked}
           aria-haspopup="dialog" aria-expanded={dialog === 'launcher'} aria-keyshortcuts={shortcut === '⌘ K' ? 'Meta+K' : 'Control+K'}
           onClick={() => openDialog('launcher')}>
           <Icon name="search" size={18} /><span>Ir a…</span><kbd className="launcher-shortcut">{shortcut}</kbd>
         </button>
-        <button type="button" className="button subtle" aria-haspopup="dialog" onClick={onOpenAssistant}>
-          <Icon name="chat" size={18} /><span>Ali</span>
+        <button type="button" className="button subtle advisor-nav-trigger" aria-haspopup="dialog" aria-describedby={advisorUnread > 0 ? advisorStatus : undefined} onClick={onOpenAssistant}>
+          <Icon name="chat" size={18} /><span>Ali</span>{advisorUnread > 0 && <span className="advisor-nav-count" aria-hidden="true">{advisorUnread > 99 ? '99+' : advisorUnread}</span>}
         </button>
-        <a className="button subtle preview-link" href="/?preview=1" target="_blank" rel="noopener noreferrer"
+        <a className="button subtle preview-link" href="/?preview=1" target="_blank" rel="noopener noreferrer" data-advisor-control="admin-storefront-preview-link"
           aria-label="Ver mi página (abre en otra pestaña)">
           <span className="preview-link-label">Ver mi página</span><Icon name="external" size={18} />
         </a>
@@ -284,8 +290,8 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
         onClick={() => navigate({ section: section.id })}>
         <Icon name={section.icon} /><span>{section.label}</span>
       </button>)}
-      <button type="button" className="assistant-bottom-trigger" aria-haspopup="dialog" onClick={onOpenAssistant}>
-        <Icon name="chat" /><span>Ali</span>
+      <button type="button" className="assistant-bottom-trigger advisor-nav-trigger" aria-haspopup="dialog" aria-describedby={advisorUnread > 0 ? advisorStatus : undefined} onClick={onOpenAssistant}>
+        <Icon name="chat" /><span>Ali</span>{advisorUnread > 0 && <span className="advisor-nav-count" aria-hidden="true">{advisorUnread > 99 ? '99+' : advisorUnread}</span>}
       </button>
       <button type="button" className={secondarySection ? 'active' : undefined} disabled={interactionLocked}
         aria-haspopup="dialog" aria-expanded={dialog === 'menu'} onClick={() => openDialog('menu')}>

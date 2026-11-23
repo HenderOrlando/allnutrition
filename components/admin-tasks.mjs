@@ -5,7 +5,7 @@ export const adminTaskGroups = [
   { id: 'orders', label: 'Pedidos y envíos', icon: 'receipt', description: 'Del pedido al seguimiento de la entrega.', tasks: [
     { id: 'orders', label: 'Gestionar pedidos', description: 'Crear, buscar y atender pedidos y cobros.', view: { section: 'orders', tab: 'list' } },
     { id: 'shipments', label: 'Seguimiento de envíos', description: 'Guías, novedades y entregas.', view: { section: 'orders', tab: 'shipments' } },
-    { id: 'heka', label: 'Heka oficial', description: 'Cotizar, emitir guías, descargar etiquetas y gestionar novedades con la API oficial.', view: { section: 'orders', tab: 'heka' } },
+    { id: 'heka', label: 'Heka oficial', description: 'Revisa el historial local, cotiza y gestiona guías por separado en la API oficial.', view: { section: 'orders', tab: 'heka' } },
     { id: 'imports', label: 'Importar Excel', description: 'Cargar archivos y revisar cada lote antes de aplicarlo.', view: { section: 'orders', tab: 'imports' } },
   ] },
   { id: 'products', label: 'Productos y colecciones', icon: 'box', description: 'Organiza lo que vendes y lo que publicas.', tasks: [
@@ -44,7 +44,7 @@ export const adminTaskGroups = [
     { id: 'rules', label: 'Reglas financieras', action: 'Configurar reglas financieras', description: 'Vigencias de ventas, comisiones y gastos, y preferencias de operación.', view: { section: 'business', tab: 'rules' } },
     { id: 'social', label: 'Redes sociales', action: 'Configurar redes sociales', description: 'Configurar Meta, conectar cuentas y habilitar publicación sin reiniciar.', view: { section: 'business', tab: 'social' } },
     { id: 'shipping-integrations', label: 'Proveedores de envíos', action: 'Configurar proveedores de envíos', description: 'Conectar la API oficial de Heka o gestionar el complemento clásico para consultas e importación.', view: { section: 'business', tab: 'shipping' } },
-    { id: 'assistant', label: 'Ali, asistente conversacional', action: 'Configurar Ali', description: 'Proveedor, modelo, clave y conexión verificada. Las consultas y los campos asistibles pueden enviarse al proveedor configurado.', view: { section: 'business', tab: 'assistant' } },
+    { id: 'assistant', label: 'Ali, asistente conversacional', action: 'Configurar Ali', description: 'Proveedor, modelo y acceso verificado: clave API o cuenta de Google para Gemini. Las consultas y los campos asistibles pueden enviarse al proveedor configurado.', view: { section: 'business', tab: 'assistant' } },
     { id: 'alerts', label: 'Alertas y avisos', action: 'Revisar alertas y configurar avisos', description: 'Atender pendientes y ajustar umbrales y responsables dentro del panel.', view: { section: 'business', tab: 'alerts' } },
     { id: 'users', label: 'Usuarios del panel', action: 'Gestionar usuarios del panel', icon: 'users', description: 'Consultar administradores y crear accesos. Es distinto de registrar una persona responsable.', view: { section: 'users' } },
   ] },

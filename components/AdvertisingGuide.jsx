@@ -53,6 +53,7 @@ const topics = [
     steps: [
       'Desde una campaña propia, Ver ficha económica abre su ficha de Resultados. Las campañas consultadas tienen su ficha económica de solo lectura. Separa el punto de equilibrio simulado, lo que reportó Meta para su período y lo que dejaron los pedidos vinculados al corte del negocio. Cero y sin datos no significan lo mismo.',
       'En Qué probar ahora, abre la captura citada directamente desde la propuesta. Cambiar aquí afecta solo el destino que revisaste; Preparar una variante conserva el original y no transfiere comentarios ni métricas.',
+      'En Pedidos y gastos vinculados, busca candidatos sin guardar un vínculo. «Ali: revisar este control» te orienta en la búsqueda. Para pedir ayuda con el motivo, primero selecciona el registro exacto.',
       'En Qué aprendimos, compara la misma métrica y período según el criterio de la prueba. Período y filtros cambia qué capturas ves. Actualizar vista solo lee datos locales; Actualizar desde Meta solicita una captura y Revisar mejoras, un análisis local. Medición de la cuenta lleva a fuentes e historial, separados de la publicación.',
     ],
   },

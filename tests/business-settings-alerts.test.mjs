@@ -139,7 +139,7 @@ test('acciones de alertas usan pedidos vinculados o destinos reales; sin inventa
   assert.equal(alertClientData(base).action.view.section,'business');
   const closing=alertClientData({...base,entity_type:'cash_closing',entity_id:'closing',target_account_id:'bank'}).action.view;
   assert.deepEqual(closing,{section:'cash',tab:'overview',account:'bank',record:'closing'});
-  assert.deepEqual(alertClientData({...base,entity_type:'source',entity_id:'source'}).action.view,{section:'orders',tab:'imports',source:'source'});
+  assert.deepEqual(alertClientData({...base,entity_type:'source',entity_id:'source'}).action.view,{section:'orders',tab:'imports',batch:'new',source:'source'});
   assert.deepEqual(alertClientData({...base,type:'stock_low',entity_type:'product',entity_id:'product'}).action.view,{section:'products',record:'product'});
 });
 

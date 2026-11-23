@@ -9,6 +9,21 @@ import Icon from './Icons';
 import useDialog from './useDialog';
 import styles from './CatalogExperience.module.css';
 import configurationStyles from './ConfigurationExperience.module.css';
+const draftSaveControls={
+ combos:{create:'combo-new-save',update:'combo-record-save'},
+ catalogs:{create:'catalog-new-save',update:'catalog-record-save'}
+};
+const productSaveControls={create:'product-new-save',update:'product-record-save'};
+const productFieldControls={
+ stockQuantity:'product-stock-count',
+ unitCostMinor:'product-unit-cost',
+ orderable:'product-orderability',
+ catalogIds:'product-catalog-membership'
+};
+const comboFieldControls={
+ orderable:'combo-orderability',
+ catalogIds:'combo-catalog-membership'
+};
 const productSections=[
  {key:'basics',title:'Información básica',description:'Completa el nombre, la presentación y el precio.',fields:['title','slug','presentation','price']},
  {key:'inventory',title:'Existencias y reservas',description:'Registra el conteo físico. Los pedidos reservan unidades; el despacho las descuenta y las devoluciones recuperables las reingresan.',fields:['stockQuantity']},
@@ -21,6 +36,11 @@ const publicationHelp={
  draft:'El borrador no es visible en la vitrina.',
  published:'El contenido publicado aparece en la vitrina cuando la publicación global está aprobada.',
  archived:'El contenido archivado se conserva y permanece oculto.'
+};
+const storefrontControls={
+ faqs:{prefix:'storefront-faq',editField:'answer',editControl:'storefront-faq-content-editor'},
+ messages:{prefix:'storefront-message',editField:'body',editControl:'storefront-message-content-editor'},
+ shipping:{prefix:'storefront-shipping',editField:'costText',editControl:'storefront-shipping-terms-editor'}
 };
 const contentSections={
  combos:[
@@ -62,13 +82,17 @@ function recordForm(kind,record){
 
 export default function RecordEditor({kind,record:providedRecord,all,api,onClose,onSaved,onReload,onInteractionStateChange}){
  const schema=schemas[kind];
- const configurationContent=['faqs','messages','shipping'].includes(kind);
+ const storefront=storefrontControls[kind],configurationContent=Boolean(storefront);
+ const saveControls=draftSaveControls[kind];
  const [record,setRecord]=useState(providedRecord);
  const [initialForm]=useState(()=>recordForm(kind,providedRecord));
  const [form,setForm]=useState(initialForm),[busy,setBusy]=useState(false),[uploadingImage,setUploadingImage]=useState(false),[error,setError]=useState(null);
  const [invalidCostDraft,setInvalidCostDraft]=useState(false);
  const [initialSnapshot,setInitialSnapshot]=useState(()=>JSON.stringify(initialForm));
  const dirty=useMemo(()=>invalidCostDraft||JSON.stringify(form)!==initialSnapshot,[form,initialSnapshot,invalidCostDraft]);
+ const productType=kind==='products'?(form.productType||'product'):undefined;
+ const isGift=productType==='gift';
+ const recordLabel=isGift?'obsequio':schema.singular;
  const formBusy=busy||uploadingImage;
  const assistantTarget=`record:${kind}`;
  const assistant=useAssistantForm({
@@ -86,11 +110,12 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
  });
  const interactionBusy=formBusy||assistant.assistantBusy;
  const dialog=useRef(null),errorSummary=useRef(null);
+ const contentCommand=useRef(null);
  const close=useDialog(dialog,{busy:interactionBusy,dirty,onClose});
  const sections=kind==='products'?productSections:contentSections[kind];
  const fieldByName=useMemo(()=>new Map(schema.fields.map(field=>[field.name,field])),[schema]);
  const [activeSection,setActiveSection]=useState(sections[0].key);
- useEffect(()=>{onInteractionStateChange({dirty,busy:interactionBusy});},[dirty,interactionBusy,onInteractionStateChange]);
+ useEffect(()=>{onInteractionStateChange({dirty,busy:interactionBusy,productType});},[dirty,interactionBusy,productType,onInteractionStateChange]);
  useEffect(()=>()=>onInteractionStateChange({dirty:false,busy:false}),[onInteractionStateChange]);
  useEffect(()=>{if(error)errorSummary.current?.focus();},[error]);
 
@@ -112,6 +137,13 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
   heading?.scrollIntoView({block:'start',behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
  }
  function showError(failure){setError({message:failure.message,status:failure.status});}
+ function commandPayload(operation,payload){
+  if(!storefront)return payload;
+  const fingerprint=JSON.stringify(payload);
+  if(contentCommand.current?.operation!==operation||contentCommand.current.fingerprint!==fingerprint)
+   contentCommand.current={operation,fingerprint,requestId:crypto.randomUUID()};
+  return {...payload,requestId:contentCommand.current.requestId};
+ }
  async function save(event){
   event.preventDefault();
   if(formBusy||assistant.assistantBusy)return;
@@ -119,7 +151,7 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
   try{
    const result=await assistant.submitAssisted({payload:form,saveUnassisted:async payload=>{
     setBusy(true);
-    try{return await api(`/api/admin/${kind}${record.id?`/${record.id}`:''}`,{method:record.id?'PUT':'POST',body:JSON.stringify(payload)});}
+    try{return await api(`/api/admin/${kind}${record.id?`/${record.id}`:''}`,{method:record.id?'PUT':'POST',body:JSON.stringify(commandPayload('save',payload))});}
     catch(failure){showError(failure);return false;}
     finally{setBusy(false);}
    },onCommitted:async saved=>await onSaved({kind,record:saved,operation:record.id?'update':'create'})});
@@ -128,10 +160,10 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
   }catch(failure){showError(failure);}
  }
  async function remove(){
-  if(interactionBusy||!record.id||!window.confirm(`¿Eliminar este ${schema.singular}? Esta acción es irreversible y no se puede deshacer.`))return;
+  if(interactionBusy||!record.id||!window.confirm(`¿Eliminar este ${recordLabel}? Esta acción es irreversible y no se puede deshacer.`))return;
   setBusy(true);setError(null);
   try{
-   await api(`/api/admin/${kind}/${record.id}`,{method:'DELETE',body:JSON.stringify({version:record.version})});
+   await api(`/api/admin/${kind}/${record.id}`,{method:'DELETE',body:JSON.stringify(commandPayload('delete',{version:record.version}))});
   }catch(failure){showError(failure);return;}
   finally{setBusy(false);}
   await onSaved({kind,record,operation:'delete'});
@@ -144,9 +176,16 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
   finally{setBusy(false);}
  }
 
- const renderField=field=><Field key={field.name} field={{...field,...(field.name==='stockQuantity'?{min:record.stockReserved||0,required:record.stockQuantity!=null}:{}),description:field.name==='status'?publicationHelp[form.status]:field.description||fieldHelp[field.name]}} value={form[field.name]} onChange={value=>{if(field.name==='productType')setInvalidCostDraft(false);change(field.name,value);}} all={all} api={api} onUploading={setUploadingImage} onDraftInvalid={setInvalidCostDraft}/>;
+ const fieldControls=record.id?(kind==='products'?productFieldControls:kind==='combos'?comboFieldControls:null):null;
+ const fieldControl=name=>{
+  if(name==='status')return storefront&&record.id?`${storefront.prefix}-publication-control`:'catalog-publication-state';
+  if(record.id&&name===storefront?.editField)return storefront.editControl;
+  return fieldControls?.[name];
+ };
+ const editorControl=storefront?`${storefront.prefix}-${record.id?'open-record':'new-form'}`:record.id?{products:'product-record-detail',combos:'combo-record-detail',catalogs:'catalog-record-detail'}[kind]:'catalog-record-editor';
+ const submitControl=storefront&&!record.id?`${storefront.prefix}-create-editor`:(saveControls||(kind==='products'&&!isGift?productSaveControls:null))?.[record.id?'update':'create'];
+ const renderField=field=><Field key={field.name} field={{...field,...(field.name==='stockQuantity'?{min:record.stockReserved||0,required:record.stockQuantity!=null}:{}),advisorControl:fieldControl(field.name)??field.advisorControl,description:field.name==='status'?publicationHelp[form.status]:field.description||fieldHelp[field.name]}} value={form[field.name]} onChange={value=>{if(field.name==='productType')setInvalidCostDraft(false);change(field.name,value);}} all={all} api={api} onUploading={setUploadingImage} onDraftInvalid={setInvalidCostDraft}/>;
  const publication=contentStates.find(state=>state.value===form.status)?.label;
- const isGift=kind==='products'&&form.productType==='gift';
  const priceDefined=Number(form.price)>0;
  const validPrice=priceDefined||(isGift&&form.price===0);
  const componentProducts=all.products||[];
@@ -196,6 +235,7 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
    {['products','combos'].includes(kind)&&<div><dt>{kind==='combos'||isGift?'Posibles con sus componentes':'Disponibles para nuevos pedidos'}</dt><dd>{availableUnits??'Existencias sin contar'}</dd></div>}
    {['products','combos'].includes(kind)&&<div><dt>Uso en pedidos</dt><dd>{form.orderable?'Habilitado (sujeto a disponibilidad)':'No habilitado'}{form.status!=='published'&&(kind==='combos'||isGift)?` · ${kind==='combos'?'Combo':'Obsequio'} privado`:''}</dd></div>}
    {(kind==='combos'||isGift)&&<div><dt>Componentes</dt><dd>{form.items?.length?<ul>{form.items.map((item,index)=><li key={index}>{item.quantity} × {componentProducts.find(product=>product.id===item.productId)?.title||'Referencia sin seleccionar'}</li>)}</ul>:'Sin productos incluidos'}</dd></div>}
+   {kind==='catalogs'&&<div><dt>Orden de aparición</dt><dd>{form.sort}</dd></div>}
    <div><dt>Publicación</dt><dd>{publication}</dd></div>
   </dl>
   {!!checklist.length&&<>
@@ -209,30 +249,31 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
  return (
   <dialog ref={dialog} className={`editor-drawer ${styles.editor}${configurationContent?' '+configurationStyles.contentEditor:''}`} aria-labelledby="editor-title" onClickCapture={blockAssistantInteraction} onChangeCapture={blockAssistantInteraction} onSubmitCapture={blockAssistantInteraction}>
    <header role={configurationContent?'presentation':undefined}>
-    <div><p className="eyebrow">{schema.label}</p><h2 id="editor-title" tabIndex="-1" data-dialog-initial-focus>{record.id?'Editar':'Crear'} {schema.singular}</h2></div>
+    <div><p className="eyebrow">{isGift?'Obsequios':schema.label}</p><h2 id="editor-title" tabIndex="-1" data-dialog-initial-focus data-advisor-control={editorControl}>{record.id?'Editar':'Crear'} {recordLabel}</h2></div>
     <button type="button" className="icon-button" aria-label="Cerrar editor" onClick={close} disabled={interactionBusy}><Icon name="close"/></button>
    </header>
    <form onSubmit={save} aria-busy={interactionBusy}>
     <fieldset className="editor-fieldset" disabled={interactionBusy}>
      <div className="drawer-body">
       {error&&<div ref={errorSummary} className="editor-error error" role="alert" tabIndex="-1"><p>{error.message}</p>{error.status===409&&record.id&&<button type="button" className="button subtle" onClick={reload} disabled={interactionBusy}>Cargar versión guardada</button>}</div>}
+      {saveControls&&!record.id&&<p className="hint">Esta ficha aún no está guardada. Puedes preparar los datos y guardar como borrador sin publicarla.</p>}
       <p className={styles.requiredNote}>Los campos con <span className="required">*</span> son obligatorios.</p>
       <div className="editor-jump"><label htmlFor="editor-section">Ir a sección del formulario</label><select id="editor-section" name="editorSection" value={activeSection} onChange={event=>goToSection(event.target.value)}>{sections.map(section=><option key={section.key} value={section.key}>{section.title}</option>)}</select></div>
       <details className="editor-mobile-summary"><summary>Así va tu ficha</summary>{summary}</details>
       <div className="editor-layout">
        <nav className="editor-index" aria-label="Secciones del formulario">{sections.map((section,index)=><a key={section.key} href={`#form-section-${section.key}`} aria-current={activeSection===section.key?'location':undefined} onClick={event=>{event.preventDefault();goToSection(section.key);}}><span className={styles.sectionNumber} aria-hidden="true">{index+1}</span>{section.title}</a>)}</nav>
        <div className="editor-fields">
-        {sections.map((section,index)=>section.collapsible?<details className="editor-more-options" key={section.key} open={!!record.id&&initialForm.productType==='gift'}>
+        {sections.map((section,index)=>section.collapsible?<details className="editor-more-options" key={section.key} data-advisor-disclosure="" open={initialForm.productType==='gift'}>
          <summary id={`form-section-${section.key}`} tabIndex="0">{section.title}</summary>
          <p className="hint">{section.description}</p>
          <div className="product-form-grid">
           {['productType','sku','orderable'].map(name=>renderField(fieldByName.get(name)))}
           {!isGift&&['unitCostMinor','costEffectiveOn'].map(name=>renderField(fieldByName.get(name)))}
          </div>
-         {isGift&&<><p className="hint">El obsequio puede guardarse como borrador y utilizarse en pedidos sin publicarlo. Un precio de cero es válido. Su costo depende únicamente de sus componentes.</p><ProductComponents label="Productos del obsequio" value={form.items} onChange={value=>change('items',value)} products={componentProducts} excludeId={record.id}/>{componentCost}</>}
+         {isGift&&<><p className="hint">El obsequio puede guardarse como borrador y utilizarse en pedidos sin publicarlo. Un precio de cero es válido. Su costo depende únicamente de sus componentes.</p><ProductComponents label="Productos del obsequio" value={form.items} onChange={value=>change('items',value)} products={componentProducts} excludeId={record.id} advisorControl="gift-components-editor"/>{componentCost}</>}
          {!isGift&&<p className="small muted">La fecha de vigencia es una fecha de negocio; si no la indicas, se usa hoy en Bogotá al guardar el costo. Vacío conserva el costo como desconocido, no como cero. Registrar costo no genera un gasto ni movimiento de caja.</p>}
         </details>:<section className={`form-section product-form-section ${styles.section}`} key={section.key} aria-labelledby={`form-section-${section.key}`}>
-         <div className="product-form-section-heading"><p className={styles.sectionStep}>Sección {index+1} de {sections.length}</p><h3 id={`form-section-${section.key}`} tabIndex="-1">{section.title}</h3><p>{section.description}</p></div>
+         <div className="product-form-section-heading"><p className={styles.sectionStep}>Sección {index+1} de {sections.length}</p><h3 id={`form-section-${section.key}`} tabIndex="-1" data-advisor-control={record.id&&kind==='products'&&section.key==='inventory'?'product-inventory-summary':undefined}>{section.title}</h3><p>{section.description}</p></div>
          <div className={`product-form-grid${section.singleColumn?' product-form-grid--single':''}`}>
           {section.fields.filter(name=>!(isGift&&name==='stockQuantity')).map(name=><div className={`product-form-field product-form-field--${name} ${['textarea','image','comboItems','multi'].includes(fieldByName.get(name).type)?styles.fullWidth:''}`} key={name}>{renderField(fieldByName.get(name))}</div>)}
          </div>
@@ -246,16 +287,16 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
          <p>{schema.help}</p>
          <p>Revisa las secciones y el resumen antes de guardar. Guardar aplica los cambios de la ficha; cancelar conserva la última versión guardada.</p>
         </details>
-        {record.id&&<details className="editor-more-options"><summary>{configurationContent?'Eliminar contenido':'Más opciones'}</summary><p className="hint">Eliminar retira este registro de forma irreversible. Si tiene referencias, el servidor puede impedir su eliminación.</p><button className="text-button danger" type="button" onClick={remove} disabled={interactionBusy}>Eliminar {schema.singular}</button></details>}
+        {record.id&&<details className="editor-more-options" data-advisor-disclosure><summary>{configurationContent?'Eliminar contenido':'Más opciones'}</summary><p className="hint">Eliminar retira este registro de forma irreversible. Si tiene referencias, el servidor puede impedir su eliminación.</p><button className="text-button danger" type="button" data-advisor-control={`${storefront?.prefix??kind.slice(0,-1)}-delete-confirmation`} onClick={remove} disabled={interactionBusy}>Eliminar {recordLabel}</button></details>}
        </div>
        <aside className="editor-summary" aria-label="Resumen de la ficha" tabIndex={configurationContent?0:undefined}>{summary}</aside>
       </div>
      </div>
      <footer className="editor-footer">
       <span className="unsaved-flag" role="status">{dirty?'Cambios sin guardar':'Sin cambios pendientes'}</span>
-      <button type="button" className="button subtle" onClick={assistant.openAssistant} disabled={interactionBusy}>Ayúdame con este formulario</button>
+      <button type="button" className="button subtle" onClick={assistant.openAssistant} disabled={interactionBusy}>Ayúdame<span className="editor-footer-context"> con este formulario</span></button>
       <button type="button" className="button subtle" onClick={close} disabled={interactionBusy}>{configurationContent?'Cancelar edición':'Cancelar'}</button>
-      <button type="submit" className="button primary" disabled={interactionBusy}>{busy?'Procesando…':uploadingImage?'Subiendo imagen…':record.id?'Guardar cambios':`Crear ${schema.singular}`}<Icon name="check" size={16}/></button>
+      <button type="submit" className="button primary" data-advisor-control={submitControl} data-assistant-bound-save={assistant.nativeProposalSave?'':undefined} disabled={interactionBusy}>{busy?'Procesando…':uploadingImage?'Subiendo imagen…':saveControls&&form.status==='draft'?'Guardar borrador':record.id?'Guardar cambios':`Crear ${recordLabel}`}<Icon name="check" size={16}/></button>
      </footer>
     </fieldset>
    </form>

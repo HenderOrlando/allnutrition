@@ -54,7 +54,7 @@ export function HekaCards({ rows, children }) {
   return <ul className={styles.cards}>{rows.map((row, index) => <li className={`settings-subform ${styles.card}`} key={row._id ?? index}>{children(row, index)}</li>)}</ul>;
 }
 
-export function HekaSearch({ title, operation, fields, more = [], page = true, busy, perform, empty = 'Heka no devolvió resultados.', intro, children }) {
+export function HekaSearch({ title, operation, fields, more = [], page = true, busy, perform, empty = 'Heka no devolvió resultados.', intro, children, advisorControl }) {
   const [values, setValues] = useState({}), [found, setFound] = useState(null), [submitted, setSubmitted] = useState(null), [validation, setValidation] = useState('');
   function query(input) {
     setFound(null); setSubmitted(input);
@@ -79,7 +79,7 @@ export function HekaSearch({ title, operation, fields, more = [], page = true, b
   const rows = Array.isArray(found?.result) ? found.result : (found?.result?.rows ?? []), pager = found?.result?.pager;
   const advanced = more.map(field => ({ ...field, ...(field.name === 'end_date' ? { min: values.start_date || undefined } : {}) }));
   return <section className="settings-card" aria-label={title}>
-    <h3>{title}</h3>
+    <h3 tabIndex={advisorControl ? -1 : undefined} data-advisor-control={advisorControl}>{title}</h3>
     {intro && <p>{intro}</p>}
     <form aria-label={title} onSubmit={submit}>
       <fieldset className="editor-fieldset" disabled={busy}>
@@ -90,7 +90,7 @@ export function HekaSearch({ title, operation, fields, more = [], page = true, b
       </fieldset>
     </form>
     {found && <div className={styles.results} aria-live="polite">
-      {!rows.length ? <p>{empty}</p> : children(rows)}
+      {!rows.length ? <p>{empty}</p> : children(rows, (pager?.total ?? rows.length) === 1 && rows.length === 1)}
       {pager && <nav className="admin-actions" aria-label={`Páginas: ${title}`}>
         <button type="button" className="button subtle" disabled={busy || !pager.previousPage} onClick={() => query({ ...submitted, page: pager.previousPage })}>Anterior</button>
         <span>Página {pager.page} de {Math.max(pager.pages, 1)} · {pager.total} resultados</span>

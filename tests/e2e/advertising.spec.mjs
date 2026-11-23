@@ -8,22 +8,18 @@ import { openPostgres } from '../../lib/db/postgres.mjs';
 import { Store } from '../../lib/store.mjs';
 import { testDatabaseEnv } from '../postgres-fixture.mjs';
 import { hash, insertRow } from '../../lib/business/commands.mjs';
-import { SOCIAL_ANALYSIS_VERSION, buildSocialHistoricalForecast } from '../../lib/business/social-analysis.mjs';
 import { saveSocialSettings } from '../../lib/business/social-settings.mjs';
 import { loadSocialRuntime } from '../../lib/social/config.mjs';
 import { saveCredentials } from '../../lib/social/credentials.mjs';
-import { socialMeasurementQueryKey } from '../../lib/social/evidence.mjs';
-import { improvementMeasurement, exactMetric } from '../social-improvements-fixture.mjs';
 import { test, expect } from '@playwright/test';
 import sharp from 'sharp';
 import { login, navigate, selectWorkspace, openDisclosure, signOut } from './helpers.mjs';
+import { catalogTag, seedResults } from './social-results-fixture.mjs';
 
 const ROOT = '/api/admin/social';
 const controlledImages = process.env.ADVERTISING_IMAGE_E2E_URL;
 const imageProject = process.env.ADVERTISING_IMAGE_COMPOSE_PROJECT;
 
-// Catalog text is checked for phone numbers; fixture suffixes must stay alphabetic.
-const catalogTag = marker => marker.slice(-8).replace(/\d/g, digit => 'ghijklmnop'[Number(digit)]);
 
 function runGuidedFixture(script, args, extra = []) {
   const project = imageProject, origin = controlledImages;
@@ -439,7 +435,12 @@ test('estudio de publicaciones: oferta y foto propia sin IA en el mismo borrador
   const composer = page.getByRole('region', { name: 'Estudio visual', exact: true });
   await expect(composer.getByText('No está configurado el servicio de imágenes.', { exact: false })).toBeVisible();
   await expect(composer.getByRole('button', { name: 'Enviar idea', exact: true })).toHaveCount(0);
-  await expect(composer.getByText(condition, { exact: false })).toBeVisible();
+  const contextName = 'Datos y fotos para preparar imagen';
+  await composer.getByRole('button', { name: contextName, exact: true }).click();
+  const context = page.getByRole('dialog', { name: contextName, exact: true });
+  await expect(context.getByText(condition, { exact: false })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(context).toHaveCount(0);
   expect((await f.get(`${ROOT}/generation?campaignId=${saved.id}`)).jobs).toEqual([]);
   expect(writes.writes.filter(item => new URL(item.url).pathname === `${ROOT}/generation`)).toEqual([]);
   expectUnpublished(await f.campaign(saved.id));
@@ -733,7 +734,14 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
     expect(readOnly.writes).toEqual([]);
     readOnly.stop();
     await openDisclosure(page, /^Operaciones de la entrega$/);
-    await submit(page, `${ROOT}/campaigns/${campaign.id}/actions`, actionButton(page, 'Actualizar desde Meta'), 'sync');
+    const metricsPath = `${ROOT}/campaigns/${campaign.id}/actions`;
+    const beforeConsent = observeWrites(page);
+    await actionButton(page, 'Actualizar desde Meta').click();
+    const metricsConsent = page.getByRole('dialog', { name: 'Autorizar consulta de métricas a Meta', exact: true });
+    await expect(metricsConsent).toBeVisible();
+    expect(beforeConsent.writes.filter(({ url }) => new URL(url).pathname === metricsPath)).toEqual([]);
+    beforeConsent.stop();
+    await submit(page, metricsPath, actionButton(metricsConsent, 'Autorizar consulta a Meta'), 'sync');
     const measured = remote('measure', campaign.id);
     expect(measured.measurementId).toEqual(expect.any(String));
     await page.reload();
@@ -795,8 +803,14 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
       await expect(requestAI).toBeDisabled();
       await page.getByRole('checkbox', { name: /^Autorizo esta consulta/ }).check();
       const automatic = await submit(page, audiencePath, requestAI, 'propose');
-      expect(automatic).toMatchObject({ status: 'applied', mode: 'automatic', proposal: { age: { before: [18, 65], after: [23, 55] } } });
-      await expect(page.getByRole('heading', { name: 'Audiencia guardada: razones y límites' })).toBeVisible();
+      expect(automatic).toMatchObject({ status: 'proposed', mode: 'automatic', proposal: { age: { before: [18, 65], after: [23, 55] } } });
+      expect(await f.campaign(draft.id)).toMatchObject({ version: draft.version, audience: { countries: [], ageMin: 18 } });
+      const applyAutomatic = actionButton(page, 'Aplicar solo diferencias elegidas');
+      await expect(applyAutomatic).toBeDisabled();
+      await page.getByRole('checkbox', { name: /^Usar los mercados confirmados como países completos/ }).check();
+      await page.getByRole('checkbox', { name: 'Aplicar el cambio de edad', exact: true }).check();
+      await submit(page, audiencePath, applyAutomatic, 'apply');
+      await expect(page.getByText(/^Audiencia guardada: Definida con IA/)).toBeVisible();
       expect(await f.campaign(draft.id)).toMatchObject({ marketCountries: ['MX', 'PE'], audienceMode: 'automatic', audience: { countries: ['MX', 'PE'], ageMin: 23 } });
 
       await actionButton(page, 'Definir yo').click();
@@ -806,12 +820,22 @@ test.describe('estudio de publicaciones · transporte sintético aislado', () =>
       await page.reload();
       await actionButton(page, '1. Definir publicación').click();
       await actionButton(page, 'Definir yo').click();
+      const saveEdits = async () => {
+        const saved = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === path);
+        await page.locator('button[type="submit"]').filter({ hasText: /^Guardar borrador$/ }).click();
+        const response = await saved;
+        expect(response.ok(), await response.text()).toBe(true);
+      };
       await actionButton(page, 'Quitar país MX').click();
+      await saveEdits();
       await page.getByRole('searchbox', { name: 'Buscar por nombre' }).fill('Ciudad de México');
       await submit(page, preflight, actionButton(page, 'Buscar candidatos verificados'));
       expect(remote('preflight', draft.id).stage).toBe('targeting');
       await actionButton(page, 'Seleccionar Ciudad de México').click();
+      await page.getByLabel('Unidad', { exact: true }).selectOption('kilometer');
+      await page.getByLabel('Radio explícito', { exact: true }).fill('20');
       await page.getByLabel('Edad mínima (18–65)').fill('27');
+      await saveEdits();
       await page.locator('select[name="kind"]').selectOption('interest');
       await page.getByRole('searchbox', { name: 'Buscar por nombre' }).fill('Fitness');
       await submit(page, preflight, actionButton(page, 'Buscar candidatos verificados'));
@@ -910,7 +934,7 @@ test('publicidad guiada: consulta de Resultados persistente y sin efectos', asyn
   try {
     await navigate(page, 'Publicidad');
     await selectWorkspace(page, 'Vistas de publicidad', 'Resultados');
-    const search = page.getByRole('textbox', { name: 'Buscar publicaciones', exact: true });
+    const search = page.getByRole('searchbox', { name: 'Buscar publicaciones', exact: true });
     const submit = page.getByRole('button', { name: 'Buscar publicaciones', exact: true });
     await search.fill(`${f.marker}-sin-coincidencias`);
     await submit.click();
@@ -1244,52 +1268,6 @@ async function seedMetaInventory(f) {
   }
 }
 
-async function seedResults(f) {
-  const env = testDatabaseEnv(), host = new URL(env.DATABASE_URL).hostname;
-  if (!['db', 'localhost', '127.0.0.1'].includes(host) || env.DB_SSL !== 'verify' || !(env.DB_CA_CERT || env.DB_CA_CERT_FILE)) throw new Error('La evidencia solo se instala en el fixture PostgreSQL local con TLS verificado.');
-  const store = new Store(await openPostgres(databaseConfig(env)));
-  try {
-    if ((await store.db.get('SELECT current_database() AS name')).name !== 'allnutrition_test') throw new Error('La conexión real no corresponde al fixture allnutrition_test.');
-    const actor = await store.db.get(`SELECT id FROM ${store.t('users')} WHERE email=?`, ['e2e@example.test']);
-    const now = new Date(), at = new Date(now - 1000).toISOString(), start = new Date(now - 8 * 86400000).toISOString();
-    const connectionId = randomUUID(), assetId = randomUUID(), deliveryId = randomUUID(), forecastId = randomUUID();
-    const identities = { userId: '100', businessId: '500', pageId: '200' }, name = `${f.marker} post confirmado`;
-    const common = { version: 1, created_at: start, updated_at: at };
-    await insertRow(store, 'social_connections', { id: connectionId, provider: 'meta', integration_method: 'api', state: 'connected', data: JSON.stringify({ name: 'Cuenta de ensayo', identities, capabilities: { facebookPublish: true } }), ...common });
-    await insertRow(store, 'social_assets', { id: assetId, state: 'ready', sha256: 'a'.repeat(64), bytes: 100, data: JSON.stringify({ name: 'Pieza de ensayo', kind: 'image', derivativeSha256: 'a'.repeat(64) }), ...common });
-    const tag = catalogTag(f.marker), product = await f.post('/api/admin/products', { title: `Oferta de prueba ${tag}`, slug: `prueba-${tag}`, status: 'draft', orderable: true, stockQuantity: 20, price: 25000, presentation: '500 g', flavor: 'Cacao' });
-    const { offer } = await f.get(`${ROOT}/offers?kind=product&id=${product.id}`);
-    const offerRef = { primary: { kind: 'product', id: product.id, factsHash: offer.factsHash }, gift: null };
-    const draft = await f.post(`${ROOT}/campaigns`, { name, connectionId, assetId, offerRef, mode: 'organic', objective: 'engagement', caption: 'Texto actual de la publicación', marketCountries: ['MX'], platforms: ['facebook'], placements: ['facebook_feed'], aiDisclosure: false });
-    const draftDetail = await f.campaign(draft.id);
-    const fields = ['name','mode','objective','connectionId','assetId','caption','headline','destinationUrl','whatsappNumber','whatsappGreeting','marketCountries','platforms','placements','audience','budgetMinor','currency','publishAt','startAt','endAt','observationDays','targetCostMinor','aiDisclosure','integrationMethod','identities','timeZone'];
-    const spec = { ...Object.fromEntries(fields.map(key => [key, draftDetail[key]]).filter(([, value]) => value !== undefined)), assetHash: 'a'.repeat(64), assetType: 'image', offerHash: draftDetail.offerHash };
-    const specHash = hash(spec), evidenceHash = hash([draft.id, at]), recommendationId = randomUUID();
-    const forecast = { ...buildSocialHistoricalForecast(spec, [], { asOf: start }), specHash, generatedAt: start };
-    await insertRow(store, 'social_forecasts', { id: forecastId, campaign_id: draft.id, spec_hash: specHash, generated_at: start, data: JSON.stringify(forecast) });
-    await insertRow(store, 'social_revisions', { campaign_id: draft.id, revision: 1, spec_hash: specHash, approved_at: start, actor_id: actor.id, data: JSON.stringify({ spec, forecastId, forecast, rightsAccepted: true, offerSnapshot: draftDetail.offerSnapshot }) });
-    const object = BigInt(`0x${deliveryId.replaceAll('-', '')}`).toString().slice(0, 16), remoteId = `200_${object}`;
-    const remoteRefs = { postId: remoteId, photoId: object, remoteId, permalink: `https://www.facebook.com/200/posts/${object}` };
-    const delivery = { id: deliveryId, channel: 'facebook', remoteId, remoteRefs, integrationMethod: 'api', state: 'published', publishedAt: start, publicationTimeSource: 'publication_request_sent_at' };
-    await insertRow(store, 'social_deliveries', { id: deliveryId, campaign_id: draft.id, revision: 1, channel: 'facebook', state: 'published', remote_id: remoteId, next_sync_at: null, data: JSON.stringify(delivery), ...common });
-    await insertRow(store, 'social_operations', { id: randomUUID(), campaign_id: draft.id, delivery_id: deliveryId, operation_key: `delivery:${deliveryId}:publish`, step: 'publish', state: 'confirmed', next_attempt_at: null, data: JSON.stringify({ actorId: actor.id, specHash, chart: 'provider-controlled fixture', integrationMethod: 'api', channel: 'facebook', result: { evidence: { remoteRead: true } } }), ...common });
-    const capture = improvementMeasurement(spec, delivery, { id: randomUUID(), now: at, values: { interactions: exactMetric(0, 'fixture_post_interactions') } });
-    const { id: captureId, deliveryId: _delivery, fetchedAt, payloadHash: _hash, ...measurement } = capture;
-    await insertRow(store, 'social_measurements', { id: captureId, delivery_id: deliveryId, query_key: socialMeasurementQueryKey(measurement), fetched_at: fetchedAt, payload_hash: hash(measurement), data: JSON.stringify(measurement) });
-    const revision = Number((await store.db.get(`SELECT value FROM ${store.t('counters')} WHERE id='business_revision'`)).value);
-    const row = await store.db.get(`SELECT data FROM ${store.t('social_campaigns')} WHERE id=?`, [draft.id]);
-    const analysis = { analysisVersion: SOCIAL_ANALYSIS_VERSION, evidenceHash, businessRevision: revision, linkVersions: { orders: [], expenses: [] }, asOf: at, checkedAt: at, measurementCount: 1, recommendationIds: [recommendationId] };
-    await store.db.run(`UPDATE ${store.t('social_campaigns')} SET data=?,state='published',updated_at=? WHERE id=?`, [JSON.stringify({ ...JSON.parse(row.data), analysis }), at, draft.id]);
-    await insertRow(store, 'social_recommendations', { id: recommendationId, campaign_id: draft.id, evidence_hash: evidenceHash, rule_key: 'organic_response', state: 'suggested',
-      data: JSON.stringify({ proposedChange: { type: 'copy', text: 'Probar una llamada a la acción más clara' }, primaryEvidence: { channel: 'facebook' }, observation: 'Respuesta por debajo de la referencia comparable.', successCriterion: { text: 'Aumentar interacciones al mismo horizonte.', metric: 'organicResponse', operator: 'gt', target: 0.1 }, sampleIds: [], metricIds: [captureId] }),
-      version: 1, created_at: at, updated_at: at });
-    await insertRow(store, 'social_recommendations', { id: randomUUID(), campaign_id: draft.id, evidence_hash: hash([draft.id, start]), rule_key: 'organic_response', state: 'evaluated',
-      data: JSON.stringify({ proposedChange: { type: 'copy', text: 'Texto claro en la prueba anterior' }, primaryEvidence: { channel: 'facebook' }, observation: 'Prueba anterior para esta oferta.',
-        successCriterion: { text: 'Aumentar interacciones al mismo horizonte.', metric: 'organicResponse', operator: 'gt', target: 0.1 }, conclusion: 'improved',
-        evaluation: { complete: true, conclusion: 'improved', metric: 'organicResponse', parentValue: 0.08, childValue: 0.14, asOf: at } }), ...common });
-    return { id: draft.id, name, recommendationId, connectionId, captureId };
-  } finally { await store.close(); }
-}
 
 async function retireResultsConnection(record) {
   const env = testDatabaseEnv(), dbURL = new URL(env.DATABASE_URL);

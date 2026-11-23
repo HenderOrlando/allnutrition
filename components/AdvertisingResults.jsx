@@ -3,13 +3,30 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Field } from './Fields';
 import useDialog from './useDialog';
-import { useAssistantForm } from './AssistantBridge.jsx';
+import { useAssistantBridge, useAssistantForm } from './AssistantBridge.jsx';
 import { selectSocialEconomicForecast } from '../lib/business/social-economics.mjs';
 import { CommercialSummary, EconomicRecommendation, InvestmentEstimate, MetaReportedPerformance, economicPeriod } from './AdvertisingEconomics';
 import styles from './AdvertisingWorkspace.module.css';
 import resultStyles from './AdvertisingResults.module.css';
 
 const ROOT = '/api/admin/social';
+const recommendationControls = {
+  capture: 'ad-results-cited-capture',
+  comparable: 'ad-results-comparable-campaign',
+  'duplicate-from-recommendation': 'ad-results-variant',
+  'prepare-in-place': 'ad-results-in-place',
+  dismiss: 'ad-results-dismiss',
+};
+const resultChoiceLabels = {
+  capture: 'Elige la captura citada exacta',
+  comparable: 'Elige la pieza comparable exacta',
+  'duplicate-from-recommendation': 'Elige la recomendación para preparar una variante',
+  'prepare-in-place': 'Elige la recomendación y su entrega para preparar el cambio',
+  dismiss: 'Elige qué recomendación descartar',
+};
+const canPrepareVariant = type => ['copy', 'creative', 'placement', 'posting_window'].includes(type);
+const canDismiss = item => item.state === 'suggested' && !Object.keys(item.changeDrafts || {}).length;
+const recommendationTarget = (item, id) => JSON.stringify([item.campaignId, item.id, item.evidenceHash, id]);
 const metricLabels = {
   spendMinor: 'Gasto reportado', impressions: 'Impresiones', reach: 'Alcance único', linkClicks: 'Clics de enlace',
   conversations: 'Conversaciones WhatsApp', interactions: 'Interacciones', views: 'Visualizaciones', plays: 'Reproducciones',
@@ -123,7 +140,7 @@ function Measurement({ item, delivery, onCampaign, cited = false, analysisAsOf, 
   const dates = <>
     {cited && <p>Corte del análisis: {date(analysisAsOf)}.</p>}
     <p>{date(item.periodStart, item.timeZone)} — {date(item.periodEnd, item.timeZone)} · {windows[item.query?.window] || item.query?.window || 'Ventana sin informar'}{item.query?.horizon ? ` · horizonte ${item.query.horizon} días` : ''} · Moneda: {item.currency || 'No informada'}</p>
-    <p className={styles.muted}>Capturada {date(item.fetchedAt)} · antigüedad {age(item.ageMilliseconds)}. El proveedor puede retrasar datos hasta {item.providerDelayHours ?? 48} horas; captura no equivale a fecha de interacción.</p>
+    <p className={styles.muted}>Capturada <time dateTime={item.fetchedAt}>{date(item.fetchedAt)}</time> · antigüedad {age(item.ageMilliseconds)}. El proveedor puede retrasar datos hasta {item.providerDelayHours ?? 48} horas; captura no equivale a fecha de interacción.</p>
   </>;
   const captureEvidence = <details className={styles.evidence}><summary>{cited ? 'Fechas, cobertura y evidencia de la captura' : 'Definición, cobertura y evidencia de esta captura'}</summary>
     {cited && dates}
@@ -186,8 +203,8 @@ function jumpToResult(id) {
   target?.focus({ preventScroll: true });
   section.scrollIntoView({ block: 'start' });
 }
-function RecommendationCaptureLinks({ recommendation, onOpen }) {
-  return recommendation.metricIds?.length > 0 ? <ul>{recommendation.metricIds.map((id, index) => <li key={id}><button type="button" className="text-button" onClick={() => onOpen(recommendation, id)}>Abrir captura citada {recommendation.metricIds.length > 1 ? index + 1 : ''}</button></li>)}</ul> : <p>Sin capturas identificadas.</p>;
+function RecommendationCaptureLinks({ recommendation, onOpen, mark }) {
+  return recommendation.metricIds?.length > 0 ? <ul>{recommendation.metricIds.map((id, index) => <li key={id}><button type="button" className="text-button" data-advisor-control={mark('capture', recommendation, id)} onClick={() => onOpen(recommendation, id)}>Abrir captura citada{recommendation.metricIds.length > 1 ? ` ${index + 1}` : ''}</button></li>)}</ul> : <p>Sin capturas identificadas.</p>;
 }
 function RecommendationEvidence({ item, asOf, campaign }) {
   const evidence = item.primaryEvidence, criterion = item.successCriterion;
@@ -228,7 +245,7 @@ function EvidenceDialog({ evidence, api, onClose }) {
     return () => controller.abort();
   }, [api, evidence]);
   return <dialog ref={ref} className={`admin-dialog ${styles.dialog}`} aria-labelledby="social-evidence-title">
-    <header className={styles.dialogHeader}><h2 id="social-evidence-title" tabIndex={-1} data-dialog-initial-focus>Captura exacta del análisis</h2></header>
+    <header className={styles.dialogHeader}><h2 id="social-evidence-title" tabIndex={-1} data-dialog-initial-focus data-advisor-control={recommendationControls.capture}>Captura exacta del análisis</h2></header>
     <div className={styles.dialogBody}>{error ? <p role="alert">{error}</p> : data ? <><p className={`${styles.help} ${resultStyles.citationNote}`}>Lectura conservada, independiente de los filtros de la ficha.</p><Measurement item={data.measurement} delivery={data.delivery} cited analysisAsOf={data.asOf} priorityMetrics={recommendationMetricOrder(evidence.recommendation)}/></> : <p role="status">Cargando la captura citada…</p>}</div>
     <footer className={`${styles.dialogFooter} ${styles.actions}`}><button type="button" className="button subtle" onClick={close}>Cerrar captura</button></footer>
   </dialog>;
@@ -258,14 +275,31 @@ function BusinessPanel({ business, stale, onNavigate, links, onLink }) {
     <Facts rows={[["Retorno declarado al corte", returnKnown ? `${number(business.declaredReturn.value)} veces` : 'No disponible con la cobertura/moneda actual']]}/>
     <p>Retorno declarado = ventas netas de productos reconocidas / gasto Meta positivo, únicamente COP y cobertura completa; no es ROAS atribuido por Meta ni utilidad.</p>
     <Reasons values={business.declaredReturn?.reasons || []}/><Reasons values={business.coverage?.reasons || []}/>
-    <h4>Vínculos y trazabilidad</h4><div className={styles.actions}><button type="button" className="button subtle" onClick={() => onLink('order')}>Vincular pedido existente</button><button type="button" className="button subtle" onClick={() => onLink('expense')}>Vincular gasto publicitario existente</button><button type="button" className="button subtle" onClick={() => onNavigate?.({ section: 'cash', tab: 'expenses', category: 'advertising' })}>Consultar gastos en Caja</button></div>
-    {['order', 'expense'].map(kind => <div key={kind}><h4>{kind === 'order' ? 'Pedidos vinculados' : 'Gastos vinculados'}</h4>{!(links?.[kind === 'order' ? 'orders' : 'expenses'] || business[kind === 'order' ? 'orders' : 'expenses'] || []).length && <p>Sin {kind === 'order' ? 'pedidos' : 'gastos'} vinculados.</p>}{(links?.[kind === 'order' ? 'orders' : 'expenses'] || business[kind === 'order' ? 'orders' : 'expenses'] || []).map(record => <article className={styles.card} key={record.id}><h5>{kind === 'order' ? `Pedido ${record.number}` : record.concept || 'Gasto publicitario'}</h5><p>{kind === 'order' ? `${states[record.status] || record.status} · ${record.pendingRecognition ? 'Reconocimiento pendiente; no es venta reconocida' : `Reconocimiento ${record.recognitionOn || 'Sin fecha'}`}` : `${money(record.amountMinor, 'COP')} · ${record.incurredOn || 'Fecha desconocida'}${record.costPending ? ' · costo pendiente' : ''}`}</p><p>Etiqueta histórica, sin atribución automática: {record.marketingCampaign || record.campaign || 'Sin etiqueta'}</p><p>Origen declarado por {record.link?.actorId || 'Sin actor'} · {date(record.link?.updatedAt || record.link?.createdAt)} · versión de vínculo {record.link?.version ?? 'Sin dato'}</p><p>Motivo: {record.link?.reason || 'Sin motivo'}</p><div className={styles.actions}><button type="button" className="button subtle" onClick={() => onNavigate?.(kind === 'order' ? { section: 'orders', record: record.id } : { section: 'cash', tab: 'expenses', record: record.id, category: 'advertising' })}>Abrir {kind === 'order' ? 'pedido' : 'gasto en Caja'}</button><button type="button" className="button subtle" disabled={!record.link?.version} onClick={() => onLink(kind, record)}>Rectificar o retirar vínculo</button></div></article>)}</div>)}
+    <h4>Vínculos y trazabilidad</h4><div className={styles.actions}><button type="button" className="button subtle" data-advisor-control="ad-results-link-order" onClick={() => onLink('order')}>Vincular pedido existente</button><button type="button" className="button subtle" data-advisor-control="ad-results-link-expense" onClick={() => onLink('expense')}>Vincular gasto publicitario existente</button><button type="button" className="button subtle" onClick={() => onNavigate?.({ section: 'cash', tab: 'expenses', category: 'advertising' })}>Consultar gastos en Caja</button></div>
+    {['order','expense'].map(kind=>{
+      const order=kind==='order', key=order?'orders':'expenses';
+      const records=links?.[key]||business[key]||[];
+      const focus=`ad-results-linked-${kind}`;
+      return <div key={kind}>
+        <h4 tabIndex={records.length===1?undefined:-1} data-advisor-control={records.length===1?undefined:focus}>{order?'Pedidos vinculados':'Gastos vinculados'}</h4>
+        {!records.length&&<p>Sin {order?'pedidos':'gastos'} vinculados.</p>}
+        {records.map(record=><article className={styles.card} key={record.id}>
+          <h5>{order?`Pedido ${record.number}`:record.concept||'Gasto publicitario'}</h5>
+          <p>{order?`${states[record.status]||record.status} · ${record.pendingRecognition?'Reconocimiento pendiente; no es venta reconocida':`Reconocimiento ${record.recognitionOn||'Sin fecha'}`}`:`${money(record.amountMinor,'COP')} · ${record.incurredOn||'Fecha desconocida'}${record.costPending?' · costo pendiente':''}`}</p>
+          <p>Etiqueta histórica, sin atribución automática: {record.marketingCampaign||record.campaign||'Sin etiqueta'}</p>
+          <p>Origen declarado por {record.link?.actorId||'Sin actor'} · {date(record.link?.updatedAt||record.link?.createdAt)} · versión de vínculo {record.link?.version??'Sin dato'}</p>
+          <p>Motivo: {record.link?.reason||'Sin motivo'}</p>
+          <div className={styles.actions}>
+            <button type="button" className="button subtle" data-advisor-control={records.length===1?focus:undefined} onClick={()=>onNavigate?.(order?{section:'orders',record:record.id}:{section:'cash',tab:'expenses',record:record.id,category:'advertising'})}>Abrir {order?'pedido':'gasto en Caja'}</button>
+            <button type="button" className="button subtle" disabled={!record.link?.version} onClick={()=>onLink(kind,record)}>Rectificar o retirar vínculo</button>
+          </div>
+        </article>)}
+      </div>;
+    })}
     <details className={styles.evidence}><summary>Hechos y cobertura comercial</summary><Facts rows={[["Inicio económico conocido", business.coverage?.economicStartOn], ["Corte acumulado", business.accumulatedThrough || business.coverage?.through], ["Versiones de vínculos", text(business.linkVersions)], ["Hash de hechos", business.factHash], ["Hechos de ventas", text(business.recognizedProductSales?.factIds)], ["Hechos de contribución", text(business.knownContribution?.factIds)], ["Pagos de gastos", text(business.advertisingPayments?.payments)]]}/><EvidenceIds ids={business.metaSpend?.measurementIds}/></details>
   </section>;
 }
-function Recommendations({ analysis, campaign, stale, onAction, onAnalyze, busy, onEvidence }) {
-  const options = new Map(campaign.recommendations?.map(item => [item.id, item]) || []);
-  const recommendations = (analysis?.recommendations || []).slice(0, 5).map(item => ({ ...item, inPlace: options.get(item.id)?.inPlace || [] }));
+function Recommendations({ recommendations, analysis, campaign, stale, onAction, onAnalyze, busy, onEvidence, advisor, mark, choices }) {
   const card = item => {
     const type = item.proposedChange?.type, maintenance = ['measurement', 'offer_costs'].includes(type);
     const available = item.inPlace.filter(option => option.allowed), changeDrafts = Object.values(item.changeDrafts || {});
@@ -279,24 +313,25 @@ function Recommendations({ analysis, campaign, stale, onAction, onAnalyze, busy,
       {item.state === 'dismissed' && <p>Descartada, no evaluada.</p>}
       {item.state === 'applied' && <p>{item.trial ? 'Cambio remoto comprobado.' : 'Borrador preparado; no significa que se publicó.'}</p>}
       {item.conclusion && <p>{conclusions[item.conclusion]}.</p>}
-      <RecommendationCaptureLinks recommendation={item} onOpen={onEvidence}/>
-      <details className={styles.evidence}><summary>Hipótesis y limitaciones</summary><p><strong>Hipótesis:</strong> {item.hypothesis}</p><Reasons values={item.limitations || []}/>{item.sampleIds?.map(id => <p key={id}><button type="button" className="text-button" onClick={() => onAction({ type: 'open-sample', campaignId: id })}>Abrir publicación de muestra {id}</button></p>)}</details>
+      <RecommendationCaptureLinks recommendation={item} onOpen={onEvidence} mark={mark}/>
+      <details className={styles.evidence} data-advisor-disclosure><summary>Hipótesis y limitaciones</summary><p><strong>Hipótesis:</strong> {item.hypothesis}</p><Reasons values={item.limitations || []}/>{item.sampleIds?.map(id => <p key={id}><button type="button" className="text-button" data-advisor-control={mark('comparable', item, id)} onClick={() => onAction({ type: 'open-sample', campaignId: id })}>Abrir publicación de muestra {id}</button></p>)}</details>
       {item.state === 'suggested' && <><div className={styles.actions}>
         {maintenance ? <button type="button" className="button primary" disabled={busy} onClick={() => onAction({ type })}>{type === 'measurement' ? 'Completar medición' : 'Revisar pedidos y costos vinculados'}</button> : changeDrafts.length ? changeDrafts.map(id => <button type="button" className="button primary" key={id} disabled={busy} onClick={() => onAction({ type: 'open-draft', campaignId: id })}>Retomar cambio en la misma pieza</button>) : <>
-          {available.map(option => <button type="button" className="button primary" key={option.deliveryId} disabled={busy || stale} onClick={() => onAction({ type: 'prepare-in-place', recommendation: item, option })}>Cambiar aquí{option.channel === 'facebook' ? ' · solo Facebook' : ''}</button>)}
-          <button type="button" className="button subtle" disabled={busy || stale} onClick={() => onAction({ type: 'duplicate-from-recommendation', recommendation: item })}>Preparar una variante</button>
+          {available.map(option => <button type="button" className="button primary" key={option.deliveryId} data-advisor-control={mark('prepare-in-place', item, option.deliveryId)} disabled={busy || stale} onClick={() => onAction({ type: 'prepare-in-place', recommendation: item, option })}>Cambiar aquí{option.channel === 'facebook' ? ' · solo Facebook' : option.channel === 'instagram' ? ' · solo Instagram' : option.channel === 'meta_ads' ? ' · pauta Meta' : ''}</button>)}
+          {canPrepareVariant(type) && <button type="button" className="button subtle" data-advisor-control={mark('duplicate-from-recommendation', item)} disabled={busy || stale} onClick={() => onAction({ type: 'duplicate-from-recommendation', recommendation: item })}>Preparar una variante</button>}
         </>}
-        {!changeDrafts.length && <button type="button" className="button subtle" disabled={busy} onClick={() => onAction({ type: 'dismiss', recommendation: item })}>Descartar con motivo</button>}
+        {canDismiss(item) && <button type="button" className="button subtle" data-advisor-control={mark('dismiss', item)} disabled={busy} onClick={() => onAction({ type: 'dismiss', recommendation: item })}>Descartar con motivo</button>}
       </div>{!maintenance && !changeDrafts.length && item.inPlace.filter(option => !option.allowed).map(option => <p className={styles.help} key={option.deliveryId}>{channels[option.channel]}: {option.reason}</p>)}</>}
     </article>;
   };
   return <section className={`${styles.panel} ${resultStyles.stage}`} aria-labelledby="social-results-recommendations-title">
     <header className={resultStyles.stageTitle}><h3 id="social-results-recommendations-title">Evidencia y acciones de las recomendaciones guardadas</h3><p>Una observación no diagnostica la causa.</p></header>
-    <div className={resultStyles.operation}><button type="button" className="button subtle" disabled={busy || !campaign.revisions?.length} onClick={onAnalyze}>Revisar mejoras</button><p className={styles.help}>Reevalúa la evidencia guardada aquí. No consulta a Meta, publica ni autoriza gasto.</p></div>
+    <div className={resultStyles.operation}><button type="button" className="button subtle" data-advisor-control={advisor && campaign.revisions?.length ? 'ad-results-analyze' : undefined} disabled={busy || !campaign.revisions?.length} onClick={onAnalyze}>Revisar mejoras</button><p className={styles.help}>Reevalúa la evidencia guardada aquí. No consulta a Meta, publica ni autoriza gasto.</p></div>
     {analysis?.job?.errorCode && <p className={styles.warning}>La evaluación local falló; se conserva la anterior.</p>}
     {!recommendations.length && <p>{analysis?.status === 'current' ? 'No hay un cambio justificado por ahora.' : 'Aún no hay una evaluación vigente. Comprueba la medición antes de cambiar la pieza o invertir más.'}</p>}
+    {choices}
     {recommendations.length > 0 && card(recommendations[0])}
-    {recommendations.length > 1 && <details><summary>Ver las demás ({recommendations.length - 1})</summary>{recommendations.slice(1).map(card)}</details>}
+    {recommendations.length > 1 && <details data-advisor-disclosure><summary>Ver las demás ({recommendations.length - 1})</summary>{recommendations.slice(1).map(card)}</details>}
   </section>;
 }
 
@@ -353,20 +388,37 @@ function Performance({ campaign, rows = [], measurements = [], current, locked, 
   </MetaReportedPerformance>;
 }
 
-function Learnings({ id, api, refresh, onNavigate, onEvidence }) {
-  const [data, setData] = useState(null), [error, setError] = useState(''), [cursor, setCursor] = useState(null);
+function useResultLearnings(id, api, refresh) {
+  const [history, setHistory] = useState(null), [error, setError] = useState(''), [cursor, setCursor] = useState(null);
   useEffect(() => {
     const controller = new AbortController(), query = new URLSearchParams({ campaignId: id });
     if (cursor) query.set('cursor', cursor);
-    api(`${ROOT}/learnings?${query}`, { signal: controller.signal }).then(result => { if (!controller.signal.aborted) { setData(result); setError(''); } }).catch(cause => { if (!controller.signal.aborted && cause.name !== 'AbortError') setError(cause.message); });
+    api(`${ROOT}/learnings?${query}`, { signal: controller.signal }).then(data => {
+      if (!controller.signal.aborted) { setHistory({ data, refresh, cursor }); setError(''); }
+    }).catch(cause => { if (!controller.signal.aborted && cause.name !== 'AbortError') setError(cause.message); });
     return () => controller.abort();
   }, [id, api, refresh, cursor]);
+  return { data: history?.data, current: Boolean(!error && history?.refresh === refresh && history.cursor === cursor), error, cursor, setCursor };
+}
+
+function learningCampaigns(item, id) {
+  return [
+    item.campaignId !== id && { id: item.campaignId, label: 'Ver pieza original', tab: 'results' },
+    item.childCampaignId && item.childCampaignId !== id && (item.childState === 'draft'
+      ? { id: item.childCampaignId, label: 'Retomar borrador', tab: 'campaigns' }
+      : { id: item.childCampaignId, label: 'Ver variante', tab: 'results' }),
+  ].filter(Boolean);
+}
+
+function Learnings({ id, state, onNavigate, onEvidence, mark, choices }) {
+  const { data, error, cursor, setCursor } = state;
   const navigate = (record, tab) => onNavigate?.({ section: 'advertising', tab, record, ...(tab === 'results' ? { resultsFocus: 'learnings' } : {}) });
   return <section className={`${styles.panel} ${resultStyles.stage}`} aria-labelledby="social-results-learnings-title">
     <header className={resultStyles.stageTitle}><p className={styles.eyebrow}>Aprendizajes</p><h3 id="social-results-learnings-title">Qué aprendimos</h3><p>Historial de pruebas y sus conclusiones según el criterio acordado.</p></header>
     {error && <p role="alert">{error} {data && 'Se conserva la lectura anterior.'}</p>}
     {!data && !error && <p role="status">Cargando historial de pruebas…</p>}
     {data?.learnings.length === 0 && <p>Aún no hay pruebas. Cuando una propuesta tenga evidencia, elige probar una variable en esta pieza o en una nueva.</p>}
+    {choices}
     {data?.learnings.map(item => <article key={item.id} className={`${styles.card} ${resultStyles.learningCard}`}>
       <h4>{item.proposedChange?.text || item.observation}</h4>
       <p>{[objectives[item.objective], channels[item.channel], item.applicationMode === 'same' ? 'Misma entrega' : item.applicationMode === 'new' ? 'Pieza nueva' : null].filter(Boolean).join(' · ')}</p><Offer offer={item.offerSnapshot}/>
@@ -379,26 +431,82 @@ function Learnings({ id, api, refresh, onNavigate, onEvidence }) {
         {[item.evaluation?.beforePeriod, item.evaluation?.afterPeriod].map((period, index) => period && (period.impressions != null || period.reach != null) ?
           <p key={index}>{index === 0 ? 'Exposición anterior' : 'Exposición posterior'}: {number(period.impressions ?? period.reach)} {period.impressions != null ? 'impresiones' : 'personas alcanzadas'} en una captura completa.</p> : null)}
       </> : item.transition || item.childState && !['draft', 'cancelled'].includes(item.childState) ? <p>Aún estamos midiendo{item.expectedAt ? ` · horizonte ${date(item.expectedAt)}` : ''}.</p> : item.childCampaignId ? <p>Borrador preparado; todavía no acredita publicación.</p> : null}
-      {item.metricIds?.length > 0 && <details className={styles.evidence}><summary>Capturas que fundamentaron la propuesta</summary><RecommendationCaptureLinks recommendation={item} onOpen={onEvidence}/></details>}
+      {item.metricIds?.length > 0 && <details className={styles.evidence} data-advisor-disclosure><summary>Capturas que fundamentaron la propuesta</summary><RecommendationCaptureLinks recommendation={item} onOpen={onEvidence} mark={mark}/></details>}
       {item.state === 'suggested' && Object.values(item.changeDrafts || {}).map(draftId => <button type="button" className="button subtle" key={draftId} onClick={() => navigate(draftId, 'campaigns')}>Retomar cambio preparado</button>)}
-      <div className={styles.actions}>{item.campaignId !== id && <button type="button" className="button subtle" onClick={() => navigate(item.campaignId, 'results')}>Ver pieza original</button>}{item.childCampaignId && item.childCampaignId !== id && <button type="button" className="button subtle" onClick={() => navigate(item.childCampaignId, item.childState === 'draft' ? 'campaigns' : 'results')}>{item.childState === 'draft' ? 'Retomar borrador' : 'Ver variante'}</button>}{item.operationId && <a href="#social-results-captures" onClick={openCaptures}>Comprobar la misma entrega</a>}</div>
+      <div className={styles.actions}>{learningCampaigns(item, id).map(target => <button type="button" className="button subtle" key={target.id} data-advisor-control={target.tab === 'results' ? mark('comparable', item, target.id) : undefined} onClick={() => navigate(target.id, target.tab)}>{target.label}</button>)}{item.operationId && <a href="#social-results-captures" onClick={openCaptures}>Comprobar la misma entrega</a>}</div>
     </article>)}
     <div className={styles.pagination}>{cursor && <button type="button" className="button subtle" onClick={() => setCursor(null)}>Volver a las más recientes</button>}{data?.nextCursor && <button type="button" className="button subtle" onClick={() => setCursor(data.nextCursor)}>Pruebas anteriores</button>}</div>
   </section>;
 }
+function RecommendationSections({ id, api, snapshot, campaign, analysis, stale, busy, advisor, onAnalyze, onAction, onNavigate, onEvidence }) {
+  const learnings = useResultLearnings(id, api, snapshot.loadedAt);
+  const options = new Map(campaign.recommendations?.map(item => [item.id, item.inPlace]) || []);
+  const recommendations = (analysis?.recommendations || []).slice(0, 5).map(item => ({ ...item, inPlace: options.get(item.id) || [] }));
+  const targets = new Map();
+  function add(type, source, item, record) {
+    if (!targets.has(type)) targets.set(type, new Map());
+    const candidates = targets.get(type), key = recommendationTarget(item, record);
+    if (!candidates.has(key)) candidates.set(key, source);
+  }
+  const allLearnt = learnings.current && !learnings.cursor && !learnings.data.nextCursor;
+  if (advisor) {
+    for (const item of recommendations) {
+      // A citation can appear in both sections. Count its record and evidence cut once.
+      if (learnings.current) {
+        for (const capture of item.metricIds || []) add('capture', 'recommendations', item, capture);
+        for (const sample of item.sampleIds || []) add('comparable', 'recommendations', item, sample);
+      }
+      if (!busy && canDismiss(item)) {
+        add('dismiss', 'recommendations', item);
+        if (!stale && canPrepareVariant(item.proposedChange?.type)) {
+          add('duplicate-from-recommendation', 'recommendations', item);
+          for (const option of item.inPlace) if (option.allowed) add('prepare-in-place', 'recommendations', item, option.deliveryId);
+        }
+      }
+    }
+    if (learnings.current) for (const item of learnings.data.learnings) {
+      for (const capture of item.metricIds || []) add('capture', 'learnings', item, capture);
+      for (const target of learningCampaigns(item, id)) if (target.tab === 'results') add('comparable', 'learnings', item, target.id);
+    }
+  }
+  const needsChoice = (type, candidates) => candidates.size > 1 || (!allLearnt && (type === 'capture' || type === 'comparable'));
+  const mark = source => (type, item, record) => {
+    const candidates = targets.get(type);
+    if (candidates && !needsChoice(type, candidates) && candidates.get(recommendationTarget(item, record)) === source) return recommendationControls[type];
+  };
+  const choices = source => [...targets].map(([type, candidates]) => {
+    if (!needsChoice(type, candidates)) return null;
+    const sections = new Set(candidates.values());
+    if (source !== (sections.has('recommendations') ? 'recommendations' : 'learnings')) return null;
+    return <div key={type}><h4 tabIndex={-1} data-advisor-control={recommendationControls[type]}>{resultChoiceLabels[type]}</h4>
+      {(sections.size > 1 || !allLearnt && (type === 'capture' || type === 'comparable') && source === 'recommendations') && <button type="button" className="text-button" onClick={() => jumpToResult('social-results-learnings')}>Ir a las opciones en aprendizajes</button>}
+    </div>;
+  });
+  return <>
+    <details id="social-results-recommendations" className={`${styles.technicalDetails} ${resultStyles.disclosure}`} data-advisor-disclosure><summary data-advisor-control="Qué probar ahora">Evidencia y acciones de las recomendaciones</summary>
+      <Recommendations recommendations={recommendations} analysis={analysis} campaign={campaign} stale={stale} busy={busy} onAnalyze={onAnalyze} onAction={onAction} onEvidence={onEvidence} advisor={advisor} mark={mark('recommendations')} choices={choices('recommendations')}/>
+    </details>
+    <details id="social-results-learnings" className={`${styles.technicalDetails} ${resultStyles.disclosure}`} data-advisor-disclosure><summary data-advisor-control="Qué aprendimos">Historial de pruebas y aprendizajes</summary>
+      <Learnings id={id} state={learnings} onNavigate={onNavigate} onEvidence={onEvidence} mark={mark('learnings')} choices={choices('learnings')}/>
+    </details>
+  </>;
+}
+
 function ResultActionDialog({ action, campaignId, api, requestIds, onClose, onSaved, onInteractionStateChange }) {
+  const { requestOpen } = useAssistantBridge();
   const ref = useRef(null), errorRef = useRef(null), controllers = useRef(new Set()), mounted = useRef(true), searchSequence = useRef(0), submitLocked = useRef(false);
   const [reason, setReason] = useState(''), [acknowledged, setAcknowledged] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [query, setQuery] = useState(''), [search, setSearch] = useState({ q: '', page: 1 }), [candidates, setCandidates] = useState(null), [searching, setSearching] = useState(false), [searchError, setSearchError] = useState('');
   const initialRecord = action.record ? { ...action.record, recordId: action.record.id, link: { ...action.record.link, campaignId } } : null;
   const [selected, setSelected] = useState(initialRecord), [unlink, setUnlink] = useState(false);
   const isLink = action.type === 'link', dirty = Boolean(reason || acknowledged || selected?.recordId !== initialRecord?.recordId || unlink);
+  const hasReason = action.type === 'dismiss' || Boolean(isLink && selected);
   const assistant = useAssistantForm({
     target: 'advertising-result-action',
-    entityId: action.record?.id || action.recommendation?.id || null,
-    recordVersion: action.record?.link?.version ?? action.recommendation?.version ?? null,
+    entityId: selected?.recordId ?? action.recommendation?.id ?? null,
+    recordVersion: isLink && selected ? selected.link?.version ?? 0 : action.recommendation?.version ?? null,
     values: { reason }, dirty, busy,
-    enabled: isLink || action.type === 'dismiss',
+    enabled: hasReason,
     generationKey: JSON.stringify([campaignId, action.type, action.kind, selected?.recordId, selected?.link?.version, unlink, acknowledged]),
     applyPatch: patch => {
       if (Object.keys(patch).some(key => key !== 'reason')) throw new Error('La selección y confirmación de esta acción son manuales.');
@@ -448,20 +556,22 @@ function ResultActionDialog({ action, campaignId, api, requestIds, onClose, onSa
     };
     await saveUnassisted();
   }
-  return <dialog ref={ref} className={styles.dialog} aria-labelledby="social-results-action-title" inert={assistant.assistantBusy} style={{ maxWidth: 'min(48rem, calc(100vw - 2rem))', overflowWrap: 'anywhere' }}><header className={styles.dialogHeader}><h2 id="social-results-action-title">{title}</h2><button type="button" className="button subtle" onClick={close} disabled={busy || assistant.assistantBusy}>Cerrar</button></header><div className={styles.dialogBody}>
-    {isLink && <><p>Origen declarado por el administrador, no atribución automática. No cambia etiquetas históricas ni crea pedidos, gastos o pagos. Un registro solo puede pertenecer a una campaña.</p><form method="post" onSubmit={event => { event.preventDefault(); if (!busy && !assistant.assistantBusy) setSearch({ q: query.trim(), page: 1 }); }}><fieldset disabled={busy || assistant.assistantBusy} className="editor-fieldset"><div className={styles.fieldGrid}><Field field={{ name: 'linkSearch', label: action.kind === 'order' ? 'Buscar por número o etiqueta histórica' : 'Buscar por concepto o etiqueta histórica', max: 200 }} value={query} onChange={setQuery}/><button type="submit" className="button subtle" disabled={busy || searching || assistant.assistantBusy}>Buscar registros</button></div></fieldset></form>
+  return <dialog ref={ref} className={`${styles.dialog} ${styles.resultActionDialog}`} data-ad-results-action-dialog={action.type} data-ad-results-link-dialog={isLink?action.kind:undefined} aria-labelledby="social-results-action-title" inert={assistant.assistantBusy} style={{ maxWidth: 'min(48rem, calc(100vw - 2rem))', overflowWrap: 'anywhere' }}><header className={styles.dialogHeader}><h2 id="social-results-action-title">{title}</h2><button type="button" className="button subtle" onClick={close} disabled={busy || assistant.assistantBusy}>Cerrar</button></header><div className={styles.dialogBody}>
+    {isLink && <><p>Origen declarado por el administrador, no atribución automática. No cambia etiquetas históricas ni crea pedidos, gastos o pagos. Un registro solo puede pertenecer a una campaña.</p><form method="post" onSubmit={event => { event.preventDefault(); if (!busy && !assistant.assistantBusy) setSearch({ q: query.trim(), page: 1 }); }}><fieldset disabled={busy || assistant.assistantBusy} className="editor-fieldset"><div className={styles.fieldGrid}><Field field={{ name: 'linkSearch', label: action.kind === 'order' ? 'Buscar por número o etiqueta histórica' : 'Buscar por concepto o etiqueta histórica', advisorControl:`ad-results-link-search-${action.kind}`, max: 200 }} value={query} onChange={setQuery}/><button type="submit" className="button subtle" disabled={busy || searching || assistant.assistantBusy}>Buscar registros</button></div></fieldset></form>
+      {!selected && <div className={styles.actions}><button type="button" className="button subtle" aria-haspopup="dialog" disabled={busy || assistant.assistantBusy} onClick={() => requestOpen()}>Ali: revisar este control</button></div>}
       {searching && <p role="status">Consultando candidatos locales…</p>}{searchError && <p role="alert" className={styles.error}>{searchError} Los candidatos anteriores no se consideran una búsqueda nueva.</p>}
       {candidates && <><p>Resultados para «{candidates.q || 'todos'}» · página {candidates.page} · {candidates.total} registros.</p><div className={styles.choiceList}>{candidates.items.map(item => <article className={styles.card} key={item.recordId}><p><strong>{action.kind === 'order' ? `Pedido ${item.number}` : item.concept}</strong> · {money(item.totalMinor ?? item.amountMinor, 'COP')}</p><p>Etiqueta histórica: {item.marketingCampaign || item.campaign || 'Sin etiqueta'}. No crea vínculo por coincidencia.</p>{item.link && <p>Vínculo actual: {item.link.campaignName || item.link.campaignId} · versión {item.link.version} · {item.link.actorId} · {date(item.link.updatedAt)} · motivo: {item.link.reason}</p>}<button type="button" className="button subtle" disabled={busy || searching || Boolean(searchError)} aria-pressed={selected?.recordId === item.recordId} onClick={() => { setSelected(item); setUnlink(false); setAcknowledged(false); }}>{item.link?.campaignId && item.link.campaignId !== campaignId ? 'Cambiar vínculo a esta campaña' : item.link ? 'Rectificar vínculo de esta campaña' : 'Seleccionar para vincular'}</button></article>)}</div>{!candidates.items.length && <p>No hay registros coincidentes elegibles. Los gastos candidatos pertenecen únicamente a Publicidad.</p>}<div className={styles.pagination}><button type="button" className="button subtle" disabled={busy || searching || candidates.page <= 1} onClick={() => setSearch({ q: candidates.q, page: candidates.page - 1 })}>Anterior</button><button type="button" className="button subtle" disabled={busy || searching || candidates.page * candidates.pageSize >= candidates.total} onClick={() => setSearch({ q: candidates.q, page: candidates.page + 1 })}>Siguiente</button></div></>}
     </>}
     <form method="post" onSubmit={submit} aria-busy={busy} className={styles.stack}>
       {error && <div role="alert" tabIndex={-1} ref={errorRef} className={styles.error}>{error}</div>}
       <fieldset disabled={busy || assistant.assistantBusy} className="editor-fieldset">
-        {isLink && selected && <><p>Seleccionado: {action.kind === 'order' ? `Pedido ${selected.number}` : selected.concept} · versión del vínculo {selected.link?.version ?? 0} {selected.link ? '(existente)' : '(nuevo)'}</p>{changingOrigin && <p className={styles.warning}>Cambiar vínculo: se retirará de {selected.link.campaignName || selected.link.campaignId} y se asociará a esta campaña. Ambas evaluaciones comerciales deberán recalcularse.</p>}{selected.link?.campaignId === campaignId && <label className={styles.checkRow}><input type="checkbox" checked={unlink} onChange={event => { setUnlink(event.target.checked); setAcknowledged(false); }}/>Retirar este vínculo sin borrar el pedido/gasto original</label>}</>}
+        {isLink && selected && <><p>Seleccionado: {action.kind === 'order' ? `Pedido ${selected.number}` : selected.concept} · versión del vínculo {selected.link?.version ?? 0} {selected.link ? '(existente)' : '(nuevo)'}</p>{changingOrigin && <p className={styles.warning}>Cambiar vínculo: se retirará de {selected.link.campaignName || selected.link.campaignId} y se asociará a esta campaña. Ambas evaluaciones comerciales deberán recalcularse.</p>}{selected.link?.campaignId === campaignId && <label className={styles.checkRow}><input type="checkbox" data-advisor-control="ad-results-link-remove" checked={unlink} onChange={event => { setUnlink(event.target.checked); setAcknowledged(false); }}/>Retirar este vínculo sin borrar el pedido/gasto original</label>}</>}
+        {!isLink && action.type !== 'duplicate-from-recommendation' && <p>Propuesta: {action.recommendation.proposedChange?.text || action.recommendation.observation}</p>}
         {!isLink && action.type === 'duplicate-from-recommendation' && <><p>La variante conserva la oferta, el texto y la pieza como punto de partida, sin copiar fechas, aprobación, autorizaciones de gasto ni vínculos financieros. No hereda comentarios, resultados ni enlace del original.</p><p>Idea: {action.recommendation.proposedChange?.text}</p><p>Elige los destinos y confirma un cambio real en la variable propuesta. La publicación y la inversión son decisiones posteriores.</p></>}
         {inPlace && <><p>Destino: {channels[action.option.channel]}. Solo cambiará {({ caption: 'el texto', asset: 'la imagen', placement: 'las ubicaciones' })[action.option.variable]}; se conservará la entrega y su aprobación histórica. No se escribe en Meta al preparar el borrador.</p><p>{action.option.channel === 'meta_ads' ? 'Conserva el total, público y fechas. Una pauta pausada no se reanuda sola y Meta puede volver a revisar el anuncio.' : 'Los totales acumulados no permiten aislar el efecto de un cambio de texto.'}</p></>}
-        {(isLink || action.type === 'dismiss') && <Field field={{ name: 'reason', label: 'Motivo de la rectificación o decisión', type: 'textarea', required: true, max: 500, description: 'Entre 1 y 500 caracteres. Se conserva con actor, fecha y versión para auditoría.' }} value={reason} onChange={changeReason}/>}
-        {(isLink || action.type === 'dismiss') && <button type="button" className="button subtle" disabled={assistant.assistantBusy || busy} onClick={assistant.openAssistant}>Ayúdame con el motivo</button>}
-        <label className={styles.checkRow}><input type="checkbox" required checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/>{isLink ? 'Confirmo el registro seleccionado y el cambio de vínculo declarado; no atribuye ventas ni modifica dinero.' : action.type === 'dismiss' ? 'Revisé esta propuesta y confirmo que la descarto con el motivo indicado.' : 'Confirmo que solo se preparará un borrador; no autoriza publicación ni inversión.'}</label>
+        {(isLink || action.type === 'dismiss') && <Field field={{ name: 'reason', label: 'Motivo de la rectificación o decisión', type: 'textarea', required: true, max: 500, advisorControl:isLink?'ad-results-link-reason':undefined, description: 'Entre 1 y 500 caracteres. Se conserva con actor, fecha y versión para auditoría.' }} value={reason} onChange={changeReason}/>}
+        {hasReason && <button type="button" className="button subtle" data-advisor-control="ad-results-action-reason" disabled={assistant.assistantBusy || busy} onClick={assistant.openAssistant}>Ayúdame con el motivo</button>}
+        <label className={styles.checkRow}><input type="checkbox" data-advisor-control={isLink ? selected ? changingOrigin ? 'ad-results-link-reassign' : 'ad-results-link-confirm' : undefined : recommendationControls[action.type]} required checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/>{isLink ? 'Confirmo el registro seleccionado y el cambio de vínculo declarado; no atribuye ventas ni modifica dinero.' : action.type === 'dismiss' ? 'Revisé esta propuesta y confirmo que la descarto con el motivo indicado.' : 'Confirmo que solo se preparará un borrador; no autoriza publicación ni inversión.'}</label>
       </fieldset><div className={styles.actions}><button type="button" className="button subtle" disabled={busy || assistant.assistantBusy} onClick={close}>Cancelar</button><button type="submit" className="button primary" disabled={busy || assistant.assistantBusy || isLink && !selected}>{busy ? 'Guardando…' : isLink ? changingOrigin ? 'Cambiar vínculo' : unlink ? 'Retirar vínculo' : 'Guardar vínculo' : action.type === 'dismiss' ? 'Descartar propuesta' : inPlace ? 'Preparar cambio' : 'Crear variante'}</button></div>
     </form>
   </div></dialog>;
@@ -523,7 +633,7 @@ function CampaignResultList({ api, q, page, revision, onQuery, onPage, onOpen, o
       {list && <span className={styles.badge}>{list.total} {list.total === 1 ? 'pieza' : 'piezas'}</span>}
     </div>
     <form method="post" className={resultStyles.searchBar} onSubmit={event => { event.preventDefault(); onQuery(search.trim()); }}>
-      <Field field={{ name: 'campaignSearch', label: 'Buscar publicaciones', max: 100 }} value={search} onChange={setSearch}/>
+      <label className="field">Buscar publicaciones<input type="search" name="campaignSearch" data-advisor-control="ad-results-search" maxLength={100} value={search} onChange={event=>setSearch(event.target.value)}/></label>
       <button type="submit" className="button subtle">Buscar publicaciones</button>
     </form>
     {error ? <div ref={errorRef} tabIndex={-1} role="alert" className={styles.error}><p>{error}</p><button type="button" className="text-button" onClick={() => setRetry(value => value + 1)}>Reintentar listado</button></div>
@@ -552,6 +662,8 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
   const [from, setFrom] = useState(view.from || ''), [to, setTo] = useState(view.to || '');
   const [periodError, setPeriodError] = useState(''), [actionError, setActionError] = useState('');
   const [action, setAction] = useState(null), [actionBusy, setActionBusy] = useState(false), [dialogInteraction, setDialogInteraction] = useState({ dirty: false, busy: false }), [notice, setNotice] = useState(''), [invalidatedAnalysis, setInvalidatedAnalysis] = useState(null);
+  const [syncConsent, setSyncConsent] = useState(null), syncDialog = useRef(null);
+  const closeSyncConsent = useDialog(syncDialog, { open: Boolean(syncConsent), onClose: () => setSyncConsent(null) });
   const [evidence, setEvidence] = useState(null);
   const sequence = useRef(0), reads = useRef(null), requestIds = useRef(new Map()), mutationControllers = useRef(new Set()), mounted = useRef(true), parentInteraction = useRef(onInteractionStateChange);
   const headingRef = useRef(null), errorRef = useRef(null), periodErrorRef = useRef(null), actionErrorRef = useRef(null), filterSummary = useRef(null), focusId = useRef(null), focusAccount = useRef(false), listPage = useRef(1);
@@ -596,7 +708,7 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
   const busy = actionBusy || dialogInteraction.busy;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; reads.current?.abort(); for (const controller of mutationControllers.current) controller.abort(); parentInteraction.current?.({ dirty: false, busy: false }); }; }, []);
   useEffect(() => { setFrom(view.from || ''); setTo(view.to || ''); setPeriodError(''); }, [view.from, view.to]);
-  useEffect(() => { setError(''); setActionError(''); setPeriodError(''); setNotice(''); setAction(null); setEvidence(null); }, [id]);
+  useEffect(() => { setError(''); setActionError(''); setPeriodError(''); setNotice(''); setAction(null); setEvidence(null); setSyncConsent(null); }, [id]);
   useEffect(() => { if (!id) listPage.current = page; }, [id, page]);
   useLayoutEffect(() => {
     if (id) return;
@@ -632,20 +744,20 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
   useEffect(() => {
     if (!sameRecord || focusId.current === id) return;
     focusId.current = id;
-    headingRef.current?.focus();
+    if (!document.activeElement?.hasAttribute('data-advisor-arrival')) headingRef.current?.focus();
   }, [sameRecord, id]);
   useEffect(() => {
-    if (sameRecord && view.resultsFocus) jumpToResult(`social-results-${view.resultsFocus}`);
+    if (sameRecord && view.resultsFocus && !document.activeElement?.hasAttribute('data-advisor-arrival')) jumpToResult(`social-results-${view.resultsFocus}`);
   }, [sameRecord, id, view.resultsFocus]);
   useEffect(() => {
     if (!id) return;
     let timer;
-    const schedule = () => { clearTimeout(timer); if (document.visibilityState === 'visible') timer = setTimeout(() => { if (!action && !busy) setRefresh(value => value + 1); schedule(); }, pending ? 5000 : 60000); };
-    const visible = () => { if (document.visibilityState === 'visible' && !action && !busy) setRefresh(value => value + 1); schedule(); };
+    const schedule = () => { clearTimeout(timer); if (document.visibilityState === 'visible') timer = setTimeout(() => { if (!action && !syncConsent && !busy) setRefresh(value => value + 1); schedule(); }, pending ? 5000 : 60000); };
+    const visible = () => { if (document.visibilityState === 'visible' && !action && !syncConsent && !busy) setRefresh(value => value + 1); schedule(); };
     schedule(); document.addEventListener('visibilitychange', visible);
     return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', visible); };
-  }, [id, pending, action, busy]);
-  const change = patch => busy || action ? false : onViewChange?.({ ...patch, page: patch.page ?? 1 });
+  }, [id, pending, action, syncConsent, busy]);
+  const change = patch => busy || action || syncConsent ? false : onViewChange?.({ ...patch, page: patch.page ?? 1 });
   const resultFilters = [...RESULT_FILTERS.map(([key, title, options]) => [key, title, options[view[key]]]), ['from', 'Desde', view.from], ['to', 'Hasta', view.to]].filter(([key]) => Boolean(view[key]));
   const removeResultFilter = key => { if (change({ [key]: null }) !== false) filterSummary.current?.focus(); };
   const clearResultFilters = () => {
@@ -722,7 +834,9 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
       onCreate={() => onNavigate?.({ section: 'advertising', tab: 'campaigns', record: 'new' })}/>
   </section>;
 
-  const locked = busy || Boolean(action);
+  const locked = busy || Boolean(action || syncConsent);
+  const canSync = current && !error && hasDeliveries && !busy && !action && !evidence;
+  const syncConsentCurrent = canSync && syncConsent?.id === id && syncConsent.version === campaign?.version;
   const hasBusiness = hasDeliveries && Boolean(results.business);
   const approved = campaign?.revisions?.at(-1), spec = approved?.spec ?? campaign;
   const economicForecast = selectSocialEconomicForecast(campaign);
@@ -759,7 +873,7 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
       <EconomicRecommendation recommendation={validRecommendation} business={results.business} spec={spec} unpublished={!hasDeliveries}
         measurementsAvailable={current && !error && results.performance?.some(row => row.value?.value != null && !row.stale && !row.newerPartial && !row.partial)}/>
       {!hasDeliveries && <>
-        <p className={styles.notice}><strong>{campaignState(campaign)}</strong> · Sin entregas; aún no hay rendimiento que analizar. Guardar o aprobar no equivale a publicar.</p>
+        <p className={styles.notice} tabIndex={-1} data-advisor-control={current && !error ? 'Métricas completas, capturas y estado por destino' : undefined}><strong>{campaignState(campaign)}</strong> · Sin entregas; aún no hay rendimiento que analizar. Guardar o aprobar no equivale a publicar.</p>
         <ApprovedCampaign campaign={campaign} onNavigate={onNavigate}/>
       </>}
     </>}
@@ -773,21 +887,21 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
         </fieldset>
       </form>
       {periodError && <p role="alert" tabIndex={-1} ref={periodErrorRef} className={styles.error}>{periodError}</p>}
-      <details className={styles.filterDetails}><summary ref={filterSummary}>Más filtros de resultados</summary><div className={styles.fieldGrid}>{RESULT_FILTERS.map(([key, title, options]) => <label className="field" key={key}>{title}<select name={key} value={view[key] || ''} disabled={locked} onChange={event => change({ [key]: event.target.value || null })}><option value="">Todas, por separado</option>{Object.entries(options).map(([value, title]) => <option value={value} key={value}>{title}</option>)}</select></label>)}</div></details>
+      <details className={styles.filterDetails} data-advisor-disclosure><summary ref={filterSummary}>Más filtros de resultados</summary><div className={styles.fieldGrid}>{RESULT_FILTERS.map(([key, title, options]) => <label className="field" key={key}>{title}<select name={key} value={view[key] || ''} data-advisor-control={key === 'integrationMethod' ? 'Período y filtros' : undefined} disabled={locked} onChange={event => change({ [key]: event.target.value || null })}><option value="">Todas, por separado</option>{Object.entries(options).map(([value, title]) => <option value={value} key={value}>{title}</option>)}</select></label>)}</div></details>
       {resultFilters.length > 0 && <div className="active-filters" aria-label="Filtros de resultados">{resultFilters.map(([key, title, value]) => <button type="button" className="filter-chip" key={key} disabled={locked} aria-label={`Quitar filtro: ${title}: ${value}`} onClick={() => removeResultFilter(key)}>{title}: {value} <span aria-hidden="true">×</span></button>)}<button type="button" className="text-button" disabled={locked} onClick={clearResultFilters}>Limpiar filtros de resultados</button></div>}
       <p className={styles.help}>Los filtros no recortan el acumulado comercial de pedidos y gastos vinculados.</p>
     </section>}
     {sameRecord && <section id="social-results-refresh" tabIndex={-1} className={`${styles.panel} ${resultStyles.stage}`} aria-labelledby="social-results-refresh-title">
-      <header className={resultStyles.stageTitle}><h3 id="social-results-refresh-title">Lectura y actualizaciones</h3><p>Última lectura local: {date(snapshot.loadedAt)}.</p></header>
+      <header className={resultStyles.stageTitle}><h3 id="social-results-refresh-title" tabIndex={-1} data-advisor-control="ad-results-refresh">Lectura y actualizaciones</h3><p>Última lectura local: {date(snapshot.loadedAt)}.</p></header>
       {loading && <p role="status" className={styles.help}>Actualizando la vista sin borrar la evidencia anterior…</p>}
       <div className={resultStyles.refreshActions}>
         <div className={resultStyles.operation}>
-          <button type="button" className="button subtle" disabled={loading || locked} onClick={() => setRefresh(value => value + 1)}>Actualizar vista</button>
+          <button type="button" className="button subtle" data-advisor-control="Actualizar vista" disabled={loading || locked} onClick={() => setRefresh(value => value + 1)}>Actualizar vista</button>
           <p className={styles.help}>Vuelve a leer los datos guardados. La vista también se actualiza automáticamente cada {pending ? '5 segundos mientras hay trabajo pendiente' : '60 segundos mientras está visible'}.</p>
         </div>
-        {hasDeliveries && <details className={styles.technicalDetails}><summary>Operaciones de la entrega</summary>
+        {hasDeliveries && <details className={styles.technicalDetails} data-advisor-disclosure><summary>Operaciones de la entrega</summary>
           <div className={resultStyles.operation}>
-            <button type="button" className="button subtle" disabled={locked || !current} onClick={() => campaignAction('sync')}>Actualizar desde Meta</button>
+            <button type="button" className="button subtle" data-advisor-control={canSync && !syncConsent ? 'ad-results-sync-meta' : undefined} disabled={!canSync || Boolean(syncConsent)} onClick={() => setSyncConsent({ id, version: campaign.version })}>Actualizar desde Meta</button>
             <p className={styles.help}>Solicita una consulta al proveedor. Depende de los permisos y puede demorar; no publica ni activa nada.</p>
           </div>
           {campaign.operations?.some(op => op.step.startsWith('amend:') && ['sent', 'uncertain'].includes(op.state)) && <div className={resultStyles.operation}>
@@ -795,6 +909,7 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
             <p className={styles.help}>Comprueba en Meta si se aplicó el cambio pendiente sin volver a enviarlo.</p>
           </div>}
         </details>}
+        {!hasDeliveries && current && !error && <p tabIndex={-1} data-advisor-control="ad-results-sync-meta">Esta publicación no tiene entregas para consultar en Meta.</p>}
       </div>
       <div className={resultStyles.accountFooter}>
         <p className={styles.help}>¿Necesitas comprobar los permisos o la fuente?</p>
@@ -804,23 +919,31 @@ export default function AdvertisingResults({ api, campaignId = null, view = {}, 
         }}>Medición de la cuenta</button>
       </div>
     </section>}
-    {hasDeliveries && <details id="social-results-captures" className={`${styles.technicalDetails} ${resultStyles.disclosure}`}>
-      <summary>Métricas completas, capturas y estado por destino</summary><div inert={!current} className={styles.stack}>
+    {hasDeliveries && <details id="social-results-captures" className={`${styles.technicalDetails} ${resultStyles.disclosure}`} aria-busy={!current || Boolean(error)} data-advisor-disclosure>
+      <summary data-advisor-control="Métricas completas, capturas y estado por destino">Métricas completas, capturas y estado por destino</summary><div inert={!current} className={styles.stack}>
       <p className={styles.muted}>Corte de lectura social {date(results.asOf)} · cargado localmente {date(snapshot.loadedAt)}. Alcance único entre entregas: no disponible sin deduplicación; no se suman personas de redes o campañas.</p>
       <section className={styles.panel}><h3>Estado de publicación por red</h3>{campaign?.restoreHold && <p className={styles.warning}>Bloqueo de restauración: comprobar el estado en Meta sin reenviar y aceptar la recuperación antes de continuar. Restaurar no detiene anuncios activos.</p>}{campaign?.state === 'scheduled' && campaign.revisions?.at(-1)?.spec?.publishAt && Date.parse(campaign.revisions.at(-1).spec.publishAt) < Date.now() && <p className={styles.warning}>La hora programada ya pasó y no hay confirmación de publicación en este estado. Revisa el procesamiento en segundo plano y las operaciones; el reloj local no acredita que se haya publicado.</p>}{!results.deliveries?.length && <p>No hay entregas aprobadas en esta selección. No significa cero resultados publicados fuera del módulo.</p>}{results.deliveries?.map(delivery => <article className={styles.card} key={delivery.id}><h4>{channels[delivery.channel] || delivery.channel} · {method(delivery.integrationMethod)}</h4><p>Estado local: {states[delivery.state] || delivery.state} · último estado confirmado: {states[delivery.lastConfirmedState] || delivery.lastConfirmedState || 'Sin confirmación remota'}</p><p>Última consulta correcta {date(delivery.metricSync?.lastSuccessAt)} · próximo turno {date(delivery.nextSyncAt || delivery.metricSync?.nextAt)}</p>{delivery.metricSync?.lastError && <p className={styles.warning}>Último error: {text(delivery.metricSync.lastError)}. Se conserva evidencia anterior.</p>}{delivery.metricSync?.blocked && <p className={styles.warning}>Consulta bloqueada: revisar conexión/permisos/interfaz. Actualizar no evade este bloqueo.</p>}{['uncertain', 'blocked', 'needs_attention', 'partial'].includes(delivery.state) && <p className={styles.warning}>Revisar operaciones y comprobar el estado en Meta sin reenviar desde la publicación.</p>}</article>)}</section>
       {grouped.size ? [...grouped].map(([key, group]) => <section key={key} className={styles.stack} style={{ minWidth: 0 }}><h3>{group.title}</h3>{group.items.map(({ item, delivery }) => <Measurement key={item.id} item={item} delivery={delivery}/>)}</section>) : current && !loading && !error && <section className={styles.empty}><h3>Sin capturas en esta selección</h3><p>No disponible no equivale a cero. Puede faltar una entrega, el horizonte, permiso para consultar resultados o una captura compatible con las fechas.</p>{resultFilters.length > 0 && <button type="button" className="button subtle" onClick={clearResultFilters}>Limpiar filtros de resultados</button>}</section>}
       {results.pages > 1 && <div className={styles.pagination}><button type="button" className="button subtle" disabled={busy || !!action || results.page <= 1} onClick={() => change({ page: results.page - 1 })}>Entregas anteriores</button><span>Página {results.page} de {results.pages} · {results.total} entregas</span><button type="button" className="button subtle" disabled={busy || !!action || results.page >= results.pages} onClick={() => change({ page: results.page + 1 })}>Entregas siguientes</button></div>}
-        <details className={styles.technicalDetails}><summary>Comparar con la estimación y mi meta de costo</summary><Comparisons analysis={analysis} currency={campaign.currency} stale={analysisStale}/><UserCostTarget campaign={campaign} measurements={results.measurements || []}/></details>
+        <details className={styles.technicalDetails}><summary data-advisor-control="Comparar con la estimación y mi meta de costo">Comparar con la estimación y mi meta de costo</summary><Comparisons analysis={analysis} currency={campaign.currency} stale={analysisStale}/><UserCostTarget campaign={campaign} measurements={results.measurements || []}/></details>
         <ApprovedCampaign campaign={campaign} onNavigate={onNavigate}/>
     </div></details>}
-    {hasDeliveries && <details id="social-results-recommendations" className={`${styles.technicalDetails} ${resultStyles.disclosure}`}><summary>Evidencia y acciones de las recomendaciones</summary>
-      <Recommendations analysis={analysis} campaign={campaign} stale={analysisStale || !current || Boolean(error || actionError)} busy={locked || !current} onAnalyze={() => campaignAction('analyze')} onAction={recommendationAction} onEvidence={openEvidence}/>
-    </details>}
-    {hasDeliveries && <details id="social-results-learnings" className={`${styles.technicalDetails} ${resultStyles.disclosure}`}><summary>Historial de pruebas y aprendizajes</summary>
-      <Learnings id={id} key={id} api={api} refresh={snapshot.loadedAt} onNavigate={onNavigate} onEvidence={openEvidence}/>
-    </details>}
-    {hasBusiness && <details id="social-results-business" className={`${styles.technicalDetails} ${resultStyles.disclosure}`}><summary>Pedidos y gastos vinculados (separados de Meta)</summary><div inert={!current}><BusinessPanel business={results.business} stale={businessPreserved} links={snapshot.links} onNavigate={onNavigate} onLink={(kind, record) => { if (!locked && current) setAction({ type: 'link', kind, record }); }}/></div></details>}
+    {hasDeliveries && <RecommendationSections key={id} id={id} api={api} snapshot={snapshot} campaign={campaign} analysis={analysis} stale={analysisStale || !current || Boolean(error || actionError)} busy={locked || !current} advisor={current && !locked && !evidence && !error}
+      onAnalyze={() => campaignAction('analyze')} onAction={recommendationAction} onNavigate={onNavigate} onEvidence={openEvidence}/>}
+    {hasBusiness && <details id="social-results-business" className={`${styles.technicalDetails} ${resultStyles.disclosure}`} data-advisor-disclosure><summary data-advisor-control="Pedidos y gastos vinculados (separados de Meta)">Pedidos y gastos vinculados (separados de Meta)</summary><div inert={!current}><BusinessPanel business={results.business} stale={businessPreserved} links={snapshot.links} onNavigate={onNavigate} onLink={(kind, record) => { if (!locked && current) setAction({ type: 'link', kind, record }); }}/></div></details>}
     {action && current && <ResultActionDialog action={action} campaignId={id} api={api} requestIds={requestIds} onClose={() => setAction(null)} onSaved={saved} onInteractionStateChange={reportDialog}/>}
     {evidence && <EvidenceDialog key={evidence.captureId} evidence={evidence} api={api} onClose={() => setEvidence(null)}/>}
+    {syncConsent && <dialog ref={syncDialog} className={`admin-dialog ${styles.dialog}`} aria-labelledby="result-sync-consent-title" aria-describedby="result-sync-consent-detail">
+      <header className={styles.dialogHeader}><h2 id="result-sync-consent-title">Autorizar consulta de métricas a Meta</h2></header>
+      <p id="result-sync-consent-detail">Publicación: <strong>{campaign?.name}</strong>. Se encolará una consulta de las métricas de las entregas. Esto no publica, activa ni cambia el gasto, y no confirma resultados nuevos.</p>
+      <div className={styles.actions}>
+        <button type="button" className="button subtle" data-dialog-initial-focus onClick={closeSyncConsent}>Volver sin cambios</button>
+        <button type="button" className="button primary" disabled={!syncConsentCurrent} onClick={() => {
+          if (!syncConsentCurrent) return;
+          setSyncConsent(null);
+          void campaignAction('sync');
+        }}>Autorizar consulta a Meta</button>
+      </div>
+    </dialog>}
   </section>;
 }

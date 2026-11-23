@@ -6,7 +6,7 @@ import { openPostgres } from '../lib/db/postgres.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
 import { runContracts } from './contract.mjs';
 import { resetPostgresStore, withPostgresTestDatabase } from './postgres-fixture.mjs';
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, HEKA_API_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13, migrateAdvertisingIntelligenceV14, migrateHekaApiV15, migratePublicationStudioV16 } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, HEKA_API_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, ASSISTANT_ADVISOR_INTERNAL_TABLES, migrateBusinessV3, migrateInventoryV4, migrateImportCancellationV5, migrateShippingInsuranceV6, migrateWorkbookImportV7, migrateSocialV8, migrateStockAlertsV9, migrateRuntimeIntegrationsV10, migrateAssistantV11, migrateAssistantOAuthV12, migrateAssistantWorkV13, migrateAdvertisingIntelligenceV14, migrateHekaApiV15, migratePublicationStudioV16, migrateAssistantAdvisorV17 } from '../lib/db/migrations.mjs';
 import { runBusinessContracts } from './business-contract.mjs';
 import { createCommercialBackupScenario,restoreCommercialBackupScenario,assertInvalidBackupsAtomic,assertLegacyPartialRestore,runSocialBackupContracts } from './backup-contract.mjs';
 import { runImportCancellationContracts } from './business-import-cancellation-contract.mjs';
@@ -33,9 +33,16 @@ import { runAssistantMigrationContracts } from './assistant-migration.test.mjs';
 import { runAssistantMemoryContracts } from './assistant-memory.test.mjs';
 import { runAssistantEngineContracts } from './assistant-engine-contract.mjs';
 import { runAssistantActionsContracts } from './assistant-actions-contract.mjs';
+import { runAdvisorContracts, runAdvisorSchemaContracts } from './assistant-advisor-contract.mjs';
 import { runBusinessPayrollContracts } from './business-payroll.test.mjs';
 
+async function dropAdvisorSchema(tx) {
+ for(const table of [...ASSISTANT_ADVISOR_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE IF EXISTS ${tx.t(table)}`);
+ await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=17`);
+}
+
 async function dropAssistantSchema(tx) {
+ await dropAdvisorSchema(tx);
  for(const table of [...ASSISTANT_WORK_INTERNAL_TABLES].reverse())if((await tx.db.get('SELECT to_regclass(?) AS relation',[tx.t(table)])).relation)await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
  for(const table of [...ASSISTANT_OAUTH_INTERNAL_TABLES].reverse())if((await tx.db.get('SELECT to_regclass(?) AS relation',[tx.t(table)])).relation)await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
  for(const table of [...ASSISTANT_INTERNAL_TABLES].reverse())if((await tx.db.get('SELECT to_regclass(?) AS relation',[tx.t(table)])).relation)await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
@@ -49,10 +56,11 @@ async function restoreAssistantSchema(store) {
  await migrateAdvertisingIntelligenceV14(store);
  await migrateHekaApiV15(store);
  await migratePublicationStudioV16(store);
+ await migrateAssistantAdvisorV17(store);
 }
 
 async function migrationRows(store,{includeInternals=false}={}) {
- const assistantTables=[...ASSISTANT_INTERNAL_TABLES,...ASSISTANT_OAUTH_INTERNAL_TABLES,...ASSISTANT_WORK_INTERNAL_TABLES];
+ const assistantTables=[...ASSISTANT_INTERNAL_TABLES,...ASSISTANT_OAUTH_INTERNAL_TABLES,...ASSISTANT_WORK_INTERNAL_TABLES,...ASSISTANT_ADVISOR_INTERNAL_TABLES];
  const internalTables=includeInternals?[...SOCIAL_TABLES,...SOCIAL_INTERNAL_TABLES,...INTEGRATION_INTERNAL_TABLES,...assistantTables]:assistantTables;
  const tables=['migrations','records','settings','users','sessions','attempts','orders','order_events','order_audit','counters','idempotency',...BUSINESS_TABLES,...internalTables];
  const result={};
@@ -103,7 +111,15 @@ async function runCoreContracts(t,factory,env) {
 }
 
 async function runSchemaContracts(t,factory,env) {
+ await runAdvisorSchemaContracts(t,factory);
  await runStudioMigrationContract(t, factory, () => openStore(env));
+ await t.test('PostgreSQL exige el marcador privado de Ali v17 al arrancar',async()=>{
+  const store=await factory();
+  try{
+   await store.transaction(async tx=>{await tx.lockWrites();await dropAdvisorSchema(tx);});
+   await assert.rejects(()=>openStore(env),/v17/);
+  }finally{try{await migrateAssistantAdvisorV17(store);}finally{await store.close();}}
+ });
  await t.test('publicidad v8 conserva negocio v7, revierte DDL y exige migración al arrancar',async()=>{
   const store=await factory();
   try{
@@ -278,7 +294,7 @@ async function runSchemaContracts(t,factory,env) {
      });
      await migrateRuntimeIntegrationsV10(store);
      await restoreAssistantSchema(store);
-     for(const marker of original.migrations.filter(row=>[10,11,12,13].includes(row.version)))await store.db.run(`UPDATE ${store.t('migrations')} SET applied_at=? WHERE version=?`,[marker.applied_at,marker.version]);
+     for(const marker of original.migrations.filter(row=>[10,11,12,13,17].includes(row.version)))await store.db.run(`UPDATE ${store.t('migrations')} SET applied_at=? WHERE version=?`,[marker.applied_at,marker.version]);
      assert.deepEqual(await migrationRows(store,{includeInternals:true}),original);
     }else{
      await migrateRuntimeIntegrationsV10(store);
@@ -378,6 +394,7 @@ async function runSchemaContracts(t,factory,env) {
 }
 
 async function runAssistantContracts(t,factory,env) {
+ await runAdvisorContracts(t,factory);
  await runAssistantMigrationContracts(t,factory,{openRuntime:()=>openStore(env)});
  await runAssistantPersistenceContracts(t,factory,{openPeer:()=>openStore(env)});
  await runAssistantMemoryContracts(t);
@@ -498,7 +515,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:filter===u
    await migrateStockAlertsV9(first);
    await migrateRuntimeIntegrationsV10(first);
    await restoreAssistantSchema(first);
-   assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=13`));
+   assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=17`));
   } finally { await first.close(); }
   const factory=async()=>{
    const store=await openStore(env);

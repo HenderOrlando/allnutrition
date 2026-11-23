@@ -7,12 +7,15 @@ import ReportsGuide from './ReportsGuide';
 import { orderStates, shipmentStates } from '@/lib/schema.mjs';
 import { addDays, bogotaDate } from '@/lib/business/dates.mjs';
 import { formatMoneyMinor } from '@/lib/business/money.mjs';
+import { REPORT_VIEW_FILTERS as FILTER_KEYS, REPORT_FILTER_LABELS as FILTER_LABELS } from '@/lib/business/report-query.mjs';
+import { adminHref, readAdminView } from '@/lib/admin-view.mjs';
 import styles from './FinanceExperience.module.css';
-import { useAssistantSelection } from './AssistantBridge';
+import { useAssistantBridge, useAssistantSelection } from './AssistantBridge';
 
 const BASE = '/api/admin/reports';
 const TABS = [['overview', 'Resumen'], ['sales', 'Ventas'], ['shipping', 'Envíos'], ['returns', 'Devoluciones'], ['costs', 'Costos'], ['payroll', 'Sueldos'], ['cash', 'Caja']];
 const tabItems = TABS.map(([id, label]) => ({ id, label }));
+const reportAreaControls = { overview:'report-live-summary',sales:'report-sales-groups',shipping:'report-shipping-groups',returns:'report-returns-groups',costs:'report-costs-groups',payroll:'report-payroll-groups',cash:'report-cash-groups' };
 const TAB_METRICS = {
   overview: ['netProductSales', 'operatingResult', 'contribution', 'cashAvailable', 'onTimeDeliveries', 'recognizedOrders'],
   sales: ['netProductSales', 'shippingRevenue', 'grossMargin', 'contribution', 'recognizedOrders', 'soldUnits', 'giftUnits'],
@@ -40,8 +43,6 @@ const METRIC_HELP = {
   payrollEarned: 'Obligaciones generadas por sueldos, comisiones y bonificaciones, aunque no se hayan pagado',
   payrollOutstanding: 'Lo generado que queda por pagar al corte, después de pagos y compensaciones',
 };
-const FILTER_KEYS = ['seller', 'product', 'platform', 'carrier', 'status', 'account'];
-const FILTER_LABELS = { seller: 'Vendedor', product: 'Producto u obsequio / combo', platform: 'Plataforma', carrier: 'Transportadora', status: 'Estado', account: 'Cuenta de caja o banco' };
 const STATUSES = Object.fromEntries([...orderStates, ...shipmentStates].map(({ value, label }) => [value, label]));
 const SNAPSHOT_STATES = { current: 'Última versión guardada', superseded: 'Versión anterior', stale: 'Hay datos nuevos' };
 const CATEGORIES = { shipping_out: 'Transporte de ida', shipping_return: 'Transporte de retorno', shipping_insurance: 'Seguro de envío', platform_fee: 'Cargo de plataforma', commission: 'Comisión', salary: 'Sueldo fijo', bonus: 'Bonificación', advertising:'Publicidad', operating:'Operación', other: 'Otros gastos' };
@@ -55,6 +56,12 @@ function valueLabel(value, unit) {
   if (unit === 'minor') return money(value);
   if (unit === 'bps') return `${number.format(value / 100)} %`;
   return `${number.format(value)}${unit === 'days' ? ' días' : ''}`;
+}
+function copyJobLabel(job) {
+  if (['queued', 'running'].includes(job.state)) return 'Copia en preparación';
+  if (job.state === 'failed') return 'No se pudo preparar la copia';
+  if (job.state === 'succeeded') return job.unchanged ? `Se conservó la versión ${job.revision}` : `Copia comprobada · Versión ${job.revision}`;
+  return 'No se pudo comprobar una copia para ese trabajo';
 }
 function reasonLabel(reason) { return typeof reason === 'string' ? reason : reason?.label || reason?.reason || 'Dato pendiente de completar'; }
 function queryParams(view) {
@@ -118,8 +125,9 @@ function ReportFilters({ api, view, onChange, options, readOnly = false, disable
   function selectedLabel(key) {
     const found = choices(key).find(option => option.value === view[key]);
     if (found) return found.label;
+    if (key === 'carrier') return view.carrier;
     if (key === 'status' && STATUSES[view[key]]) return STATUSES[view[key]];
-    return (key === 'carrier' || key === 'status' ? options : data) ? 'Registro no disponible' : 'Selección aplicada';
+    return (key === 'status' ? options : data) ? 'Registro no disponible' : 'Selección aplicada';
   }
   function update(patch, focus = false) {
     if (disabled || readOnly) return;
@@ -129,35 +137,36 @@ function ReportFilters({ api, view, onChange, options, readOnly = false, disable
   function select(key) {
     const values = [{ value: '', label: 'Todos' }, ...choices(key)];
     if (view[key] && !values.some(option => option.value === view[key])) values.push({ value: view[key], label: `${selectedLabel(key)} (${view[key]})` });
-    return <Field key={key} field={{ name: `${id}-${key}`, label: FILTER_LABELS[key], type: 'select', options: values }} value={view[key] || ''} onChange={value => update({ [key]: value })}/>;
+    return <Field key={key} field={{ name: `${id}-${key}`, label: FILTER_LABELS[key], type: 'select', options: values, advisorControl: `report-filter-${key}` }} value={view[key] || ''} onChange={value => update({ [key]: value })}/>;
   }
   return <div>
-    <details className="report-filters" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-      <summary ref={summaryRef}>{readOnly ? 'Filtros de esta copia' : 'Filtrar resultados'}{activeFilters.length ? ` (${activeFilters.length} activos)` : ''}</summary>
+    <details className="report-filters" open={open} data-advisor-disclosure={readOnly ? undefined : ''} onToggle={event => setOpen(event.currentTarget.open)}>
+      <summary ref={summaryRef} data-advisor-control={readOnly ? 'report-snapshot-read-only-filters' : undefined}>{readOnly ? 'Filtros de esta copia' : 'Filtrar resultados'}{activeFilters.length ? ` (${activeFilters.length} activos)` : ''}</summary>
       {readOnly ? <p className="small muted">Estos filtros pertenecen a la copia. Los nombres de referencia pueden ser actuales; las cifras y agrupaciones conservan su historia</p> : <>
         <fieldset className="report-filter-grid" disabled={disabled}><legend>Criterios de selección</legend>{FILTER_KEYS.map(select)}</fieldset>
         <p className="small muted">Vendedor/producto limitan pedidos y costos vinculados; plataforma/transportadora limitan envíos y pedidos vinculados; cuenta solo afecta caja y pagos, no ventas; estado se aplica según sea pedido o guía.</p>
       </>}
     </details>
-    {activeFilters.length ? <div className="active-filters" aria-label={readOnly ? 'Filtros de esta copia' : 'Filtros activos'}>{activeFilters.map(key => readOnly
+    {activeFilters.length ? <div className="active-filters" role="group" aria-label={readOnly ? 'Filtros de esta copia' : 'Filtros activos'} tabIndex={readOnly ? undefined : -1} data-advisor-control={!readOnly&&!disabled&&!loading&&!error?'report-query-filter-chip':undefined}>{activeFilters.map(key => readOnly
       ? <span className="filter-chip" key={key}>{FILTER_LABELS[key]}: {selectedLabel(key)}</span>
       : <button type="button" className="filter-chip" key={key} disabled={disabled} aria-label={`Quitar filtro: ${FILTER_LABELS[key]}: ${selectedLabel(key)}`} onClick={() => update({ [key]: '' }, true)}>{FILTER_LABELS[key]}: {selectedLabel(key)} <span aria-hidden="true">×</span></button>)}
-      {!readOnly && <button className="text-button" type="button" disabled={disabled} onClick={() => update(Object.fromEntries(FILTER_KEYS.map(key => [key, ''])), true)}>Limpiar filtros</button>}
+      {!readOnly && <button className="text-button" type="button" data-advisor-control="report-query-clear-filters" disabled={disabled} onClick={() => update(Object.fromEntries(FILTER_KEYS.map(key => [key, ''])), true)}>Limpiar filtros</button>}
     </div> : <p className="small muted">Sin filtros: se consulta todo el período</p>}
     {loading && <p role="status">Cargando opciones reales…</p>}
     {error && <p className="error" role="alert" ref={errorRef} tabIndex={-1}>{error} <button className="text-button" type="button" disabled={disabled} onClick={() => setAttempt(value => value + 1)}>Reintentar opciones</button></p>}
   </div>;
 }
 
-export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder, onInteractionStateChange, onMutation, revision }) {
+export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder, onInteractionStateChange, onMutation, revision, assistantOpenRequest, onAssistantOpenHandled, advisorTargetRequest, onAdvisorTargetHandled }) {
   const [savedMetric, setSavedMetric] = useState(''), [resource, setResource] = useState({}), [retry, setRetry] = useState(0), [busy, setBusy] = useState(''), [actionError, setActionError] = useState(''), [notice, setNotice] = useState(''), [pending, setPending] = useState(null), [pollError, setPollError] = useState(''), [pollRetry, setPollRetry] = useState(0);
   const [completedRequest, setCompletedRequest] = useState(null);
   const headingRef = useRef(null), resultsRef = useRef(null), detailRef = useRef(null), errorRef = useRef(null), opener = useRef(null), restoreDetailFocus = useRef(false), request = useRef(null), mounted = useRef(true), filterOptions = useRef(null), failedAction = useRef('');
+  const copyButton = useRef(null), downloadButton = useRef(null), copyState = useRef(null), trackedRuns = useRef(new Set());
+  const bridge = useAssistantBridge();
   const period = view.period || 'month', anchor = view.anchor || bogotaDate(), tab = TABS.some(([key]) => key === view.tab) ? view.tab : 'overview', page = view.page || 1;
   const params = queryParams(view), query = params.toString();
   const snapshotId = view.record && !METRICS.has(view.record) ? view.record : '';
   const metricKey = snapshotId ? savedMetric : METRICS.has(view.record) ? view.record : '';
-  useAssistantSelection({view,selection:{kind:'report',snapshotId:snapshotId || null,metric:metricKey || null,issue:metricKey ? view.issue || null : null}});
   const activeMode = snapshotId ? 'saved' : metricKey ? 'live' : view.mode === 'saved' ? 'saved' : 'live';
   const detailParams=new URLSearchParams({page:String(page),...(metricKey?{metric:metricKey}:{}),...(view.issue&&metricKey?{issue:view.issue}:{})});
   const endpoint = snapshotId ? `${BASE}/${encodeURIComponent(snapshotId)}?${detailParams}` : `${BASE}?${query}&mode=${activeMode}&${detailParams}`;
@@ -166,6 +175,17 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
   const error = resource.key === endpoint ? resource.error : '';
   const report = activeMode === 'live' || snapshotId ? data : null;
   const detailMetric=report?.details?.metricSummary||report?.metrics?.[metricKey];
+  const detailTitle=view.issue==='missing'&&report?.metrics?.[metricKey]?.label?`Datos pendientes · ${report.metrics[metricKey].label}`:detailMetric?.label||'Registros de cobertura';
+  const commercialCredits = view.issue === 'costly_returns';
+  const metricFocus=!loading&&!error&&report?.details
+    ?view.issue==='comparison_elapsed'?'report-comparison-elapsed-records'
+      :view.issue==='missing'?(snapshotId?'report-snapshot-missing-records':'report-live-missing-records')
+      :(snapshotId?'report-snapshot-metric-records':'report-live-metric-records')
+    :undefined;
+  const liveRevision = activeMode === 'live' && !snapshotId && !loading && !error ? report?.dataRevision ?? null : null;
+  useAssistantSelection({view,selection:{kind:'report',snapshotId:snapshotId || null,metric:metricKey || null,issue:metricKey ? view.issue || null : null,
+    ...(liveRevision != null ? {dataRevision:liveRevision} : {})}});
+  const canRequestCopy = !busy && !pending && activeMode === 'live' && !snapshotId && !loading && !error && Boolean(report);
   if (data?.filterOptions) filterOptions.current = data.filterOptions;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { onInteractionStateChange?.({ busy: !!busy, dirty: false }); return () => onInteractionStateChange?.({ busy: false, dirty: false }); }, [busy, onInteractionStateChange]);
@@ -176,10 +196,48 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
     return () => { active = false; };
   }, [api, endpoint, retry, revision]);
   useEffect(() => {
-    if (activeMode === 'saved' && !snapshotId && data?.job && ['queued', 'running'].includes(data.job.state)) {
-      setPending(current => current || { jobKey: data.job.key, query, period, anchorDate: anchor });
+    if (pending) return;
+    const receipt = bridge.receipts.find(({receipt}) => receipt.target === 'report-snapshot' && !trackedRuns.current.has(receipt.runId))?.receipt;
+    if (receipt) {
+      const requestedView = readAdminView(new URL(receipt.href, 'https://assistant.invalid').searchParams);
+      trackedRuns.current.add(receipt.runId);
+      setPending({ ...receipt, query: queryParams(requestedView).toString(), period: requestedView.period, anchorDate: requestedView.anchor });
+      setCompletedRequest(null); setPollError('');
+      return;
     }
-  }, [activeMode, snapshotId, data, query, period, anchor]);
+    const job = data?.job;
+    if (activeMode === 'saved' && !snapshotId && job?.runId && ['queued', 'running'].includes(job.state) && !trackedRuns.current.has(job.runId)) {
+      trackedRuns.current.add(job.runId);
+      setPending({ jobKey: job.key, queryKey: job.queryKey, runId: job.runId, query, period, anchorDate: anchor });
+    }
+  }, [activeMode, snapshotId, data, query, period, anchor, pending, bridge.receipts]);
+  useEffect(() => {
+    const opening = assistantOpenRequest?.open?.owner === 'reports' && assistantOpenRequest.open.target === 'report-snapshot' ? assistantOpenRequest : null;
+    const advisor = ['reports.request-copy', 'reports.check-copy-status', 'reports.export-live', 'reports.export-snapshot'].includes(advisorTargetRequest?.capabilityId) ? advisorTargetRequest : null;
+    if ((!opening && !advisor) || loading || busy) return;
+    const destination = opening?.open.view ?? advisor.view;
+    if (adminHref(destination) !== adminHref(view)) return;
+    let control, issue = '';
+    if (advisor?.focus === 'report-copy-job-status') {
+      control = copyState.current;
+      if (!control) issue = 'No consta un trabajo para esta consulta. Revisa el período y los filtros de la solicitud.';
+    } else if (advisor?.focus === 'report-download-excel') {
+      control = downloadButton.current;
+      if (!control || control.disabled) issue = 'Abre el informe o la copia exacta antes de descargar Excel.';
+    } else {
+      control = copyButton.current;
+      if (!canRequestCopy) issue = pending ? 'Ya hay una copia en preparación. Consulta su estado antes de pedir otra.' : 'Carga los datos actuales para abrir Guardar copia.';
+      else if (opening && opening.expectedVersion !== liveRevision) issue = 'La consulta cambió. Vuelve a revisar sus datos antes de pedir una copia.';
+    }
+    if (!issue) {
+      control?.focus();
+      if (!control || document.activeElement !== control) issue = 'No se pudo enfocar el control del informe.';
+    }
+    if (opening) {
+      if (issue) setNotice(issue);
+      onAssistantOpenHandled?.(opening.requestId, { stayHere:true });
+    } else onAdvisorTargetHandled?.(advisor.id, issue || undefined);
+  }, [assistantOpenRequest, advisorTargetRequest, onAssistantOpenHandled, onAdvisorTargetHandled, loading, busy, view, pending, canRequestCopy, liveRevision, data?.job]);
   useEffect(() => { if (actionError || error || pollError) errorRef.current?.focus({ preventScroll: true }); }, [actionError, error, pollError]);
   useEffect(() => { if (metricKey && !loading) detailRef.current?.focus({ preventScroll: true }); }, [metricKey, loading]);
   useEffect(() => {
@@ -197,13 +255,19 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
     let active = true, timer;
     async function poll() {
       try {
-        const result = await api(`${BASE}?${pending.query}&mode=saved&page=1`);
+        const result = await api(`${BASE}?${pending.query}&mode=copy-status&run=${encodeURIComponent(pending.runId)}`);
         if (!active) return;
-        if (result.job?.key === pending.jobKey && result.job.state === 'failed') { setPollError('No se pudo preparar la copia. Consulta el estado otra vez o revisa las copias guardadas.'); return; }
-        if (result.job?.key === pending.jobKey && result.job.state === 'succeeded') {
-          setCompletedRequest({ query: pending.query, period: pending.period, anchorDate: pending.anchorDate }); setPending(null); setNotice('La preparación terminó. Revisa Informes guardados; si los datos no cambiaron, se conserva la misma versión'); setRetry(value => value + 1); return;
+        if (!result || result.key !== pending.jobKey || result.queryKey !== pending.queryKey || result.runId !== pending.runId || result.state === 'unverified') {
+          setPollError('No se pudo comprobar el resultado de esta solicitud. No se ha confirmado una copia.'); return;
         }
-        timer = setTimeout(poll, 4000);
+        if (result.state === 'failed') {
+          setPending(null); setNotice('No se pudo preparar esta copia. Puedes volver a solicitarla desde Datos actuales.'); return;
+        }
+        if (result.state === 'succeeded' && result.snapshotId && result.revision > 0) {
+          setCompletedRequest({ ...pending, snapshotId: result.snapshotId, unchanged: result.unchanged }); setPending(null); setNotice(''); setRetry(value => value + 1); return;
+        }
+        if (['queued', 'running'].includes(result.state)) timer = setTimeout(poll, 4000);
+        else setPollError('No se pudo comprobar el resultado de esta solicitud. No se ha confirmado una copia.');
       } catch (cause) { if (active) setPollError(cause.message); }
     }
     timer = setTimeout(poll, 1500);
@@ -223,15 +287,23 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
     change({ period: saved.get('period'), anchor: saved.get('anchor'), ...Object.fromEntries(FILTER_KEYS.map(key => [key, saved.get(key) || ''])), mode: 'saved' });
   }
   async function generate() {
-    if (busy || pending || snapshotId || activeMode !== 'live' || loading || error || !report) return;
+    if (!canRequestCopy || request.current?.inFlight) return;
     setBusy('save'); failedAction.current = 'save'; setActionError(''); setNotice('');
     if (!request.current || request.current.query !== query) request.current = { query, requestId: crypto.randomUUID() };
+    request.current.inFlight = true;
     try {
-      const result = await api(BASE, { method: 'POST', body: JSON.stringify({ period, anchorDate: anchor, filters: Object.fromEntries(FILTER_KEYS.filter(key => view[key]).map(key => [key, view[key]])), requestId: request.current.requestId }) });
+      const { period, anchorDate, filters } = report.query;
+      const result = await api(BASE, { method: 'POST', body: JSON.stringify({ period, anchorDate, filters, requestId: request.current.requestId }) });
       if (!mounted.current) return;
-      setPending({ ...result, query, period, anchorDate: anchor }); setCompletedRequest(null); setPollError(''); setNotice('Solicitud recibida. La copia todavía se está preparando; puedes seguir consultando'); request.current = null;
+      if (!result.runId || result.queryKey !== report.queryKey || result.jobKey !== `report:${report.queryKey}`) throw new Error('No se pudo identificar la solicitud de copia. Reintenta para recuperar la misma solicitud.');
+      trackedRuns.current.add(result.runId);
+      setPending({ ...result, query:queryParams({ period, anchor:anchorDate, ...filters }).toString() }); setCompletedRequest(null); setPollError(''); request.current = null;
       onMutation?.({ type: 'report', state: result.state, jobKey: result.jobKey });
-    } catch (cause) { if (mounted.current) setActionError(cause.message); } finally { if (mounted.current) setBusy(''); }
+    } catch (cause) { if (mounted.current) setActionError(cause.message); }
+    finally {
+      if (request.current) request.current.inFlight = false;
+      if (mounted.current) setBusy('');
+    }
   }
   async function download() {
     if (busy || !report || loading || error) return;
@@ -249,6 +321,17 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
   const orderColumn = { key: 'orderId', label: 'Pedido', render: orderLink };
   const contributionColumn = { key: 'contributionMinor', label: 'Contribución conocida', render: row => <>{money(row.contributionMinor)}{!row.complete && <><br/><small>Parcial · subtotal conocido {money(row.knownContributionMinor)} · {row.knownCount ?? 0}/{row.eligibleCount ?? 0} registros</small></>}</> };
   const groupTable = (key, caption, columns) => <DataTable key={key} caption={caption} columns={columns} data={report?.groups?.[key]} onPage={next => onViewChange({ page: next })} loading={loading}/>;
+  function detailRecord(row) {
+    if (commercialCredits) return <>Devolución comercial<br/><small>Motivo: {row.reason || 'Sin motivo registrado'} · Unidades: {valueLabel(row.quantity, 'count')}<br/>Crédito de productos: {money(row.salesCreditMinor)} · Crédito de flete: {money(row.shippingCreditMinor)}</small></>;
+    if (view.issue === 'positive_products') return <>{row.label}<br/><small>Producto: {row.productLabel}</small></>;
+    if (view.issue === 'positive_sellers') return <>{row.label}<br/><small>Vendedor: {row.sellerLabel}</small></>;
+    return row.accountLabel ? <>{row.label}<br/><small>Cuenta: {row.accountLabel}</small></> : row.label;
+  }
+  const detailCoverage=row=>{
+    if(row.known!==false)return (!commercialCredits && row.reason) || 'Incluido';
+    const reason=detailMetric?.exclusionReasons?.find(item=>item.code===row.reason);
+    return `Excluido: ${reason?.label||'Dato pendiente de completar'}`;
+  };
   return <section className={`reports-workspace ${styles.workspace} ${styles.reportsWorkspace}`} aria-label="Informes del negocio" onKeyDown={event => { if (event.key === 'Escape' && !event.defaultPrevented && metricKey && !busy && !event.target.closest('input,textarea,select,[contenteditable="true"]') && !document.querySelector('dialog[open]')) { event.preventDefault(); event.stopPropagation(); closeDetails(); } }}>
     <header className="admin-heading"><div><h1 ref={headingRef} tabIndex={-1} data-admin-section-heading>Informes</h1><p>Consulta cómo va tu negocio, revisa los datos pendientes y conserva copias para consultarlas después</p></div></header>
     <ReportsGuide mode={activeMode} isSnapshot={Boolean(snapshotId)}/>
@@ -257,16 +340,16 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
       <div className="report-mode" role="group" aria-label="Origen del informe"><span>Origen del informe</span><button className="button subtle" type="button" aria-pressed={activeMode==='live'} disabled={!!busy || !!snapshotId && (!report || !!report.query.filters?.source)} onClick={()=>snapshotId ? showSnapshotQuery('live') : switchMode('live')}>Datos actuales</button><button className="button subtle" type="button" aria-pressed={activeMode==='saved'} disabled={!!busy} onClick={()=>snapshotId && report ? showSnapshotQuery('saved') : switchMode('saved')}>Informes guardados</button></div>
       <p className={styles.queryHelp}>{snapshotId ? 'Estás consultando una copia de solo lectura.' : activeMode === 'saved' ? 'Busca copias preparadas para el período y los filtros elegidos.' : 'Consulta los datos registrados sin guardar una copia ni cambiar el negocio.'}</p>
       {(activeMode==='live'||snapshotId)&&<WorkspaceTabs label="Áreas del informe" items={tabItems} value={tab} disabled={!!busy} onChange={tab=>{setSavedMetric('');onViewChange({tab,page:1,record:snapshotId||'',issue:'',mode:snapshotId?'saved':''});}}/>}
-      {!snapshotId&&<><PeriodPicker period={period} anchor={anchor} disabled={!!busy} onChange={({period,anchor})=>change({period,anchor})}/><p className={styles.queryHelp}>Elige una fecha dentro del período que quieres consultar</p></>}
+      {!snapshotId&&<><PeriodPicker period={period} anchor={anchor} disabled={!!busy} advisorControl="report-query-period" onChange={({period,anchor})=>change({period,anchor})}/><p className={styles.queryHelp}>Elige una fecha dentro del período que quieres consultar</p></>}
       {snapshotId&&report&&<p className={styles.queryHelp}><strong>Período guardado: {reportDateLabel(report.bounds.startDate)} al {reportDateLabel(addDays(report.bounds.endDateExclusive, -1))}</strong></p>}
       {!snapshotId&&<ReportFilters api={api} view={view} onChange={change} options={filterOptions.current} disabled={!!busy}/>}
       {snapshotId&&report&&<ReportFilters key={snapshotId} api={api} view={report.query.filters||{}} options={report.filterOptions} readOnly disabled={!!busy}/>}
       {snapshotId && report?.query.filters?.source && <p className={styles.queryHelp}>Origen de plataforma: {report.query.filters.source} (filtro de esta copia). Esta copia usa un filtro de origen que no se puede editar aquí; puedes consultarla y descargarla.</p>}
       {snapshotId && error && <button className="text-button" type="button" onClick={() => switchMode('saved')}>Volver a informes guardados</button>}
       {(activeMode === 'live' || snapshotId) && <div className={styles.operationBar}>
-        {!snapshotId && <button className="button primary" type="button" disabled={!!busy || !!pending || !report || loading || !!error} onClick={generate}>{busy === 'save' ? 'Solicitando copia…' : pending ? 'Copia en preparación' : 'Guardar copia'}</button>}
-        <button className={`button ${snapshotId ? 'primary' : 'subtle'}`} type="button" disabled={!!busy || !report || loading || !!error} onClick={download}>{busy === 'download' ? 'Descargando…' : 'Descargar Excel'}</button>
-        {snapshotId && <><button className="button subtle" type="button" disabled={!!busy || !report || !!report.query.filters?.source} onClick={() => showSnapshotQuery('live')}>Ver datos actuales de este período</button>{report && <button className="text-button" type="button" disabled={!!busy} onClick={() => showSnapshotQuery('saved')}>Volver a informes guardados</button>}</>}
+        {!snapshotId && <button ref={copyButton} className="button primary" type="button" disabled={!canRequestCopy} onClick={generate}>{busy === 'save' ? 'Solicitando copia…' : pollError ? 'Estado de copia sin verificar' : pending ? 'Copia en preparación' : 'Guardar copia'}</button>}
+        <button ref={downloadButton} className={`button ${snapshotId ? 'primary' : 'subtle'}`} type="button" disabled={!!busy || !report || loading || !!error} onClick={download}>{busy === 'download' ? 'Descargando…' : 'Descargar Excel'}</button>
+        {snapshotId && <><button className="button subtle" type="button" data-advisor-control="report-snapshot-show-live-query" disabled={!!busy || !report || !!report.query.filters?.source} onClick={() => showSnapshotQuery('live')}>Ver datos actuales de este período</button>{report && <button className="text-button" type="button" disabled={!!busy} onClick={() => showSnapshotQuery('saved')}>Volver a informes guardados</button>}</>}
       </div>}
       {(activeMode === 'live' || snapshotId) && <p className={styles.queryHelp}>{snapshotId ? 'Descargar crea un archivo Excel con todas las áreas de esta versión, no solo el detalle visible. Importes en COP.' : 'Guardar conserva una copia en el panel. Descargar crea un archivo Excel. Ambas acciones incluyen todas las áreas del período y filtros elegidos'}</p>}
     </section>
@@ -276,11 +359,12 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
       {pollError && <><p>{pollError}</p><button className="text-button" type="button" onClick={() => { setPollError(''); setPollRetry(value => value + 1); }}>Consultar estado otra vez</button><button className="text-button" type="button" onClick={() => { setPending(null); setPollError(''); setNotice('Cerrar este aviso no cancela la preparación en el servidor. Revisa las copias guardadas antes de volver a solicitar'); }}>Cerrar seguimiento</button><p>Cerrar este aviso no cancela la preparación en el servidor. Revisa las copias guardadas antes de volver a solicitar</p></>}
     </div>}
     {notice && <p className="report-feedback" role="status">{notice}</p>}
-    {pending && <p className="report-feedback" role="status">Copia en preparación · {REPORT_PERIOD_LABELS[pending.period]} · {reportDateLabel(pending.anchorDate)}. Puedes seguir consultando. <button className="text-button" type="button" disabled={!!busy} onClick={() => openSavedQuery(pending.query)}>Ver estado del guardado</button></p>}
-    {completedRequest && <p className="report-feedback" role="status">Consulta preparada: {REPORT_PERIOD_LABELS[completedRequest.period]} · {reportDateLabel(completedRequest.anchorDate)}. <button className="text-button" type="button" disabled={!!busy} onClick={() => openSavedQuery(completedRequest.query)}>Ver copias de esta consulta</button></p>}
+    {pending && !pollError && <p className="report-feedback" role="status">Copia en preparación · {REPORT_PERIOD_LABELS[pending.period]} · {reportDateLabel(pending.anchorDate)}. Puedes seguir consultando. <button className="text-button" type="button" disabled={!!busy} onClick={() => openSavedQuery(pending.query)}>Ver estado del guardado</button></p>}
+    {completedRequest && <p className="report-feedback" role="status">{completedRequest.unchanged ? 'La consulta conservó la misma versión' : 'Copia preparada'}: {REPORT_PERIOD_LABELS[completedRequest.period]} · {reportDateLabel(completedRequest.anchorDate)}. <button className="text-button" type="button" disabled={!!busy} onClick={() => { setSavedMetric(''); onViewChange({ mode:'saved', record:completedRequest.snapshotId, issue:'', page:1 }); }}>Abrir copia comprobada</button> <button className="text-button" type="button" disabled={!!busy} onClick={() => openSavedQuery(completedRequest.query)}>Ver copias de esta consulta</button></p>}
     {loading && <p role="status">{data ? 'Actualizando esta consulta…' : 'Cargando informe…'}</p>}
-    {activeMode === 'saved' && !snapshotId && data && <>
-      <p className="muted">Copias de este período y estos filtros, de la más reciente a la más antigua. Cada versión conserva las cifras que tenía al prepararse</p>
+    {activeMode === 'saved' && !snapshotId && data && <section aria-label="Versiones del período" tabIndex={-1} data-advisor-control={!loading&&!error&&data.records?.length?'report-saved-open-version':undefined}>
+      {data.job && <p ref={copyState} tabIndex={-1} className="report-feedback">Último trabajo de esta consulta: {copyJobLabel(data.job)}.</p>}
+      <p className="muted" tabIndex={-1} data-advisor-control="report-saved-list">Copias de este período y estos filtros, de la más reciente a la más antigua. Cada versión conserva las cifras que tenía al prepararse</p>
       <DataTable caption="Informes guardados" data={data} loading={loading} onPage={next => onViewChange({ page: next })}
         emptyState={data.total > 0 ? <><p>Esta página no contiene copias. Hay versiones en otras páginas de esta consulta.</p><button className="button subtle" type="button" disabled={loading || !!busy} onClick={() => onViewChange({ page: 1 })}>Ir a la primera página</button></> : <><h4>No hay copias guardadas para este período y estos filtros</h4><p>Cambia el período o quita filtros para buscar otras copias. También puedes consultar este período y guardar una copia.</p><button className="button subtle" type="button" disabled={!!busy} onClick={() => switchMode('live')}>Consultar este período</button></>}
         columns={[
@@ -291,12 +375,12 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
           { key: 'coverage', label: 'Datos pendientes', render: row => row.coverage?.pending?.length ? <ul>{row.coverage.pending.map((item, index) => <li key={index}>{item.label} ({item.count})</li>)}</ul> : 'Sin pendientes informados' },
           { key: 'open', label: 'Consultar', render: row => <button type="button" className="text-button" disabled={loading || !!busy} aria-label={`Abrir versión ${row.revision}: ${reportDateLabel(row.startOn)} al ${reportDateLabel(addDays(row.endOnExclusive, -1))}`} onClick={() => { setSavedMetric(''); setActionError(''); onViewChange({ mode: 'saved', record: row.id, page: 1, issue: '' }); }}>Abrir versión {row.revision}</button> },
         ]}/>
-    </>}
+    </section>}
     {report && <>
       {snapshotId && <div className="report-feedback"><h3>Copia guardada · Versión {report.snapshot?.revision}</h3><p>{SNAPSHOT_STATES[report.snapshot?.state] || 'Informe histórico'} · Solo lectura: conserva las cifras y los registros originales.</p>{report.snapshot?.staleSince && <p>Hay datos nuevos desde {timestamp(report.snapshot.staleSince)} · hora de Bogotá. Puedes consultarlos con «Ver datos actuales de este período».</p>}</div>}
       {report.empty && <div className="report-feedback"><h3>No hay registros para esta consulta</h3><p>Prueba otro período o revisa los filtros. Los registros sin fechas o costos se muestran como pendientes; no se inventan ventas ni ganancias.</p>{!snapshotId && <div className={styles.operationBar}>{FILTER_KEYS.some(key => view[key]) && <button className="button subtle" type="button" disabled={!!busy} onClick={() => change(Object.fromEntries(FILTER_KEYS.map(key => [key, ''])))}>Quitar filtros de esta consulta</button>}<button className="button subtle" type="button" disabled={!!busy} onClick={() => change({ period: 'month', anchor: bogotaDate() })}>Consultar este mes</button></div>}</div>}
-      <header className={styles.contextHeading}><h2 ref={resultsRef} tabIndex={-1}>{TABS.find(([key])=>key===tab)?.[1]} · {reportDateLabel(report.bounds.startDate)} al {reportDateLabel(addDays(report.bounds.endDateExclusive, -1))}</h2><p>{TAB_GUIDANCE[tab]}</p><div className="report-dates"><span>Datos hasta {timestamp(report.dataAsOf)} · hora de Bogotá</span><span>{report.closed ? 'Período terminado' : 'Período en curso'}</span></div></header>
-      {!metricKey && (report.coverage?.pending || []).length > 0 && <details className="report-pending"><summary>Datos por completar ({report.coverage.pending.length} conceptos)</summary><p>Estas cifras pueden estar incompletas. Abre un concepto para revisar sus registros</p><ul>{report.coverage.pending.map((item, index) => <li key={`${item.code}-${index}`}>{item.label}: <strong>{item.count}</strong>{item.detailsQuery?.metric && <button type="button" className="text-button" data-report-detail-trigger={`pending:${item.code}:${item.detailsQuery.metric}:${index}`} onClick={() => openDetails(item.detailsQuery.metric,'missing')}>Ver registros pendientes</button>}</li>)}</ul></details>}
+      <header className={styles.contextHeading}><h2 ref={resultsRef} tabIndex={-1} data-advisor-control={snapshotId && tab==='overview'?undefined:reportAreaControls[tab]}>{TABS.find(([key])=>key===tab)?.[1]} · {reportDateLabel(report.bounds.startDate)} al {reportDateLabel(addDays(report.bounds.endDateExclusive, -1))}</h2><p>{TAB_GUIDANCE[tab]}</p><div className="report-dates"><span>Datos hasta {timestamp(report.dataAsOf)} · hora de Bogotá</span><span>{report.closed ? 'Período terminado' : 'Período en curso'}</span></div></header>
+      {!metricKey && (report.coverage?.pending || []).length > 0 && <details className="report-pending"><summary data-advisor-control="report-coverage-reasons">Datos por completar ({report.coverage.pending.length} conceptos)</summary><p>Estas cifras pueden estar incompletas. Abre un concepto para revisar sus registros</p><ul>{report.coverage.pending.map((item, index) => <li key={`${item.code}-${index}`}>{item.label}: <strong>{item.count}</strong>{item.detailsQuery?.metric && <button type="button" className="text-button" data-report-detail-trigger={`pending:${item.code}:${item.detailsQuery.metric}:${index}`} onClick={() => openDetails(item.detailsQuery.metric,'missing')}>Ver registros pendientes</button>}</li>)}</ul></details>}
       {!metricKey && <>
         <div className="report-metrics">{TAB_METRICS[tab].filter(key => report.metrics?.[key]).map(key => <MetricCard key={key} metricKey={key} metric={report.metrics[key]} onDetails={() => openDetails(key)}/>)}</div>
         {tab === 'sales' && ['products', 'sellers'].map(key => groupTable(key, key === 'products' ? 'Por producto histórico' : 'Por vendedor histórico', [{ key: 'label', label: key === 'products' ? 'Producto' : 'Vendedor' }, { key: 'orderCount', label: 'Pedidos' }, { key: 'units', label: 'Unidades' }, amountColumn('netSalesMinor', 'Venta neta de productos'), contributionColumn]))}
@@ -307,15 +391,17 @@ export default function ReportsWorkspace({ api, view, onViewChange, onOpenOrder,
         {tab === 'cash' && <><p className="small muted">Saldo al corte del informe, no necesariamente disponible ahora. El recaudo retenido en plataforma se informa aparte. Aperturas y transferencias no son ventas.</p>{groupTable('accounts', 'Saldos y movimientos por cuenta', [{ key: 'label', label: 'Cuenta' }, amountColumn('openingMinor', 'Saldo al inicio'), amountColumn('openingEntriesMinor', 'Aperturas del período'), amountColumn('inflowMinor', 'Entradas'), amountColumn('outflowMinor', 'Salidas'), amountColumn('transferMinor', 'Transferencias netas'), amountColumn('balanceMinor', 'Saldo al corte')])}</>}
       </>}
       {metricKey && <section className="report-detail" aria-label="Registros exactos de la métrica">
-        <div className="admin-heading"><h3 ref={detailRef} tabIndex={-1}>{detailMetric?.label || 'Registros de cobertura'}</h3><button type="button" className="button subtle" onClick={closeDetails}>Cerrar detalle</button></div>
+        <div className="admin-heading"><h3 ref={detailRef} tabIndex={-1} data-advisor-control={metricFocus}>{detailTitle}</h3><button type="button" className="button subtle" onClick={closeDetails}>Cerrar detalle</button></div>
         {METRIC_HELP[metricKey] && <p>{METRIC_HELP[metricKey]}</p>}
+        {commercialCredits && <p>Los créditos comerciales no representan pérdidas ni pagos de reembolso.</p>}
+        {['late_deliveries','shipping_returns'].includes(view.issue)&&detailMetric?.denominator!=null&&<p>Población evaluada: <strong>{valueLabel(detailMetric.denominator,'count')} guías</strong>. La tabla muestra solo las {valueLabel(detailMetric.numerator,'count')} {view.issue==='late_deliveries'?'entregas tardías':'guías devueltas'}; no es una tasa nueva.</p>}
         {detailMetric && <><p><strong>Total: {valueLabel(detailMetric.value, detailMetric.unit)}</strong></p>{!detailMetric.complete && detailMetric.knownValue != null && <p>Subtotal conocido: {valueLabel(detailMetric.knownValue, detailMetric.unit)} · Cifra parcial</p>}{detailMetric.unit === 'bps' && <p>{detailMetric.denominator ? `${detailMetric.numerator} de ${detailMetric.denominator}` : 'Sin base de comparación'}</p>}<Coverage metric={detailMetric} showReasons/></>}
         {report.details?.bounds&&<p className="small"><strong>Tramo comparado: {reportDateLabel(report.details.bounds.startDate)} al {reportDateLabel(addDays(report.details.bounds.endDateExclusive,-1))}</strong>. El día abierto no entra en esta comparación.</p>}
         <p className="small muted">{view.issue?'Subconjunto exacto de la observación seleccionada; mismos filtros.':'Mismos filtros y fechas del informe. Incluye los registros excluidos y su motivo.'} Hasta 20 registros por página. La exportación conserva el informe completo.</p>
-        {report.details ? <DataTable caption="Registros que explican la cifra" data={report.details} loading={loading} onPage={next => onViewChange({ page: next })} columns={[{ key: 'label', label: 'Registro' }, orderColumn, { key: 'tracking', label: 'Guía', render: row => row.tracking || 'No aplica' }, dateColumn('occurredOn', 'Fecha del hecho'), { key: 'value', label: 'Importe / valor', render: row => valueLabel(row.value, row.unit) }, { key: 'reason', label: 'Cobertura', render: row => row.known === false ? `Excluido: ${row.reason || 'Dato desconocido'}` : row.reason || 'Incluido' }]}/> : loading ? <p role="status">Cargando registros…</p> : <p className="error" role="alert">No se recibieron los registros de esta métrica. <button className="text-button" type="button" onClick={() => setRetry(value => value + 1)}>Reintentar detalle</button></p>}
+        {report.details ? <DataTable caption="Registros que explican la cifra" data={report.details} loading={loading} onPage={next => onViewChange({ page: next })} columns={[{ key: 'label', label: 'Registro', render: detailRecord }, orderColumn, { key: 'tracking', label: 'Guía', render: row => row.tracking || 'No aplica' }, dateColumn('occurredOn', 'Fecha del hecho'), { key: 'value', label: 'Importe / valor', render: row => valueLabel(row.value, row.unit) }, { key: 'reason', label: 'Cobertura', render: detailCoverage }]}/> : loading ? <p role="status">Cargando registros…</p> : <p className="error" role="alert">No se recibieron los registros de esta métrica. <button className="text-button" type="button" onClick={() => setRetry(value => value + 1)}>Reintentar detalle</button></p>}
       </section>}
-      <details className="report-sources"><summary>Cortes y últimas importaciones por plataforma</summary>{report.lastImportAt?.length ? <ul>{report.lastImportAt.map(source => <li key={source.sourceId || source.platformId}><strong>{source.platformName} · {source.sourceName}</strong><br/>Corte del origen: {source.precision === 'instant' ? timestamp(source.sourceAsOf) : source.sourceAsOf ? `${reportDateLabel(source.sourceDate || bogotaDate(source.sourceAsOf))} · sin hora confirmada` : 'Sin dato'}<br/>Importado: {timestamp(source.importedAt)} (Bogotá)</li>)}</ul> : <p className="muted">No hay importaciones de plataforma registradas. Las operaciones manuales no tienen un corte de archivo ficticio.</p>}</details>
-      <details className="report-definitions"><summary>Definiciones, criterios y reglas del informe</summary>
+      <details className="report-sources"><summary data-advisor-control="report-source-cuts">Cortes y últimas importaciones por plataforma</summary>{report.lastImportAt?.length ? <ul>{report.lastImportAt.map(source => <li key={source.sourceId || source.platformId}><strong>{source.platformName} · {source.sourceName}</strong><br/>Corte del origen: {source.precision === 'instant' ? timestamp(source.sourceAsOf) : source.sourceAsOf ? `${reportDateLabel(source.sourceDate || bogotaDate(source.sourceAsOf))} · sin hora confirmada` : 'Sin dato'}<br/>Importado: {timestamp(source.importedAt)} (Bogotá)</li>)}</ul> : <p className="muted">No hay importaciones de plataforma registradas. Las operaciones manuales no tienen un corte de archivo ficticio.</p>}</details>
+      <details className="report-definitions"><summary data-advisor-control="report-metric-definitions">Definiciones, criterios y reglas del informe</summary>
         {!snapshotId&&activeMode!=='saved'&&tab==='costs'&&<p>Resultado operativo = contribución − sueldo fijo − bonificaciones − publicidad − operación − otros gastos. Publicidad y operación se reconocen por fecha del gasto; no se descuentan otra vez de la contribución ni se confunden con pagos de caja.</p>}
         <p className="small muted">Calculado: {timestamp(report.generatedAt)} · Fechas comerciales America/Bogota, inicio incluido y fin excluido. La exportación incluye Resumen, Detalle y Definiciones. Sin dato no equivale a cero.</p>
         <p className="small muted">El resultado operativo registrado no es utilidad neta después de impuestos. El acumulado de un pedido puede incluir hechos de otros períodos.</p>

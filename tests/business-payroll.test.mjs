@@ -13,6 +13,7 @@ import { loadOrderData, persistOrderData } from '../lib/business/orders.mjs';
 import { entity, hash, insertRow, newId, runCommand, stamp } from '../lib/business/commands.mjs';
 import { addDays, bogotaDate } from '../lib/business/dates.mjs';
 import { preparePayroll, confirmPayroll, payPayroll, getPayroll, materializePayrollAccrualsTx, reconcileCommissionsTx, reversePayrollPaymentTx, reverseAdvanceTx } from '../lib/business/payroll.mjs';
+import { financeQuery } from '../lib/business/finance.mjs';
 
 const actor = 'payroll-test-admin';
 const request = () => randomUUID();
@@ -265,6 +266,10 @@ export const businessPayrollContracts = [
     payroll = await undoPayroll(store, first.payrollPaymentId);
     assert.equal(payroll.outstandingMinor, 200000);
     assert.equal(payroll.advanceAppliedMinor, 300000);
+    const page = await financeQuery(store, 'payroll', { person: p.id, status: 'partial', startDate: '2026-09-01', endDateExclusive: '2026-10-01' });
+    assert.deepEqual(page.records.map(({ id, earnedMinor, outstandingMinor }) => ({ id, earnedMinor, outstandingMinor })), [
+      { id: payroll.id, earnedMinor: 1000000, outstandingMinor: 200000 }
+    ]);
     payroll = await undoPayroll(store, second.payrollPaymentId);
     assert.equal(payroll.outstandingMinor, 1000000);
     assert.equal(payroll.advanceAppliedMinor, 0);

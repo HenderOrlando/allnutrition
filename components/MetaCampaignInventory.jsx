@@ -118,12 +118,12 @@ function List({ data, view, onChange, focusTarget, heading, loading }) {
   </>;
 }
 
-function AdSets({ api, view, revision, initial }) {
+function AdSets({ api, view, revision, initial, advisorControl }) {
   const [page, setPage] = useState(1);
   const read = useSavedRead(api, page === 1 ? null : endpoint(view, page), revision);
   const data = page === 1 ? initial : read.data;
-  return <details className={styles.guide}>
-    <summary>Conjuntos de anuncios ({initial.pagination.total})</summary>
+  return <details className={styles.guide} data-advisor-disclosure={advisorControl ? 'open-on-summary' : undefined}>
+    <summary data-advisor-control={advisorControl}>Conjuntos de anuncios ({initial.pagination.total})</summary>
     {page > 1 && <ReadFeedback read={read} label="conjuntos de anuncios"/>}
     {data?.adsets.length ? <ul className={styles.choiceList}>{data.adsets.map(adset => <li key={adset.resourceId}>
       <strong>Conjunto {adset.resourceId}</strong> · {status(adset.configuration)}
@@ -140,13 +140,16 @@ function Detail({ api, view, revision, onChange, onBack, onOpenLocal }) {
   const menu = useSavedRead(api, view.allConnections ? endpoint({ ...view, connection: null, snapshot: null }, 1) : null, revision);
   const data = read.data || read.previous;
   const item = data?.item;
+  const verified = !read.loading && !read.error && read.data?.item === item && item?.ownerId === view.account && item.resourceId === view.metaCampaign
+    && (!view.connection || item.connectionId === view.connection) && (!view.snapshot || item.snapshot.id === view.snapshot);
+  const exactReading = verified && Boolean(view.snapshot && view.connection);
   const snapshots = menu.data?.snapshots || data?.snapshots || [];
   const earlier = snapshots.find(entry => entry.metrics.some(reported));
   const select = entry => onChange({ connection: entry.connectionId, snapshot: entry.snapshot.id, allConnections: !view.connection || view.allConnections ? '1' : null });
   useEffect(() => { heading.current?.focus(); }, []);
   return <>
     <div className={styles.actions}><button type="button" className="button subtle" onClick={onBack}>Volver a campañas consultadas</button></div>
-    <h2 ref={heading} tabIndex={-1}>Campaña {view.metaCampaign}</h2>
+    <h2 ref={heading} tabIndex={-1} data-advisor-control={verified ? 'ad-meta-inventory-campaign' : undefined}>Campaña {view.metaCampaign}</h2>
     <ReadFeedback read={read} label="lectura guardada"/>
     {item && <div hidden={!read.data}><div className={styles.stack}>
       <section className={`${styles.card} ${styles.stack}`} aria-label="Datos guardados de Meta">
@@ -155,11 +158,12 @@ function Detail({ api, view, revision, onChange, onBack, onOpenLocal }) {
         <p><strong>Estado según Meta:</strong> {status(item.object?.configuration)}</p>
         <p><strong>Última lectura de Meta:</strong> {time(item.observedAt)}</p>
         {(item.historical || item.snapshot.stale) && <p>Histórico guardado: no acredita estado ni permisos vigentes.</p>}
-        {item.localCampaignId ? <div className={styles.actions}><span>También creada en All Nutrition</span><button type="button" className="button subtle" onClick={() => onOpenLocal(item.localCampaignId)}>Abrir ficha propia</button></div> : <p>Vínculo no comprobado</p>}
-        <label className={inventory.filter}>Lectura guardada<select value={item.snapshot.id} onChange={event => {
+        {item.localCampaignId ? <div className={styles.actions}><span>También creada en All Nutrition</span><button type="button" className="button subtle" data-advisor-control={exactReading ? 'ad-meta-inventory-counterpart' : undefined} onClick={() => onOpenLocal(item.localCampaignId)}>Abrir ficha propia</button></div> : <p>Vínculo no comprobado</p>}
+        <label className={inventory.filter}>Lectura guardada<select data-advisor-control={verified ? 'ad-meta-inventory-snapshot' : undefined} value={view.snapshot || ''} onChange={event => {
           const chosen = snapshots.find(entry => entry.snapshot.id === event.target.value);
           if (chosen) select(chosen);
         }}>
+          {!view.snapshot && <option value="" disabled>Sin fijar · se muestra la lectura más reciente</option>}
           {snapshots.map(entry => <option key={entry.snapshot.id} value={entry.snapshot.id}>{time(entry.observedAt)} · {period(entry.metrics.find(reported)?.period || entry.period) || 'Período no informado'} · {entry.ownerId} · {entry.connectionName || entry.connectionId} · {entry.metrics.some(reported) ? 'Con métricas' : 'Sin métricas'}</option>)}
         </select></label>
         {view.allConnections && menu.error && <ReadFeedback read={menu} label="lecturas de otras conexiones"/>}
@@ -168,7 +172,7 @@ function Detail({ api, view, revision, onChange, onBack, onOpenLocal }) {
           <button type="button" className="button subtle" onClick={() => select(earlier)}>Ver métricas de la lectura del {time(earlier.observedAt)}</button>
         </div>}
       </section>
-      <AdSets key={item.snapshot.id} api={api} view={{ ...view, connection: item.connectionId, snapshot: item.snapshot.id }} revision={revision} initial={data}/>
+      <AdSets key={item.snapshot.id} api={api} view={{ ...view, connection: item.connectionId, snapshot: item.snapshot.id }} revision={revision} initial={data} advisorControl={exactReading ? 'ad-meta-inventory-adsets' : undefined}/>
       <MetaCampaignEconomics api={api} item={item}/>
     </div></div>}
   </>;
@@ -190,7 +194,7 @@ export default function MetaCampaignInventory({ api, view, onChange, onOpenLocal
     })}/>
   </section>;
   return <section className={styles.stack} aria-labelledby="meta-campaign-inventory">
-    <h2 ref={heading} id="meta-campaign-inventory" tabIndex={-1}>Campañas consultadas en Meta</h2>
+    <h2 ref={heading} id="meta-campaign-inventory" tabIndex={-1} data-advisor-control="Campañas consultadas en Meta">Campañas consultadas en Meta</h2>
     <p>Lecturas guardadas de solo lectura. No se consulta a Meta al abrir esta vista.</p>
     <div className={inventory.filters}>
       <Filter label="Conexión de origen" all="Todas las conexiones" value={view.connection} choices={list.data?.connections || list.previous?.connections || []} onChange={connection => onChange({ connection, account: null, page: 1 })}/>

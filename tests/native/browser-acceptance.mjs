@@ -107,8 +107,10 @@ function exec(service, script) {
   const wrapped = `try {\n${script}\n} catch (error) { console.error(error.stack || ('ACCEPTANCE_PROBE_FAILED ' + (error.code || error.name))); process.exitCode=1; }`;
   const result = compose(['exec', '-T', service, 'node', '--input-type=module'], { input: wrapped, logOutput: false, allowFailure: true });
   if (result.error || result.status !== 0) {
-    save(join(work, `failed-probe-${randomUUID()}.json`), { service, status: result.status, signal: result.signal, error: result.error?.code, stdout: safe(result.stdout), stderr: safe(result.stderr) });
-    throw Error(`Private probe failed in ${service}; see failed-probe diagnostics`);
+    const directory = pair ? dirname(resolve(process.argv[3])) : work;
+    const filename = `failed-probe-${randomUUID()}.json`;
+    save(join(directory, filename), { service, status: result.status, signal: result.signal, error: result.error?.code, stdout: safe(result.stdout), stderr: safe(result.stderr) });
+    throw Error(`Private probe failed in ${service}; see ${filename} in private diagnostics`);
   }
   return JSON.parse(result.stdout.trim());
 }

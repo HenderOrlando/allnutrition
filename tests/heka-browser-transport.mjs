@@ -9,6 +9,7 @@ export const GUIDE_B = { _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', guide_number: '0000005
 export const GUIDE_C = { _id: 'cccccccccccccccccccccccc', guide_number: '000000567803', distributor_id: 'coordinadora', status: 'created' };
 export const NOVELTY = 'dddddddddddddddddddddddd';
 export const SOLUTION = 'Entregar en portería de la dirección sintética';
+export const UNCERTAIN_SOLUTION = 'Solución sintética registrada sin recibo';
 
 function blankPDF() {
   const entries = [
@@ -26,6 +27,7 @@ export function installHekaBrowserTransport(log, origin) {
   const localFetch = globalThis.fetch;
   const paged = (rows, extra = {}) => ({ rows, pager: { total: rows.length, pages: 1, page: 1, previousPage: null, nextPage: null, ...extra } });
   const ok = response => Response.json({ code: 200, response });
+  let storedSolution;
   const reject = (status, message) => Response.json({ code: status, response: { message } }, { status });
   globalThis.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input);
@@ -41,6 +43,7 @@ export function installHekaBrowserTransport(log, origin) {
     appendFileSync(log, JSON.stringify({ method, path, productionBranch }) + '\n');
     switch (`${method} ${path}`) {
       case 'GET /geolocation/city': {
+        if (query.get('label') === 'AMBIGUA') return ok(paged([{ _id: CITY, label: 'Primera coincidencia sintética', dane: '11001000' }], { total: 2, pages: 2, nextPage: 2 }));
         assert.equal(query.get('label'), 'BOGOTA');
         return ok(paged([{ _id: CITY, label: 'BOGOTA(CUNDINAMARCA)', dane: '11001000' }]));
       }
@@ -82,12 +85,14 @@ export function installHekaBrowserTransport(log, origin) {
       }
       case 'GET /shipments/novelty': {
         const item = { ...GUIDE_B, status: 'novelty', status_novelty: 'in_novelty', city_destination: 'MEDELLIN(ANTIOQUIA)',
-          last_novelty: { _id: NOVELTY, message: 'Cliente no disponible', last_status: 'distribution' },
+          last_novelty: { _id: NOVELTY, message: 'Cliente no disponible', last_status: 'distribution', ...(query.get('id') === GUIDE_B._id&&storedSolution?{solution:storedSolution}:{}) },
           movemens: [{ label: 'Visita de prueba', status: 'distribution', isNovelty: true, date: '2026-11-10T10:00:00Z' }] };
         return ok(paged([item]));
       }
       case `PATCH /shipments/novelty/${NOVELTY}`: {
-        assert.deepEqual(await request.json(), { solution: SOLUTION });
+        const { solution } = await request.json();
+        if(solution===UNCERTAIN_SOLUTION){ storedSolution=solution; return new Response('recibo sintético no verificable',{status:502}); }
+        assert.equal(solution, SOLUTION);
         return ok({ _id: NOVELTY, last_status: 'distribution', solution: SOLUTION, updatedAt: '2026-11-12T15:00:00Z' });
       }
       case 'POST /documents/sticker': {

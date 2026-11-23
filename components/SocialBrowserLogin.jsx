@@ -2,9 +2,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import useDialog from './useDialog';
 import styles from './AdvertisingWorkspace.module.css';
+import { useAssistantBridge } from './AssistantBridge';
 
 const navigationKeys = new Set(['Tab', 'Enter', 'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', 'Escape']);
 export default function SocialBrowserLogin({ api, connection, onClose, onConnected, onInteractionStateChange }) {
+  const assistant = useAssistantBridge();
   const dialog = useRef(null), canvas = useRef(null), control = useRef(null), mounted = useRef(true), commandQueue = useRef(Promise.resolve()), sequence = useRef(0);
   const reporter = useRef(onInteractionStateChange); reporter.current = onInteractionStateChange;
   const [session, setSession] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [inputEnabled, setInputEnabled] = useState(true);
@@ -95,7 +97,7 @@ export default function SocialBrowserLogin({ api, connection, onClose, onConnect
       control.current = null; setSession(null); await onConnected?.(result); onClose();
     } catch (cause) { setError(cause.message); } finally { if (mounted.current) setBusy(false); }
   }
-  return <dialog ref={dialog} className={`admin-dialog ${styles.browserDialog}`} aria-labelledby="social-browser-login-title">
+  return <dialog ref={dialog} className={`admin-dialog ${styles.browserDialog}`} aria-labelledby="social-browser-login-title" data-meta-browser-viewer={connection.id}>
     <header className="dialog-heading"><div><h2 id="social-browser-login-title">Conectar mediante navegador</h2><p>{connection.name || 'Facebook e Instagram'} · Sesión privada asistida</p></div><button type="button" className="button subtle" onClick={stop} disabled={busy}>Cerrar</button></header>
     <p>Meta puede pedir contraseña, 2FA o un desafío dentro del visor. No se guardan contraseñas, códigos ni imágenes de esta pantalla. Las cookies y el almacenamiento permitido se conservan cifrados; pueden vencer o ser revocados.</p>
     <p className="hint">Esta vía requiere permiso previo de Meta para automatización fuera de API. Nunca resuelve CAPTCHA o restricciones por evasión. Solo puedes manejar el acceso: publicar o invertir exige la confirmación separada del módulo.</p>
@@ -104,7 +106,11 @@ export default function SocialBrowserLogin({ api, connection, onClose, onConnect
       <p className="small muted">Control exclusivo hasta {new Date(session.expiresAt).toLocaleString('es-CO')}. Si cierras el visor, se detiene este control sin cerrar la sesión social ya guardada.</p>
       <div className={styles.browserViewport}><canvas ref={canvas} width={1280} height={800} tabIndex={0} role="application" aria-label="Visor privado de Meta: haz clic y escribe; Tab cambia de campo, Escape vuelve al diálogo" onPointerDown={event => { if (event.button !== 0) return; event.currentTarget.focus(); send({ kind: 'click', ...position(event) }); }} onKeyDown={keyboard} onPaste={event => { event.preventDefault(); const value = event.clipboardData.getData('text'); if (value.length > 1000) { setError('Pega hasta 1000 caracteres por entrada.'); return; } send({ kind: 'type', text: value }); }} onWheel={event => send({ kind: 'scroll', deltaX: Math.round(Math.max(-1600, Math.min(1600, event.deltaX))), deltaY: Math.round(Math.max(-1600, Math.min(1600, event.deltaY))) })} onContextMenu={event => event.preventDefault()}/></div>
       <p className="small muted">Vista de 1280 × 800 reducida al espacio disponible. Tab cambia de campo en Meta; Escape devuelve el foco a los controles de este diálogo. El contenido remoto es una imagen, sin HTML de Meta ni cookies administrativas.</p>
-      <footer className="dialog-actions"><button type="button" className="button primary" onClick={finish} disabled={busy}>{busy ? 'Verificando…' : 'Verificar y guardar sesión'}</button><button type="button" className="button subtle" onClick={stop} disabled={busy}>Cancelar acceso</button></footer>
+      <footer className="dialog-actions">
+        <button type="button" className="button subtle" disabled={busy} onClick={() => assistant.requestOpen()}>Ali: revisar este control</button>
+        <button type="button" className="button primary" data-advisor-control="meta-browser-dialog-finish" onClick={finish} disabled={busy}>{busy ? 'Verificando…' : 'Verificar y guardar sesión'}</button>
+        <button type="button" className="button subtle" data-advisor-control="meta-browser-dialog-cancel" onClick={stop} disabled={busy}>Cancelar acceso</button>
+      </footer>
     </>}
   </dialog>;
 }

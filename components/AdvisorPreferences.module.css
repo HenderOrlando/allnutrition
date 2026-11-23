@@ -1,0 +1,69 @@
+.dialog {
+  box-sizing: border-box;
+  inline-size: min(35rem, calc(100% - 24px));
+  max-block-size: calc(100dvh - 24px);
+  padding: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--admin-line);
+  border-radius: 16px;
+  background: var(--admin-surface, #fff);
+  color: var(--admin-ink, #182230);
+}
+
+.dialog::backdrop { background: rgb(12 18 25 / .58); }
+.dialog :is(h2, p, fieldset) { margin: 0; }
+
+.header,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.header {
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-block-end: 1px solid var(--admin-line);
+}
+
+.header h2 { font-size: 1.2rem; }
+.body, .form, .fields, .select, .feedback { display: grid; min-inline-size: 0; gap: 12px; }
+.body { padding: 16px; }
+.status:empty { margin-block-start: -12px; }
+.select, .feedback { gap: 6px; }
+.fields, .detail { min-inline-size: 0; border: 0; padding: 0; }
+.detail legend, .select > span { font-weight: 600; }
+.select select { min-inline-size: 0; min-block-size: 44px; font-size: 1rem; }
+
+.form label:not(.select) {
+  display: flex;
+  align-items: center;
+  min-block-size: 44px;
+  gap: 8px;
+}
+
+.form input { flex: none; inline-size: 18px; block-size: 18px; margin: 0; }
+.dialog .form .detail label > input[type='radio'] {
+  width: 18px;
+  min-height: 0;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+}
+.hint { font-size: .875rem; }
+.feedback { padding: 10px; border-inline-start: 3px solid var(--admin-line); }
+.feedback button { justify-self: start; }
+
+.dialog button {
+  max-inline-size: 100%;
+  min-block-size: 44px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 390px) {
+  .body, .header { padding: 12px; }
+  .actions > button { inline-size: 100%; }
+}

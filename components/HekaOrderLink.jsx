@@ -9,11 +9,11 @@ export const parseOrderNumber = value => {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 };
 
-export function HekaGuideOrderLink({ guide, linking, busy }) {
+export function HekaGuideOrderLink({ guide, linking, busy, unique }) {
   if (!linking || !isHekaId(guide?._id) || !guide.guide_number) return null;
   const linked = linking.records[guide._id] ?? guide.localLink;
-  return linked ? <div className="admin-actions"><span>Vinculada al pedido {orderLabel(linked.orderNumber)}.</span><button className="button subtle" type="button" disabled={busy} onClick={() => linking.open(linked)}>Abrir envío local</button></div>
-    : guide.distributor_id ? <button type="button" className="button subtle" disabled={busy} onClick={() => linking.select(guide)}>Vincular guía a un pedido</button> : null;
+  return linked ? <div className="admin-actions"><span>Vinculada al pedido {orderLabel(linked.orderNumber)}.</span><button className="button subtle" type="button" data-advisor-control={unique?'heka-linked-shipment':undefined} disabled={busy} onClick={() => linking.open(linked)}>Abrir envío local</button></div>
+    : guide.distributor_id ? <button type="button" className="button subtle" data-advisor-control={unique?'heka-link-guide-start':undefined} disabled={busy} onClick={() => linking.select(guide)}>Vincular guía a un pedido</button> : null;
 }
 
 export function HekaLinkOrderReview({ guide, orderNumber, onOrderNumber, order, onLookup, busy }) {
@@ -22,7 +22,7 @@ export function HekaLinkOrderReview({ guide, orderNumber, onOrderNumber, order, 
     <HekaValues items={ [['Guía Heka', guide.guide_number], ['Transportadora', carrierLabel(guide.distributor_id)], ['Estado informado por Heka', guide.status]] }/>
     <form aria-label="Buscar pedido por número exacto" onSubmit={onLookup}>
       <fieldset className="editor-fieldset" disabled={busy}>
-        <label className="field">Número exacto del pedido All Nutrition<input required maxLength={20} value={orderNumber} onChange={event => onOrderNumber(event.target.value)} placeholder="AN-000123"/></label>
+        <label className="field">Número exacto del pedido All Nutrition<input data-advisor-control="heka-order-lookup" required maxLength={20} value={orderNumber} onChange={event => onOrderNumber(event.target.value)} placeholder="AN-000123"/></label>
         <button type="submit" className="button subtle" disabled={!parseOrderNumber(orderNumber)}>Buscar pedido exacto</button>
       </fieldset>
     </form>

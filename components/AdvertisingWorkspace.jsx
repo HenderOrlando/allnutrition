@@ -77,12 +77,12 @@ function useRequestIds() {
   }, []);
 }
 
-export default function AdvertisingWorkspace({ api, view, onViewChange, onStudioThread, onNavigate, onInteractionStateChange, onMutation, revision = 0, assistantOpenRequest, onAssistantOpenHandled }) {
+export default function AdvertisingWorkspace({ api, view, onViewChange, onStudioThread, onNavigate, onInteractionStateChange, onMutation, revision = 0, assistantOpenRequest, onAssistantOpenHandled, advisorTargetRequest, onAdvisorTargetHandled, campaignCatalogRequest, assetCatalogRequest }) {
   const tab = tabs.some(item => item.id === view.tab) ? view.tab : 'campaigns';
   const remote = tab === 'campaigns' && view.source === 'meta';
   const [refresh, setRefresh] = useState(0), [inventory, setInventory] = useState({ data: null, error: '', loading: false, fetchedAt: null });
   const [notice, setNotice] = useState('');
-  const heading = useRef(null), queryPanel = useRef(null), interaction = useRef(new Map()), callbacks = useRef({}), mounted = useRef(true);
+  const heading = useRef(null), campaignSearch = useRef(null), interaction = useRef(new Map()), callbacks = useRef({}), mounted = useRef(true);
   callbacks.current = { onInteractionStateChange, onMutation, onViewChange, view };
   const assistantBridge = useAssistantBridge(), assistantOpenNotice = useRef('');
   const [assistantOpenContext, setAssistantOpenContext] = useState(null);
@@ -114,6 +114,26 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
       if (assistantOpenNotice.current !== `${request.requestId}:${text}`) { assistantOpenNotice.current = `${request.requestId}:${text}`; setNotice(text); }
     }
   }, [assistantOpenRequest, assistantOpenContext, assistantBridge, view, tab, remote, onAssistantOpenHandled]);
+  const duplicateOpening = !remote && tab === 'campaigns' && assistantOpenRequest?.open?.owner === 'advertising' && assistantOpenRequest.open.target === 'campaign-duplicate'
+    && assistantOpenRequest.open.view.record === view.record ? assistantOpenRequest : null;
+  const campaignAdvisor = !remote && tab === 'campaigns' && ['advertising.duplicate-campaign', 'advertising.publish-organic-now'].includes(advisorTargetRequest?.capabilityId)
+    && (advisorTargetRequest.view.record || null) === (view.record || null) ? advisorTargetRequest : null;
+  const campaignFocus = duplicateOpening ? { id:duplicateOpening.requestId, focus:'campaign-duplicate', version:duplicateOpening.expectedVersion }
+    : campaignAdvisor?.selection?.id === view.record && campaignAdvisor?.selection
+      ? { id:campaignAdvisor.id, focus:campaignAdvisor.focus, version:campaignAdvisor.selection.version } : null;
+  const campaignFocusHandled = useCallback((id, issue) => {
+    if (duplicateOpening?.requestId === id) {
+      if (issue) setNotice(issue);
+      onAssistantOpenHandled?.(id, { stayHere:true });
+    } else onAdvisorTargetHandled?.(id, issue);
+  }, [duplicateOpening, onAssistantOpenHandled, onAdvisorTargetHandled]);
+  useEffect(() => {
+    if (!campaignAdvisor || view.record || !campaignSearch.current || [...interaction.current.values()].some(state => state.busy || state.dirty)) return;
+    campaignSearch.current.focus();
+    const reached = document.activeElement === campaignSearch.current;
+    if (reached) setNotice(campaignAdvisor.focus === 'campaign-publish' ? 'Elige la publicación local que quieres revisar. No se ha autorizado ningún envío.' : 'Elige la campaña local que quieres duplicar. Todavía no se ha creado ningún borrador.');
+    onAdvisorTargetHandled?.(campaignAdvisor.id, reached ? undefined : 'No se pudo enfocar la búsqueda de campañas.');
+  }, [campaignAdvisor, view.record, onAdvisorTargetHandled]);
   const report = useCallback((owner, state) => {
     interaction.current.set(owner, state);
     callbacks.current.onInteractionStateChange?.({ dirty: [...interaction.current.values()].some(item => item.dirty), busy: [...interaction.current.values()].some(item => item.busy) });
@@ -186,13 +206,13 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
   }, [report]);
   const startStudio = () => change({ tab: 'campaigns', record: 'new', studio: null, mode: null, objective: null });
   const editorProps = { api, connections, requirements: connectionRead.data?.requirements, assets: inventory.data?.assets,
-    onSaved: committed, onNavigate: navigate, onInteractionStateChange: editorReport, onComposerState: editorComposerReport, onMutation: invalidate, revision };
+    onSaved: committed, onNavigate: navigate, onInteractionStateChange: editorReport, onComposerState: editorComposerReport, onMutation: invalidate, revision, campaignCatalogRequest };
   const campaignFilters = [
     ['q', 'Búsqueda', view.q], ['mode', 'Tipo de publicación', { organic: 'Publicación sin inversión', paid: 'Anuncio pagado' }[view.mode]],
     ['status', 'Estado', states[view.status]], ['network', 'Red', { facebook: 'Facebook', instagram: 'Instagram' }[view.network]],
     ['objective', 'Objetivo', objectives[view.objective]]
   ].filter(([key]) => Boolean(view[key]));
-  const clearCampaignFilters = () => { change({ q: null, mode: null, status: null, network: null, objective: null, record: null, page: 1 }); queryPanel.current?.querySelector('input[name="q"]')?.focus(); };
+  const clearCampaignFilters = () => { change({ q: null, mode: null, status: null, network: null, objective: null, record: null, page: 1 }); campaignSearch.current?.focus(); };
   const currentCampaignQuery = campaignRead.path === listPath;
   return <section className={`${styles.workspace} ${styles.advertising}`} aria-label="Publicidad en redes sociales">
     <header className="workspace-heading"><div><p className={styles.eyebrow}>Facebook e Instagram</p><h1 ref={heading} tabIndex={-1} data-admin-section-heading>Publicidad</h1></div>
@@ -216,7 +236,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
         assisted={assistantOpenRequest?.open?.target === 'campaign-draft' && assistantOpenRequest.open.view?.record === 'new'}
         onOpenCampaign={id => change({ record: id, studio: null })} onBack={() => change({ record: 'new', studio: view.studio })}
         onExit={() => change({ record: null, studio: null })}/>
-        : <AdvertisingCampaignEditor {...editorProps} campaignId={view.record}/>}
+        : <AdvertisingCampaignEditor {...editorProps} campaignId={view.record} advisorFocus={campaignFocus} onAdvisorFocusHandled={campaignFocusHandled}/>}
     </> : tab === 'campaigns' ? <>
       <section className={styles.startPanel} aria-labelledby="advertising-start-title">
         <div><p className={styles.eyebrow}>De la idea a los resultados</p><h2 id="advertising-start-title">Prepara tu próxima publicación</h2><p>No necesitas conectar Meta para empezar. Guarda un borrador, revísalo y decide más adelante si lo publicas.</p></div>
@@ -227,10 +247,10 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
           <li><strong>3. Aprende</strong><span>Abre los resultados, comprueba la evidencia y prepara una variante.</span></li>
         </ol>
       </section>
-      <section ref={queryPanel} className={styles.queryPanel} aria-label="Buscar y filtrar publicaciones">
+      <section className={styles.queryPanel} aria-label="Buscar y filtrar publicaciones">
         <div className={styles.listTitle}><h2>Tus publicaciones y campañas</h2>{currentCampaignQuery && campaignRead.data && <span className={styles.badge}>{campaignRead.data.total} {campaignRead.data.total === 1 ? 'registro' : 'registros'}</span>}</div>
         <div className={styles.filterBar}>
-          <Field field={{ name: 'q', label: 'Buscar publicación', max: 100 }} value={view.q || ''} onChange={value => change({ q: value || null })}/>
+          <label className="field">Buscar publicación<input name="q" ref={campaignSearch} data-advisor-control="Buscar y filtrar publicaciones" value={view.q || ''} maxLength={100} onChange={event => change({ q: event.target.value || null })}/></label>
           <SelectField name="mode" label="Tipo de publicación" value={view.mode} options={[{ value: '', label: 'Todas' }, { value: 'organic', label: 'Publicación sin inversión' }, { value: 'paid', label: 'Anuncio pagado' }]} onChange={value => change({ mode: value || null })}/>
           <SelectField name="status" label="Estado" value={view.status} options={[{ value: '', label: 'Todos' }, ...['draft', 'ready', 'scheduled', 'publishing', 'partial', 'published', 'in_review', 'active', 'paused', 'completed', 'failed', 'needs_attention', 'cancelled'].map(value => ({ value, label: states[value] }))]} onChange={value => change({ status: value || null })}/>
         </div>
@@ -238,7 +258,7 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
           <SelectField name="network" label="Red" value={view.network} options={[{ value: '', label: 'Todas' }, { value: 'facebook', label: 'Facebook' }, { value: 'instagram', label: 'Instagram' }]} onChange={value => change({ network: value || null })}/>
           <SelectField name="objective" label="Objetivo" value={view.objective} options={[{ value: '', label: 'Todos' }, ...Object.entries(objectives).map(([value, label]) => ({ value, label }))]} onChange={value => change({ objective: value || null })}/>
         </div></details>
-        {campaignFilters.length ? <div className="active-filters" aria-label="Filtros activos">{campaignFilters.map(([key, label, value]) => <button key={key} type="button" className="filter-chip" aria-label={`Quitar filtro: ${label}: ${value}`} onClick={() => { change({ [key]: null, page: 1 }); queryPanel.current?.querySelector('input[name="q"]')?.focus(); }}>{label}: {value} <span aria-hidden="true">×</span></button>)}<button type="button" className="text-button" onClick={clearCampaignFilters}>Limpiar filtros</button></div> : <p className={styles.help}>Se muestran todas las publicaciones</p>}
+        {campaignFilters.length ? <div className="active-filters" aria-label="Filtros activos">{campaignFilters.map(([key, label, value]) => <button key={key} type="button" className="filter-chip" aria-label={`Quitar filtro: ${label}: ${value}`} onClick={() => { change({ [key]: null, page: 1 }); campaignSearch.current?.focus(); }}>{label}: {value} <span aria-hidden="true">×</span></button>)}<button type="button" className="text-button" onClick={clearCampaignFilters}>Limpiar filtros</button></div> : <p className={styles.help}>Se muestran todas las publicaciones</p>}
         <p className={styles.help}>Ordenadas por última actualización.</p>
       </section>
       <ReadStatus state={campaignRead} label="publicaciones" onRetry={() => setRefresh(value => value + 1)}/>
@@ -258,16 +278,18 @@ export default function AdvertisingWorkspace({ api, view, onViewChange, onStudio
     </> : tab === 'assets' ? <>
       <AssetsPanel api={api} view={view} inventory={inventory} change={change} report={report} onMutation={invalidate}
         onAssetChange={updateLibraryAsset} onStartStudio={startStudio} onRetry={() => setRefresh(value => value + 1)}
-        assistedUpload={!view.record && assistantOpenRequest?.open?.target === 'asset-metadata' && assistantOpenContext?.requestId === assistantOpenRequest.requestId ? assistantOpenRequest.requestId : null}/>
-      {!view.record && <details className={styles.guide}><summary>Historial de imágenes anterior al estudio</summary><LegacyGenerationHistory api={api}/></details>}
+        assistedUpload={!view.record && (assetCatalogRequest?.id || (assistantOpenRequest?.open?.target === 'asset-metadata' && assistantOpenContext?.requestId === assistantOpenRequest.requestId && assistantOpenRequest.requestId))}/>
+      {!view.record && <details className={styles.guide}><summary data-advisor-control="ad-legacy-generation-history">Historial de imágenes anterior al estudio</summary><LegacyGenerationHistory api={api}/></details>}
     </> : <>
       <AdvertisingResults api={api} campaignId={view.record && view.record !== 'new' ? view.record : null} view={view} onViewChange={onViewChange} onNavigate={navigate} onInteractionStateChange={resultsReport} onMutation={invalidate} revision={revision}/>
       {(!view.record || view.record === 'new') && <>
         <ReadStatus state={connectionRead} label="cuentas para análisis y medición" onRetry={() => setRefresh(value => value + 1)}/>
         <section className={styles.stack} aria-labelledby="social-account-measurement">
           <h2 id="social-account-measurement" tabIndex={-1}>Medición de la cuenta</h2>
-          <AdvertisingMeasurement api={api} connections={connections} onInteractionStateChange={measurementReport} onMutation={invalidate}/>
-          <MetaAccountAnalysis api={api} connections={connections} onInteractionStateChange={accountAnalysisReport} onMutation={invalidate}/>
+          <AdvertisingMeasurement api={api} connections={connections} connectionsPending={!connectionRead.data && !connectionRead.error} onInteractionStateChange={measurementReport} onMutation={invalidate}/>
+          <div role="group" aria-label="Análisis histórico y contenido actual" tabIndex={-1} data-advisor-control="Análisis histórico y contenido actual">
+            <MetaAccountAnalysis api={api} connections={connections} onInteractionStateChange={accountAnalysisReport} onMutation={invalidate}/>
+          </div>
         </section>
       </>}
     </>}
@@ -291,7 +313,7 @@ function NewPublication({ view, editorProps, onThread, onInteractionStateChange,
       <div className={styles.actions}><button type="button" className="text-button" onClick={back}>Volver al estudio</button></div>
       <AdvertisingCampaignEditor {...editorProps} campaignId="new" initialMode={mode} initialObjective={view.objective || 'engagement'} studioThread={selection || null} studioId={view.studio} onStudioThread={onThread}/>
     </> : selection !== undefined ? <section className={`${styles.card} ${styles.stack}`} aria-label="Elegir tipo de publicación">
-      <header><p className={styles.eyebrow}>Elige una ruta</p><h2 ref={heading} tabIndex={-1}>¿Qué quieres publicar?</h2>
+      <header><p className={styles.eyebrow}>Elige una ruta</p><h2 ref={heading} tabIndex={-1} data-advisor-control="ad-campaign-choose-mode">¿Qué quieres publicar?</h2>
         <p>{selection?.selectedAsset ? <>Pieza elegida: <strong>{selection.selectedAsset.name}</strong>.</> : 'Puedes añadir una imagen o un video más adelante.'}</p>
       </header>
       <div className={styles.fieldGrid}>
@@ -301,7 +323,7 @@ function NewPublication({ view, editorProps, onThread, onInteractionStateChange,
       <div className={styles.actions}><button type="button" className="text-button" onClick={back}>Volver al estudio</button></div>
     </section> : <AdvertisingGeneration api={editorProps.api} assets={editorProps.assets} threadId={view.studio} onThreadCreated={thread => onThread?.(thread.id)}
       onUseAsset={(_asset, thread) => setSelection(thread)} onOpenCampaign={onOpenCampaign} onInteractionStateChange={onInteractionStateChange} onMutation={editorProps.onMutation}
-      onSkip={() => { if (onBack() !== false) setSelection(null); }} onExit={onExit}/>}
+      catalogRequest={editorProps.campaignCatalogRequest} advisorStudioEntry={editorProps.campaignCatalogRequest?.focus==='ad-campaign-skip'} onSkip={() => { if (onBack() !== false) setSelection(null); }} onExit={onExit}/>}
   </div>;
 }
 
@@ -316,7 +338,7 @@ function PrivatePieces({ api, onResume }) {
     }, cause => { if (!signal.aborted) setPaging(value => ({ ...value, loading: false, error: cause.message })); });
     return () => controller.abort();
   }, [api, paging.cursor]);
-  return <details className={styles.guide}><summary>Mis piezas en curso{paging.threads.length ? ` (${paging.threads.length}${paging.nextCursor ? '+' : ''})` : ''}</summary>
+  return <details className={styles.guide} data-advisor-disclosure="open-on-summary"><summary data-advisor-control="ad-private-pieces">Mis piezas en curso{paging.threads.length ? ` (${paging.threads.length}${paging.nextCursor ? '+' : ''})` : ''}</summary>
     {paging.loading && <p role="status">Buscando tus piezas en curso…</p>}
     {paging.error && <p role="alert">{paging.error}</p>}
     {!paging.loading && !paging.error && !paging.threads.length && <p>No hay piezas en curso sin borrador.</p>}
@@ -402,7 +424,6 @@ function AssetsPanel({ api, view, inventory, change, report, onMutation, onAsset
   const activeFilters = [[view.q && 'q', 'Búsqueda', view.q], [stateFilter && 'status', 'Estado', ASSET_STATES[stateFilter]]].filter(([key]) => key);
   const readStatus = <ReadStatus state={inventory} label="imágenes, videos y espacio disponible" onRetry={onRetry}/>;
   useEffect(() => () => { operation.current?.abort(); report('assets', { dirty: false, busy: false }); }, [report]);
-  useEffect(() => { if (assistedUpload) setUploadOpen(true); }, [assistedUpload]);
   useEffect(() => {
     const prior = previousRecord.current;
     previousRecord.current = record;
@@ -420,6 +441,7 @@ function AssetsPanel({ api, view, inventory, change, report, onMutation, onAsset
     });
     return () => cancelAnimationFrame(frame);
   }, [record, selectedId]);
+  useEffect(() => { if (assistedUpload) setUploadOpen(true); }, [assistedUpload]);
 
   const openUpload = event => {
     event.currentTarget.focus({ preventScroll: true });
@@ -474,12 +496,12 @@ function AssetsPanel({ api, view, inventory, change, report, onMutation, onAsset
     </section> : <>
       <section className={library.heading} aria-labelledby="advertising-library-title">
         <div><h2 id="advertising-library-title">Biblioteca privada</h2><p>Guarda imágenes y videos para tus publicaciones. Subir un archivo no lo publica.</p></div>
-        <div className={styles.actions}><button type="button" className="button primary" aria-haspopup="dialog" onClick={openUpload}><Icon name="plus" size={18}/>Subir archivo privado</button>
+        <div className={styles.actions}><button type="button" className="button primary" aria-haspopup="dialog" data-advisor-control="advertising-asset-upload" onClick={openUpload}><Icon name="plus" size={18}/>Subir archivo privado</button>
           <button type="button" className="button subtle" onClick={onStartStudio}>Crear imagen en el estudio</button></div>
       </section>
       <section ref={searchPanel} className={library.filters} aria-label="Buscar y filtrar imágenes y videos">
         <div className={library.filterFields}>
-          <Field field={{ name: 'assetQuery', label: 'Buscar imagen o video', max: 100 }} value={view.q || ''} onChange={value => change({ q: value || null, page: 1 })}/>
+          <Field field={{ name: 'assetQuery', label: 'Buscar imagen o video', max: 100, advisorControl: 'Buscar y filtrar imágenes y videos' }} value={view.q || ''} onChange={value => change({ q: value || null, page: 1 })}/>
           <SelectField name="assetState" label="Estado del archivo" value={stateFilter} options={[{ value: '', label: 'Todos' }, ...Object.entries(ASSET_STATES).map(([value, label]) => ({ value, label }))]} onChange={value => change({ status: value || null, page: 1 })}/>
         </div>
         {activeFilters.length > 0 && <div className="active-filters" aria-label="Filtros de imágenes y videos">
@@ -557,12 +579,12 @@ function AssetDetails({ asset, heading, busy, error, onRetryProcessing, onArchiv
     ready: canReview ? 'Revisa la vista previa antes de usarla. Al preparar una publicación en el estudio, elige este archivo desde la biblioteca.' : 'Comprueba la vista previa privada antes de usar el archivo en una publicación.',
     uploading: `La reserva vence el ${date(asset.uploadExpiresAt)}. Si la carga se interrumpió, espera el diagnóstico o sube un archivo nuevo. La reserva no confirma que el archivo se haya recibido.`,
     processing: 'Espera a que termine la preparación y verificación en segundo plano. Todavía no puedes usar el archivo.',
-    failed: canRetry ? 'El original está guardado. Reintenta el procesamiento o sube una versión corregida.' : 'No hay un original que se pueda volver a procesar. Corrige el archivo y súbelo de nuevo.',
+    failed: canRetry ? 'Se registró un original privado. Puedes solicitar otra preparación si el original sigue íntegro, o subir una versión corregida.' : 'No hay un original que se pueda volver a procesar. Corrige el archivo y súbelo de nuevo.',
     archived: 'La historia se conserva. Ya no puedes seleccionar este archivo para nuevas publicaciones.',
     missing_file: 'Pide al administrador que restaure el volumen privado y compruebe la huella SHA-256. Reconectar Meta no restaura archivos. La historia se conserva y no se puede republicar.',
   }[asset.state];
   return <article className={library.detailCard}>
-    <header className={library.detailHeader}><div><p className={styles.help}>{assetKind(asset)} en la biblioteca privada</p><h2 ref={heading} tabIndex={-1}>{asset.name}</h2></div><AssetState asset={asset}/></header>
+    <header className={library.detailHeader}><div><p className={styles.help}>{assetKind(asset)} en la biblioteca privada</p><h2 ref={heading} tabIndex={-1} data-advisor-control="advertising-asset-details">{asset.name}</h2></div><AssetState asset={asset}/></header>
     <div className={library.detailLayout}>
       <AssetPreview key={asset.version} asset={asset} detail onFailure={setFailedPreviewVersion}/>
       <div className={library.nextStep}>
@@ -572,11 +594,11 @@ function AssetDetails({ asset, heading, busy, error, onRetryProcessing, onArchiv
         {asset.diagnostic && <p className={styles.warning}>{asset.diagnostic.message || asset.diagnostic.code}</p>}
         <AssetActionError error={error}/>
         {canReview && <button type="button" className="button primary" onClick={onStartStudio}>Ir al estudio</button>}
-        {canRetry && <button type="button" className="button primary" disabled={busy} onClick={onRetryProcessing}>{busy ? 'Enviando solicitud…' : 'Reintentar procesamiento'}</button>}
+        {canRetry && <button type="button" className="button primary" data-advisor-control="advertising-asset-retry" disabled={busy} onClick={onRetryProcessing}>{busy ? 'Enviando solicitud…' : 'Reintentar procesamiento'}</button>}
         {asset.state === 'failed' && <button type="button" className={`button ${canRetry ? 'subtle' : 'primary'}`} disabled={busy} aria-haspopup="dialog" onClick={onUpload}>Subir archivo privado</button>}
       </div>
     </div>
-    <details className={styles.technicalDetails}><summary>Detalles técnicos del archivo</summary>
+    <details className={styles.technicalDetails} data-advisor-disclosure><summary>Detalles técnicos del archivo</summary>
       <dl className="summary-values">
         <div><dt>Registrado</dt><dd>{date(asset.createdAt)}</dd></div>
         <div><dt>Original</dt><dd>{bytes(asset.originalBytes ?? asset.expectedBytes)} · {asset.originalName || 'Nombre no informado'}</dd></div>
@@ -584,9 +606,9 @@ function AssetDetails({ asset, heading, busy, error, onRetryProcessing, onArchiv
         <div><dt>SHA-256 del original</dt><dd>{asset.originalSha256 || 'Todavía no verificado'}</dd></div>
         <div><dt>SHA-256 del derivado</dt><dd>{asset.derivativeSha256 || 'Todavía no verificado'}</dd></div>
       </dl>
-      {asset.contentType === 'image/gif' && asset.originalSha256 && <p><a href={`${ROOT}/assets/${encodeURIComponent(asset.id)}/content?variant=original`} target="_blank" rel="noreferrer">Ver o guardar GIF animado original</a> · La publicación utiliza el MP4 preparado, que debes revisar.</p>}
+      {asset.originalUrl && <p><a href={asset.originalUrl} target="_blank" rel="noreferrer" data-advisor-control="advertising-asset-original">{asset.contentType === 'image/gif' ? 'Ver o guardar GIF animado original' : 'Abrir original privado'}</a>{asset.contentType === 'image/gif' && ' · La publicación utiliza el MP4 preparado, que debes revisar.'}</p>}
     </details>
-    {canArchive && <footer className={library.detailFooter}><button type="button" className="button subtle" disabled={busy} aria-haspopup="dialog" onClick={onArchive}>Archivar archivo</button></footer>}
+    {canArchive && <footer className={library.detailFooter}><button type="button" className="button subtle" disabled={busy} aria-haspopup="dialog" data-advisor-control="advertising-asset-archive" onClick={onArchive}>Archivar archivo</button></footer>}
   </article>;
 }
 

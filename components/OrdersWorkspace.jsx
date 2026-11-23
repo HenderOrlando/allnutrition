@@ -6,13 +6,13 @@ import HekaWorkspace from './HekaWorkspace';
 import WorkspaceTabs from './WorkspaceTabs';
 
 const tabs=[{id:'list',label:'Pedidos'},{id:'shipments',label:'Envíos'},{id:'heka',label:'Heka oficial'},{id:'imports',label:'Importar Excel'}];
-export default function OrdersWorkspace({api,view,onViewChange,onNavigate,resource,onCreate,onEdit,onRetry,onInteractionStateChange,onCreateProduct,onMutation,assistantOpenRequest,onAssistantOpenHandled}){
+export default function OrdersWorkspace({api,view,onViewChange,onNavigate,resource,onCreate,onEdit,onRetry,onInteractionStateChange,onCreateProduct,onMutation,assistantOpenRequest,onAssistantOpenHandled,advisorTargetRequest,onAdvisorTargetHandled,advisorSearchRef,catalogRequest}){
   const tab=view.tab||'list';
   return <>
     <WorkspaceTabs label="Vistas de pedidos" items={tabs} value={tab} onChange={key=>{if(key!==tab)onViewChange({tab:key,batch:undefined,record:undefined,q:'',status:'',paymentStatus:'',issue:'',source:'',platform:'',carrier:'',seller:'',product:'',page:1});}}/>
-    {tab==='heka'&&<HekaWorkspace api={api} onNavigate={onNavigate} onMutation={onMutation} onInteractionStateChange={onInteractionStateChange}/>}
-    {tab==='imports'?<ImportWizard api={api} view={view} onViewChange={onViewChange} onNavigate={onNavigate} onInteractionStateChange={onInteractionStateChange} onCreateProduct={onCreateProduct} onMutation={onMutation} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={onAssistantOpenHandled}/>
-      :tab==='shipments'?<ShipmentsWorkspace api={api} view={view} onViewChange={onViewChange} onEdit={onEdit} onInteractionStateChange={onInteractionStateChange} onMutation={onMutation} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={onAssistantOpenHandled}/>
-      :tab==='list'?<OrdersList resource={resource} view={view} onViewChange={onViewChange} onCreate={onCreate} onEdit={onEdit} onRetry={onRetry}/>:null}
+    {tab==='heka'&&<HekaWorkspace api={api} onNavigate={onNavigate} onMutation={onMutation} onInteractionStateChange={onInteractionStateChange} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={onAdvisorTargetHandled} catalogRequest={catalogRequest?.view.tab==='heka'?catalogRequest:null}/>}
+    {tab==='imports'?<ImportWizard api={api} view={view} onViewChange={onViewChange} onNavigate={onNavigate} onInteractionStateChange={onInteractionStateChange} onCreateProduct={onCreateProduct} onMutation={onMutation} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={onAssistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={onAdvisorTargetHandled} importReviewRequest={catalogRequest?.importStep?catalogRequest:null}/>
+      :tab==='shipments'?<ShipmentsWorkspace api={api} view={view} onViewChange={onViewChange} onEdit={onEdit} onInteractionStateChange={onInteractionStateChange} onMutation={onMutation} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={onAssistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={onAdvisorTargetHandled}/>
+      :tab==='list'?<OrdersList resource={resource} view={view} onViewChange={onViewChange} onCreate={onCreate} onEdit={onEdit} onRetry={onRetry} searchRef={advisorSearchRef}/>:null}
   </>;
 }

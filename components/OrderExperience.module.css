@@ -322,6 +322,22 @@
   }
 }
 
+@media (max-width: 480px) {
+  .editor > :global(.editor-footer) > :global(.button) {
+    min-width: 0;
+    padding: 10px;
+    overflow-wrap: normal;
+  }
+
+  .editor > :global(.editor-footer) > :global(.button).footerHelp {
+    flex: 0 0 100%;
+  }
+
+  .editor > :global(.editor-footer) button[type='submit'] > svg {
+    display: none;
+  }
+}
+
 .importMapping {
   min-width: 0;
   max-width: 100%;
@@ -860,6 +876,11 @@
 
 .importDecisionList:focus-visible,
 .wizard .resultsTable:focus-visible {
+  outline: 3px solid var(--admin-accent);
+  outline-offset: 3px;
+}
+
+.wizard input[type='file']:focus {
   outline: 3px solid var(--admin-accent);
   outline-offset: 3px;
 }

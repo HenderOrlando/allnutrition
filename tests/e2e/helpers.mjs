@@ -9,7 +9,8 @@ export async function login(page){
  const responsePromise=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/auth/login'&&response.request().method()==='POST');
  await page.getByRole('button',{name:'Entrar al panel'}).click();
  expect((await responsePromise).status()).toBe(200);
- await expect(page).toHaveURL(url=>url.pathname==='/admin');
+ // Heka's fresh Next server compiles /admin on its first authenticated navigation.
+ await page.waitForURL(url=>url.pathname==='/admin',{waitUntil:'domcontentloaded',timeout:30000});
  expect((await page.request.get('/api/admin/orders')).status()).toBe(200);
 }
 

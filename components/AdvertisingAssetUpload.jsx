@@ -141,7 +141,7 @@ export default function AdvertisingAssetUpload({ api, onBeforeUpload, onAssetRes
         <span id={fileLabelId} className={library.uploadFileLabel}>{fileLabel}</span>
         {fileInput}
         <div className={library.uploadFileSelection}>
-          <button ref={picker} type="button" className="button subtle" onClick={() => input.current?.click()}>Seleccionar archivo</button>
+          <button ref={picker} type="button" className="button subtle" data-advisor-control="advertising-asset-picker" onClick={() => input.current?.click()}>Seleccionar archivo</button>
           <p role="status" className={styles.help}>{file
             ? <><span className={library.uploadFilename} title={file.name}>{file.name}</span>{fileSize}</>
             : 'Ningún archivo seleccionado'}</p>
@@ -153,8 +153,8 @@ export default function AdvertisingAssetUpload({ api, onBeforeUpload, onAssetRes
     {!compact && file && <p className={styles.help}>{file.name} · {fileSize}</p>}
     {invalid && <p role="alert" className={styles.error}>{invalid}</p>}
     <div className={styles.actions}>
-      <button type="button" className="button primary" disabled={locked || !file || !name.trim() || Boolean(invalid)} onClick={upload}>{busy ? 'Carga en curso…' : slot ? 'Revisar o reintentar esta carga' : submitLabel}</button>
-      <button type="button" className="button subtle" disabled={locked} onClick={assistant.openAssistant}>Ayúdame con el nombre</button>
+      <button type="button" className="button primary" data-advisor-control={compact ? 'advertising-asset-submit' : undefined} disabled={locked || !file || !name.trim() || Boolean(invalid)} onClick={upload}>{busy ? 'Carga en curso…' : slot ? 'Revisar o reintentar esta carga' : submitLabel}</button>
+      <button type="button" className="button subtle" data-advisor-control={compact ? 'advertising-asset-assist-name' : undefined} disabled={locked} onClick={assistant.openAssistant}>Ayúdame con el nombre</button>
       {file && <button type="button" className="button subtle" disabled={locked} onClick={() => { pick(null); if (input.current) input.current.value = ''; picker.current?.focus(); }}>Descartar selección local</button>}
     </div>
     {phase && <p role="status">{phase}</p>}

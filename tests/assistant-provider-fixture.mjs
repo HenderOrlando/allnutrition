@@ -74,7 +74,7 @@ function workflow(body, responses, behavior = {}) {
   function call(name, args) {
     const properties = tools.get(name)?.parameters?.properties || {};
     if (name === 'read_business' && !Object.hasOwn(args, 'select')) args.select = null;
-    for (const key of ['query','patch','payload','select']) if (args[key] != null && [properties[key]?.type].flat().includes('string')) args[key] = JSON.stringify(args[key]);
+    for (const key of ['query','patch','payload','select']) if (!(name === 'find_action' && key === 'query') && args[key] != null && [properties[key]?.type].flat().includes('string')) args[key] = JSON.stringify(args[key]);
     return { name, args };
   }
   if (tools.has('assistant_connection_check')) return call('assistant_connection_check', { ok: true });
@@ -101,10 +101,95 @@ function workflow(body, responses, behavior = {}) {
     const blocks = ids.length ? [{ type: 'analysis', kind: 'explanation', segments: [{ type: 'text', text: 'Estos son los datos comprobados del catálogo.' }, { type: 'evidence', evidenceId: ids[0], display: 'value' }], evidenceIds: ids }] : [text('missing_data')];
     return call('finish_turn', { payload: { topic: 'catalog', blocks, question: null, proposalId: null, remainingReads: [] } });
   }
+  const lastAction = history.findLast(item => item.name === 'find_action');
+  const ask = prompt => ({ kind: 'clarify_scope', subject: 'goal', prompt });
+  const actionBlocks = (preferred = null) => (lastAction?.result?.items || [])
+    .filter(item => !preferred || item.capabilityId === preferred)
+    .slice(0, 3).map(({ capabilityId }) => ({ type: 'action', capabilityId }));
+  const find = (query, area) => call('find_action', { query, area });
+  const finishAction = (topic, preferred, question = null) => {
+    const blocks = actionBlocks(preferred);
+    return finish(topic, blocks.length ? blocks : [text('search_actions')], question);
+  };
+  const normalized = lower.normalize('NFD').replace(/\p{M}/gu, '');
+  const reviewFirst = /(?:que|cual) (?:debo )?(?:reviso|revisar|atiendo|atender) primero/.test(normalized);
+  if (tools.has('find_action')) {
+    if (behavior.scenario === 'advisor-action-unqueried') return finish('application', [{ type: 'action', capabilityId: behavior.capabilityId || 'cash.close-day' }]);
+    if (explicit.findAction) {
+      if (!lastAction) return find(explicit.findAction.query, explicit.findAction.area ?? null);
+      return finishAction('application', null, lastAction.result?.items?.length > 1 ? ask('¿Cuál de estas acciones quieres revisar?') : null);
+    }
+    if (/retomar.*(?:tarea|seguimiento)|mis tareas|^\s*(?:quiero )?retomar[.!?\s]*$/.test(normalized)) return finish('application', [text('resume_tasks')]);
+    const reminderQuestion = '¿A qué hora quieres que te avise?';
+    if (/recuerdame|recordarme|avisame/.test(normalized) || context.answer?.prompt === reminderQuestion) {
+      if (!lastAction) return find('recordarme', 'home');
+      const missingTime = /\bmanana\b/.test(normalized) && !/\b\d{1,2}:\d{2}\b|\ba las \d{1,2}\b/.test(normalized);
+      return finishAction('application', 'advisor.reminder', missingTime ? ask(reminderQuestion) : null);
+    }
+    if (/heka.*(?:inciert|no respondio)|(?:inciert|no respondio).*heka/.test(normalized)) {
+      const localJournal = history.findLast(item => item.name === 'read_business' && item.args?.query?.resource === 'heka-journal');
+      if (!lastAction) return {
+        ...find('operación heka incierta', 'orders'),
+        also: [call('read_business', { domain: 'business', query: { resource: 'heka-journal', page: 1 }, select: { mode: 'records', fields: ['id', 'operation', 'state', 'updatedAt', 'reference', 'environment'], limit: 10 } })],
+      };
+      const state = localJournal?.result?.evidence?.find(item => item.field === 'state' && ['uncertain', 'sending', 'sent', 'partial'].includes(item.value));
+      const observed = state ? [{ type: 'analysis', kind: 'explanation', evidenceIds: [state.id], segments: [
+        { type: 'text', text: 'El diario local registra la solicitud como ' },
+        { type: 'evidence', evidenceId: state.id, display: 'value' },
+        { type: 'text', text: '. Eso no acredita una emisión. Revisa el historial sin reenviar la solicitud.' },
+      ] }] : [text('missing_data')];
+      return finish('business', [...observed, ...actionBlocks('heka.read-journal')]);
+    }
+    if (/\b(?:donde|como|busca|encuentra)\b.*(?:\barqueo\b|\bcerr(?:ar|e) (?:la )?caja\b)/.test(normalized)) {
+      return lastAction ? finishAction('cash', 'cash.close-day') : find('arqueo', 'cash');
+    }
+    const lookup = normalized.match(/^¿?donde (?:esta|encuentro) (.+?)[?.!]*$/);
+    if (lookup) return lastAction ? finishAction('application', null, lastAction.result?.items?.length > 1 ? ask('¿Cuál de estas acciones quieres revisar?') : null) : find(lookup[1], null);
+    if (/hipopotamo termonuclear/.test(normalized)) {
+      return lastAction ? finishAction('application', null) : find('hipopótamo termonuclear', null);
+    }
+    if (/^\s*(?:publica|publicar|quiero publicar)\b/.test(normalized) && (context.pageContext?.view?.section === 'advertising' || /campana|organica|meta/.test(normalized))) {
+      return lastAction ? finishAction('advertising', 'advertising.publish-organic-now') : find('confirmar publicación', 'advertising');
+    }
+  }
+  if (tools.has('prepare_change') && !prepared) {
+    const explained = target => history.some(item => item.name === 'describe_form' && item.args?.target === target && !item.result?.error);
+    if (/^\s*(?:duplica|duplicar|quiero duplicar)\b/.test(normalized) && /campana/.test(normalized)) {
+      const target = 'campaign-duplicate';
+      const named = sourceMessage.match(/[«“"]([^»”"]+)[»”"]/)?.[1];
+      const byId = sourceMessage.match(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i)?.[0];
+      const openId = form?.target === 'campaign-draft' ? form.entityId : context.pageContext?.view?.section === 'advertising' && context.pageContext.view.record !== 'new' ? context.pageContext.view.record : null;
+      const id = byId || (!named ? openId : null);
+      const question = ask('¿Qué campaña quieres duplicar? Abre la ficha o indica su nombre exacto.');
+      if (form?.target === 'campaign-draft' && form.entityId === id && (form.dirty || form.busy)) {
+        return finish('advertising', [text('missing_data')], ask('¿Puedes revisar la campaña guardada antes de duplicarla?'));
+      }
+      if (!id && !named) return finish('advertising', [text('missing_data')], question);
+      if (!explained(target)) return {
+        ...call('describe_form', { target }),
+        also: [call('read_business', { domain: 'advertising', query: id ? { kind: 'campaign', id } : { kind: 'campaigns', q: named }, select: { mode: 'records', fields: ['id','name','version','state'], limit: 20 } })],
+      };
+      const rows = (lastRead?.result?.records || []).filter(item => id ? item.id === id : item.name === named);
+      if (rows.length !== 1 || lastRead?.result?.continuation) return finish('advertising', [text('missing_data')], question);
+      const origin = rows[0];
+      const name = lastRead.result.evidence?.find(item => item.entityId === origin.id && item.field === 'name' && item.recordVersion === origin.version);
+      if (!name) return finish('advertising', [text('missing_data')], question);
+      return call('prepare_change', { target, entityId: origin.id, patch: {}, sourceRefs: [name.id], intent: 'duplicate' });
+    }
+    if (/\b(?:solicita|solicitar|pide|pedir|guarda|guardar|quiero)\b.*\bcopia\b.*\binforme\b/.test(normalized)) {
+      const target = 'report-snapshot', selection = context.scope?.selection;
+      const live = context.scope?.reads?.find(read => read.domain === 'reports' && read.query?.mode === 'live')?.query;
+      if (!live || selection?.kind !== 'report' || selection.snapshotId || !Number.isSafeInteger(selection.dataRevision)) {
+        return finish('reports', [text('missing_data')], ask('¿Puedes abrir y cargar el informe en vivo que quieres copiar?'));
+      }
+      if (!explained(target)) return call('describe_form', { target });
+      return call('prepare_change', { target, entityId: null, patch: { period: live.period, anchorDate: live.anchor, filters: live.filters || {} }, sourceRefs: [], intent: 'save' });
+    }
+  }
   if (/noticia|clima|whatsapp|publica(?:r|ción| la)|nutrici[oó]n|banco externo/.test(lower)) return finish('application', [text('scope_limit')]);
   // B deliberately performs an extra real tool round. This makes switching
   // models observable in captured protocol, not merely in a greeting.
-  if (body.model === 'fixture-b' && !history.some(item => item.name === 'read_application')) return call('read_application', { taskId: 'cash' });
+  if (!reviewFirst && body.model === 'fixture-b' && !history.some(item => item.name === 'read_application')) return call('read_application', { taskId: 'cash' });
   if (prepared) {
     const target = prepared.args?.target || prepared.result?.target || '';
     const topic = target === 'order' || target === 'shipment-create' ? 'orders' : target.startsWith('business-action:') ? 'cash' : target.startsWith('shipment-') ? 'shipments' : target.startsWith('settings:') || target.startsWith('onboarding:') ? 'business' : target.startsWith('import-') ? 'imports' : target === 'campaign-draft' || target === 'asset-metadata' || target.startsWith('advertising-') ? 'advertising' : 'catalog';
@@ -187,7 +272,7 @@ function workflow(body, responses, behavior = {}) {
     return finish('catalog', [text('choose_record')], records.length >= 2 ? { kind: 'choose_entity', candidateEvidenceIds: (lastRead.result?.evidence || []).filter(item => item.field === 'title').slice(0,4).map(item => item.id) } : { kind: 'missing_field', target: 'record:products', field: 'description' });
   }
   if (/crea(?:r)? (?:un )?pedido|nuevo pedido/.test(lower)) return finish('orders', [text('missing_data')], { kind: 'missing_field', target: 'order', field: 'customerName' });
-  const domain = explicit.domain || (/recom(?:end|iend|iénd)/.test(lower) ? 'recommendations' : /caja|saldo|disponible|transferencia|ingreso/.test(lower) ? 'cash' : /pedido/.test(lower) ? 'orders' : /env[ií]o/.test(lower) ? 'shipments' : /producto|cat[aá]logo/.test(lower) ? 'catalog' : 'application');
+  const domain = explicit.domain || (reviewFirst || /recom(?:end|iend|iénd)/.test(lower) ? 'recommendations' : /caja|saldo|disponible|transferencia|ingreso/.test(lower) ? 'cash' : /pedido/.test(lower) ? 'orders' : /env[ií]o/.test(lower) ? 'shipments' : /producto|cat[aá]logo/.test(lower) ? 'catalog' : 'application');
   if (domain === 'application') {
     const guide = history.findLast(item => item.name === 'read_application');
     if (!guide) return call('read_application', { taskId: explicit.taskId || 'cash' });
@@ -202,7 +287,14 @@ function workflow(body, responses, behavior = {}) {
       && typeof item.href === 'string' && item.href.startsWith('/admin') && typeof item.actionLabel === 'string' && item.actionLabel
       && Array.isArray(item.evidenceIds) && item.evidenceIds.length
       && item.evidenceIds.every(id => evidence.get(id)?.domain === 'recommendations' && evidence.get(id)?.entityId === item.id));
-    if (recommendation) return finish('recommendations', [{ type: 'recommendation', recommendationId: recommendation.id }]);
+    if (recommendation) {
+      const blocks = [{ type: 'recommendation', recommendationId: recommendation.id }];
+      if (reviewFirst && context.advisorPreferences?.detail === 'guided') blocks.push({
+        type: 'analysis', kind: 'explanation', evidenceIds: [recommendation.evidenceIds[0]],
+        segments: [{ type: 'text', text: 'Abre la fuente y comprueba si el pendiente sigue activo antes de actuar: ' }, { type: 'evidence', evidenceId: recommendation.evidenceIds[0], display: 'label' }],
+      });
+      return finish('recommendations', blocks);
+    }
   }
   const evidenceIds = (lastRead.result?.evidence || []).slice(0,8).map(item => item.id);
   return finish(lastRead.args?.domain || domain, evidenceIds.length ? [{ type: 'fact', evidenceIds }] : [text('missing_data')]);

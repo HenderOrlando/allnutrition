@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAssistantBridge } from './AssistantBridge';
 import { Field } from './Fields';
 import useDialog from './useDialog';
 import SocialBrowserLogin from './SocialBrowserLogin';
@@ -66,8 +67,8 @@ function ReadStatus({ state, onRetry, label }) {
   return <>{state.loading && !state.data && <p role="status" className={styles.muted}>Cargando {label}…</p>}{state.error && <div role="alert" className={styles.error}><p>{state.error}</p>{state.data && <p>Última consulta conservada: {date(state.fetchedAt)}. Puede estar desactualizada.</p>}<button type="button" className="button subtle" onClick={onRetry}>Reintentar lectura</button></div>}</>;
 }
 
-function SelectField({ name, label, value, options, onChange }) {
-  return <Field field={{ name, label, type: 'select', options }} value={value || ''} onChange={onChange}/>;
+function SelectField({ name, label, value, options, onChange, advisorControl }) {
+  return <Field field={{ name, label, type: 'select', options, advisorControl }} value={value || ''} onChange={onChange}/>;
 }
 function useRequestIds() {
   const ids = useRef(new Map());
@@ -76,6 +77,21 @@ function useRequestIds() {
     if (prior?.fingerprint === fingerprint) return prior.id;
     const id = crypto.randomUUID(); ids.current.set(key, { fingerprint, id }); return id;
   }, []);
+}
+
+function BrowserHealth({ data }) {
+  const service = data.browserRunner, worker = data.browserWorker;
+  return <details className={styles.detail} data-advisor-disclosure>
+    <summary>Estado del acceso asistido</summary>
+    <p>Servicio de navegador: {{ available: 'Disponible', unavailable: 'No disponible', disabled: 'Deshabilitado', unconfigured: 'Sin configurar' }[service?.status] || service?.status || 'Sin dato'}</p>
+    <p>Procesamiento en segundo plano: {{ running: 'Operativo', never: 'Aún no se ha iniciado', stale: 'Sin actividad reciente', error: 'Error de procesamiento', clock_skew: 'Reloj por revisar' }[worker?.status] || worker?.status || 'Sin dato'}</p>
+    <p>Servicio disponible no significa sesión iniciada en Meta. Una caída no cambia las publicaciones a otra vía.</p>
+    <details className={styles.technicalDetails}><summary data-advisor-control="meta-browser-health-detail">Detalles técnicos del acceso</summary>
+      <p>Servicio: {service?.status || 'Sin dato'} · Comprobado: {date(service?.checkedAt)}</p>
+      <p>Procesamiento: {worker?.status || 'Sin dato'} · Último heartbeat: {date(worker?.lastHeartbeatAt)}</p>
+      {worker?.errorCode && <p>{worker.errorCode}</p>}
+    </details>
+  </details>;
 }
 
 function ConnectionsIntro({ api, data, report, onMutation, onCreated, onConfigure, manualFirst, blocked }) {
@@ -121,20 +137,21 @@ function ConnectionsIntro({ api, data, report, onMutation, onCreated, onConfigur
       {oauth && !oauth.publishingEnabled && <p className={styles.warning}>Publicar, activar y reanudar está deshabilitado. Guardar un borrador local no autoriza gasto; una pausa segura sigue siendo posible con acceso válido.</p>}
       <div className={styles.actions}>
         {!prepared && <button type="button" className="button primary" onClick={() => onConfigure(oauth)}>Configurar la aplicación</button>}
-        <button type="button" className="button primary" disabled={busy || blocked || !prepared} onClick={() => connect('api')}>Conectar con Facebook</button>
+        <button type="button" className="button primary" data-advisor-control="meta-oauth-connect-control" disabled={busy || blocked || !prepared} onClick={() => connect('api')}>Conectar con Facebook</button>
       </div>
     </article>
-    <details className={styles.detail} open={manualFirst || undefined}>
+    <details className={styles.detail} open={manualFirst || undefined} data-advisor-disclosure>
       <summary>Otras formas de conexión</summary>
-      <ManualMetaConnection api={api} requirement={data?.tokenRequirement} issues={requirementIssues(data?.tokenRequirement)} report={report} onMutation={onMutation} onCreated={onCreated}/>
+      <div role="group" aria-label="Registro de token de solo lectura" tabIndex={-1} data-advisor-control="meta-manual-token-form">
+        <ManualMetaConnection api={api} requirement={data?.tokenRequirement} issues={requirementIssues(data?.tokenRequirement)} report={report} onMutation={onMutation} onCreated={onCreated}/>
+      </div>
       <article className={styles.card}><h3>Acceso asistido por navegador</h3>
         <p>Inicia sesión personalmente en un visor privado. Esta vía requiere autorización independiente de Meta; no sustituye automáticamente a la API.</p>
         <p className={styles.warning}>Los desafíos se resuelven personalmente. La sesión se conserva cifrada; no se guardan contraseñas, códigos de un solo uso ni capturas.</p>
         {!!requirementIssues(browser).length && <p>Por revisar: {requirementIssues(browser).join(' · ')}.</p>}
-        <form method="post" onSubmit={event => { event.preventDefault(); void connect('browser'); }}><Field field={{ name: 'browserName', label: 'Nombre de la conexión', required: true, max: 200 }} value={name} onChange={setName}/><button type="submit" className="button primary" disabled={busy || !browserAvailable || !name.trim()}>Crear conexión y abrir acceso</button></form>
+        <form method="post" onSubmit={event => { event.preventDefault(); void connect('browser'); }}><Field field={{ name: 'browserName', label: 'Nombre de la conexión', advisorControl: 'meta-browser-connection-create', required: true, max: 200 }} value={name} onChange={setName}/><button type="submit" className="button primary" disabled={busy || !browserAvailable || !name.trim()}>Crear conexión y abrir acceso</button></form>
       </article>
       {error && <p ref={errorRef} tabIndex={-1} className={styles.error} role="alert">{error}</p>}
-    {data && <aside className={styles.panel}><h2>Estado del acceso asistido</h2><p>Servicio de navegador: {{ available: 'Disponible', unavailable: 'No disponible', disabled: 'Deshabilitado', unconfigured: 'Sin configurar' }[data.browserRunner?.status] || data.browserRunner?.status || 'Sin dato'}</p><p>Procesamiento en segundo plano: {{ running: 'Operativo', never: 'Aún no se ha iniciado', stale: 'Sin actividad reciente', error: 'Error de procesamiento', clock_skew: 'Reloj por revisar' }[data.browserWorker?.status] || data.browserWorker?.status || 'Sin dato'}</p><p>Servicio disponible no significa sesión iniciada en Meta. Una caída no cambia las publicaciones a otra vía.</p><details className={styles.technicalDetails}><summary>Detalles técnicos del acceso</summary><p>Servicio: {data.browserRunner?.status || 'Sin dato'} · Comprobado: {date(data.browserRunner?.checkedAt)}</p><p>Procesamiento: {data.browserWorker?.status || 'Sin dato'} · Último heartbeat: {date(data.browserWorker?.lastHeartbeatAt)}</p>{data.browserWorker?.errorCode && <p>{data.browserWorker.errorCode}</p>}</details></aside>}
     </details>
   </>;
 }
@@ -197,7 +214,7 @@ function ConnectionCard({ api, connection, title, heading, requirement, runner, 
   const canAuthorize = !pending && !loginInProgress && !tokenOnly;
   const authLabel = browser ? 'Abrir acceso asistido' : 'Volver a autorizar con Facebook';
   const authorize = () => browser ? onLogin() : act('oauth');
-  const authorizer = canAuthorize && <button type="button" className={`button ${reconnect ? 'primary' : 'subtle'}`} disabled={actionBlocked || dirty || !enabled || (browser && runner?.status !== 'available')} onClick={authorize}>{authLabel}</button>;
+  const authorizer = canAuthorize && <button type="button" className={`button ${reconnect ? 'primary' : 'subtle'}`} data-advisor-control={browser ? 'meta-existing-browser-connection-open' : 'meta-oauth-reauthorize-control'} disabled={actionBlocked || dirty || !enabled || (browser && runner?.status !== 'available')} onClick={authorize}>{authLabel}</button>;
   const nextStep = pending ? 'Revisa la solicitud de desconexión o eliminación.'
     : disconnected ? 'Puedes consultar el histórico guardado o administrar los datos locales. Las credenciales fueron retiradas.'
       : reconnect ? tokenOnly ? 'Conecta un token vigente de la misma aplicación y vuelve a elegir la cuenta publicitaria.' : browser ? 'Abre el visor para iniciar sesión personalmente.' : 'Autoriza de nuevo con el mismo usuario de Facebook y luego verifica la conexión.'
@@ -206,7 +223,9 @@ function ConnectionCard({ api, connection, title, heading, requirement, runner, 
             : needsSelection ? 'Elige los recursos profesionales y comprueba su acceso.'
               : connection.state === 'login_required' && browser ? 'Abre el visor para iniciar sesión personalmente.' : 'Consulta el historial o verifica el acceso antes de trabajar con los recursos.';
   const instagram = resources.pages?.find(item => item.instagramId === currentIds.instagramId);
-  return <article className={`${styles.card} ${connectionStyles.connection}`} aria-label={title}><header className={styles.toolbar}><div><h2 ref={heading} tabIndex={-1}>{title}</h2><p>{methodLabel(connection)}</p></div><span className={styles.badge}>{connectionState(connection)}</span></header>
+  const metricsAvailable = access && !actionBlocked && !dirty && enabled && currentIds.adAccountId && connection.capabilities?.insights === true
+    && connection.evaluation?.permissions?.some(item => ['ads_read', 'ads_management'].includes(item.name) && item.status === 'granted');
+  return <article className={`${styles.card} ${connectionStyles.connection}`} aria-label={title} data-meta-connection-id={connection.id}><header className={styles.toolbar}><div><h2 ref={heading} tabIndex={-1}>{title}</h2><p>{methodLabel(connection)}</p></div><span className={styles.badge}>{connectionState(connection)}</span></header>
     <div>
       <h3>Siguiente paso</h3><p>{nextStep}</p>
       {!enabled && <p className={styles.warning}>Esta vía no está configurada o habilitada. Revisa Opciones de Meta.</p>}
@@ -214,14 +233,16 @@ function ConnectionCard({ api, connection, title, heading, requirement, runner, 
       {connection.state === 'layout_changed' && <p className={styles.warning}>Revisa la versión del adaptador y vuelve a verificar la conexión. No se harán clics alternativos.</p>}
       {connection.state === 'challenge_required' && <p className={styles.warning}>Abre el visor para completar personalmente el desafío.</p>}
       <div className={styles.actions}>{reconnect && !tokenOnly && authorizer}{tokenOnly && reconnect && !pending && <button type="button" className="button primary" onClick={onNewToken}>Conectar un token nuevo</button>}
-        {valid && connection.revalidationRequired && <button type="button" className="button primary" disabled={actionBlocked || dirty} onClick={() => act('validate')}>Verificar conexión</button>}
+        {valid && connection.revalidationRequired && <button type="button" className="button primary" data-advisor-control="meta-connection-validate-control" disabled={actionBlocked || dirty} onClick={() => act('validate')}>Verificar conexión</button>}
         {browser && !reconnect && ['login_required', 'challenge_required'].includes(connection.state) && authorizer}
       </div>
     </div>
-    {pending && <div className={styles.warning} role="status"><p>{connection.disconnectStatus.state === 'needs_confirmation' ? 'Las cantidades o la autorización cambiaron. Revisa y confirma de nuevo la acción solicitada.' : 'Pausas pendientes de confirmar antes de desconectar. Aún no se afirma que se detuvo el gasto.'}</p><p>Solicitada: {date(connection.disconnectStatus.requestedAt)}</p>{connection.disconnectStatus.receiptId && <p>Recibo solicitado: {connection.disconnectStatus.receiptId}</p>}{connection.disconnectStatus.state === 'needs_confirmation' && <button type="button" className="button subtle" disabled={actionBlocked || dirty} onClick={() => onAction(connection.disconnectStatus.action)}>Revisar y confirmar de nuevo</button>}</div>}
+    {pending && <div className={styles.warning} role="status" tabIndex={-1} data-advisor-control="meta-current-disconnection-status"><p>{connection.disconnectStatus.state === 'needs_confirmation' ? 'Las cantidades o la autorización cambiaron. Revisa y confirma de nuevo la acción solicitada.' : 'Pausas pendientes de confirmar antes de desconectar. Aún no se afirma que se detuvo el gasto.'}</p><p>Solicitada: {date(connection.disconnectStatus.requestedAt)}</p>{connection.disconnectStatus.receiptId && <p>Recibo solicitado: {connection.disconnectStatus.receiptId}</p>}{connection.disconnectStatus.state === 'needs_confirmation' && <button type="button" className="button subtle" data-meta-confirm-action={connection.disconnectStatus.action} disabled={actionBlocked || dirty} onClick={() => onAction(connection.disconnectStatus.action)}>Revisar y confirmar de nuevo</button>}</div>}
     {browser ? <section className={styles.panel} aria-label="Datos consultados"><h3>Datos consultados</h3><p>Esta vía no ofrece el histórico de publicaciones y campañas de la API. Conserva los recursos informados y la última verificación indicada abajo.</p></section> : <>
       <MetaConnectionData api={api} connection={connection} blocked={actionBlocked || dirty || !enabled || expired} onInteractionStateChange={analysisReport} onMutation={onMutation} onNavigate={onNavigate}/>
-      <MetaAdvertisingRead api={api} connection={connection} report={report} blocked={actionBlocked || dirty || !enabled || expired}/>
+      <div tabIndex={metricsAvailable ? -1 : undefined} data-advisor-control={metricsAvailable ? 'meta-account-live-metrics-form' : undefined}>
+        <MetaAdvertisingRead api={api} connection={connection} report={report} blocked={actionBlocked || dirty || !enabled || expired}/>
+      </div>
     </>}
     <div className={styles.actions} aria-label="Acciones de Publicidad">
       {!browser && <button type="button" className="button subtle" onClick={() => onNavigate({ section: 'advertising', tab: 'campaigns', source: 'meta', connection: connection.id })}>Ver campañas consultadas en Publicidad</button>}
@@ -247,25 +268,26 @@ function ConnectionCard({ api, connection, title, heading, requirement, runner, 
     })}</ul><p>La consulta acreditada no garantiza métricas de todas las redes. Leer el histórico local y preparar borradores no exige habilitar la publicación.</p></section>
     <h3>Administrar conexión</h3>
     <div className={styles.actions}>
-      {valid && !connection.revalidationRequired && <button type="button" className="button subtle" disabled={actionBlocked || dirty} onClick={() => act('validate')}>Verificar conexión</button>}
+      {valid && !connection.revalidationRequired && <button type="button" className="button subtle" data-advisor-control="meta-connection-validate-control" disabled={actionBlocked || dirty} onClick={() => act('validate')}>Verificar conexión</button>}
       {!reconnect && !(browser && ['login_required', 'challenge_required'].includes(connection.state)) && authorizer}
     </div>
-    <details className={styles.detail} open={autoSelect.current || undefined}><summary>Seleccionar página y cuenta</summary><p>La página sirve para contenido orgánico de Facebook. Instagram debe ser profesional y estar vinculado a esa página. Para anuncios elige una cuenta publicitaria. Solo se admiten recursos descubiertos; las identidades de una conexión aprobada no se pueden cambiar.</p>
+    <details className={styles.detail} open={autoSelect.current || undefined} data-advisor-disclosure><summary>Seleccionar página y cuenta</summary><p>La página sirve para contenido orgánico de Facebook. Instagram debe ser profesional y estar vinculado a esa página. Para anuncios elige una cuenta publicitaria. Solo se admiten recursos descubiertos; las identidades de una conexión aprobada no se pueden cambiar.</p>
       <fieldset disabled={actionBlocked || pending || !enabled || !availableResources || connection.state !== 'connected'} className={styles.fieldGrid}><legend>Recursos profesionales</legend>
-        <SelectField name={`business-${connection.id}`} label="Negocio" value={selection.businessId} options={[{ value: '', label: 'Sin seleccionar' }, ...(resources.businesses || []).map(item => ({ value: item.id, label: `${item.name || item.id} · ${item.id}` }))]} onChange={value => choose('businessId', value)}/>
+        <SelectField name={`business-${connection.id}`} label="Negocio" advisorControl="meta-connection-resource-picker" value={selection.businessId} options={[{ value: '', label: 'Sin seleccionar' }, ...(resources.businesses || []).map(item => ({ value: item.id, label: `${item.name || item.id} · ${item.id}` }))]} onChange={value => choose('businessId', value)}/>
         <SelectField name={`page-${connection.id}`} label="Página Facebook" value={selection.pageId} options={[{ value: '', label: 'Sin seleccionar' }, ...(resources.pages || []).map(item => ({ value: item.id, label: `${item.name || item.id} · ${item.id}` }))]} onChange={value => choose('pageId', value)}/>
         <SelectField name={`instagram-${connection.id}`} label="Instagram profesional vinculado" value={selection.instagramId} options={[{ value: '', label: 'Sin seleccionar' }, ...(page?.instagramId ? [{ value: page.instagramId, label: page.instagramName || page.instagramId }] : [])]} onChange={value => choose('instagramId', value)}/>
         <SelectField name={`account-${connection.id}`} label="Cuenta de anuncios" value={selection.adAccountId} options={[{ value: '', label: 'Sin seleccionar' }, ...(resources.adAccounts || []).map(item => ({ value: item.id, label: `${item.name || item.id} · ${item.currency || 'Sin moneda'} · ${item.timeZone || 'Sin zona'}` }))]} onChange={value => choose('adAccountId', value)}/>
       </fieldset><button type="button" className="button primary" disabled={actionBlocked || pending || !enabled || !dirty || connection.state !== 'connected'} onClick={() => act('select-assets')}>Confirmar y revalidar recursos</button>
     </details>
-    <details className={styles.technicalDetails}><summary>Detalles técnicos</summary><p>ID de conexión: {connection.id} · Versión {connection.version}</p><p>Permisos concedidos: {connection.permissions?.join(', ') || 'No informados por esta vía'}</p><p>Caducidad informada: {connection.expiresAt ? date(connection.expiresAt) : 'No informada; no significa sesión perpetua'}</p><p>Adaptador: {connection.adapterVersion || 'Versión no informada'} · Formato: {connection.locale || 'No informado'}</p>{!browser && <MetaEvaluation evaluation={connection.evaluation}/>}</details>
+    <details className={styles.technicalDetails} data-advisor-disclosure><summary>Detalles técnicos</summary><p tabIndex={-1} data-advisor-control="meta-connection-permissions-detail">ID de conexión: {connection.id} · Versión {connection.version}</p><p>Permisos concedidos: {connection.permissions?.join(', ') || 'No informados por esta vía'}</p><p>Caducidad informada: {connection.expiresAt ? date(connection.expiresAt) : 'No informada; no significa sesión perpetua'}</p><p>Adaptador: {connection.adapterVersion || 'Versión no informada'} · Formato: {connection.locale || 'No informado'}</p>{!browser && <MetaEvaluation evaluation={connection.evaluation}/>}</details>
     {error && <p ref={errorRef} tabIndex={-1} role="alert" className={styles.error}>{error}</p>}{notice && <p role="status" className={styles.notice}>{notice}</p>}
-    <details className={styles.technicalDetails}><summary>Desconectar o eliminar datos locales</summary><div className={styles.actions}><button type="button" className="button subtle" disabled={actionBlocked || dirty || disconnected || pending} onClick={() => onAction('disconnect')}>Desconectar cuenta</button><button type="button" className="button danger" disabled={actionBlocked || dirty || pending} onClick={() => onAction('delete-platform-data')}>Eliminar datos locales…</button></div></details>
+    <details className={styles.technicalDetails}><summary>Desconectar o eliminar datos locales</summary><div className={styles.actions}><button type="button" className="button subtle" data-advisor-control="meta-disconnect-review" disabled={actionBlocked || dirty || disconnected || pending} onClick={() => onAction('disconnect')}>Desconectar cuenta</button><button type="button" className="button danger" data-advisor-control="meta-delete-review" disabled={actionBlocked || dirty || pending} onClick={() => onAction('delete-platform-data')}>Eliminar datos locales…</button></div></details>
   </article>;
 }
 
 function ConnectionDialog({ api, connection, action, onClose, onComplete, report }) {
   const deleting = action === 'delete-platform-data', ref = useRef(null), errorRef = useRef(null), requests = useRef(new Set()), locked = useRef(false), rid = useRequestIds();
+  const assistant = useAssistantBridge(), reviewKind = deleting ? 'delete' : 'disconnect';
   const [preview, setPreview] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirm, setConfirm] = useState(false), [pause, setPause] = useState(true), [warningAccepted, setWarningAccepted] = useState(false), [retry, setRetry] = useState(0);
   const close = useDialog(ref, { busy, dirty: confirm || warningAccepted || !pause, onClose });
   useEffect(() => { report({ busy, dirty: confirm || warningAccepted || !pause }); }, [busy, confirm, warningAccepted, pause, report]);
@@ -286,17 +308,19 @@ function ConnectionDialog({ api, connection, action, onClose, onComplete, report
       report({ dirty: false, busy: false }); onComplete(result);
     } catch (cause) { if (cause.name !== 'AbortError') setError(cause.message); } finally { requests.current.delete(controller); locked.current = false; setBusy(false); }
   }
-  return <dialog ref={ref} className={`admin-dialog ${styles.dialog}`} aria-labelledby="social-connection-action-title"><form method="post" onSubmit={submit} ><header className={styles.dialogHeader}><h2 id="social-connection-action-title">{deleting ? 'Eliminar datos locales de plataforma' : 'Desconectar cuenta'} · {connection.name || methods[connection.integrationMethod]}</h2></header><div className={styles.dialogBody}>
+  return <dialog ref={ref} className={`admin-dialog ${styles.dialog}`} aria-labelledby="social-connection-action-title" data-meta-connection-id={connection.id} data-meta-action={action}><form method="post" onSubmit={submit} ><header className={styles.dialogHeader}><h2 id="social-connection-action-title">{deleting ? 'Eliminar datos locales de plataforma' : 'Desconectar cuenta'} · {connection.name || methods[connection.integrationMethod]}</h2></header><div className={styles.dialogBody}>
     <p>Se cancelará el trabajo no enviado y se retirará la autenticación. No se borran publicaciones en Meta. Ante un envío incierto, hay que comprobar el estado en Meta sin reenviar.</p>
-    {deleting && <><p>Se eliminarán publicaciones y anuncios, versiones aprobadas, capturas de resultados, estimaciones, ideas de mejora y sus vínculos. Los pedidos, gastos, pagos e imágenes y videos subidos permanecen. Esto no despublica ni garantiza detener anuncios remotos.</p>{preview ? <dl className="summary-values">{Object.entries(preview.counts).map(([key, value]) => <div key={key}><dt>{DELETION_COUNT_LABELS[key] || key}</dt><dd>{value}</dd></div>)}</dl> : <p role="status">Consultando cantidades actuales…</p>}<label className={styles.checkRow}><input type="checkbox" checked={confirm} onChange={event => setConfirm(event.target.checked)} disabled={busy || !preview}/>Confirmo eliminar definitivamente estas cantidades de datos locales.</label></>}
-    <label className={styles.checkRow}><input type="checkbox" checked={pause} onChange={event => setPause(event.target.checked)} disabled={busy} data-dialog-initial-focus/>Pausar anuncios y comprobar su estado antes de desconectar{deleting ? ' y eliminar' : ''}.</label>
+    {deleting && <><p>Se eliminarán publicaciones y anuncios, versiones aprobadas, capturas de resultados, estimaciones, ideas de mejora y sus vínculos. Los pedidos, gastos, pagos e imágenes y videos subidos permanecen. Esto no despublica ni garantiza detener anuncios remotos.</p>{preview ? <dl className="summary-values" tabIndex={-1} data-advisor-control="meta-delete-data-counts">{Object.entries(preview.counts).map(([key, value]) => <div key={key}><dt>{DELETION_COUNT_LABELS[key] || key}</dt><dd>{value}</dd></div>)}</dl> : <p role="status">Consultando cantidades actuales…</p>}<label className={styles.checkRow}><input type="checkbox" checked={confirm} onChange={event => setConfirm(event.target.checked)} disabled={busy || !preview}/>Confirmo eliminar definitivamente estas cantidades de datos locales.</label></>}
+    <label className={styles.checkRow}><input type="checkbox" checked={pause} onChange={event => setPause(event.target.checked)} disabled={busy} data-dialog-initial-focus data-advisor-control={`meta-${reviewKind}-with-pause-confirmation`}/>Pausar anuncios y comprobar su estado antes de desconectar{deleting ? ' y eliminar' : ''}.</label>
     <p className={styles.muted}>Por navegador, esta acción puede quedar pendiente del consumidor. Se conserva la custodia hasta confirmar las pausas. Si faltan permisos, detén los anuncios directamente en Meta.</p>
-    {!pause && <label className={styles.checkRow}><input type="checkbox" checked={warningAccepted} onChange={event => setWarningAccepted(event.target.checked)} disabled={busy}/>Acepto que pueden seguir gastando y que debo detenerlos directamente en Meta; la desconexión local no confirma una pausa.</label>}
+    {pause
+      ? <p tabIndex={-1} data-advisor-control={`meta-${reviewKind}-local-confirmation`}>Si decides continuar sin una pausa verificada, desmarca la opción de pausar y revisa la advertencia antes de confirmar.</p>
+      : <label className={styles.checkRow}><input type="checkbox" checked={warningAccepted} onChange={event => setWarningAccepted(event.target.checked)} disabled={busy} data-advisor-control={`meta-${reviewKind}-local-confirmation`}/>Acepto que pueden seguir gastando y que debo detenerlos directamente en Meta; la desconexión local no confirma una pausa.</label>}
     {error && <div ref={errorRef} tabIndex={-1} className={styles.error} role="alert"><p>{error}</p>{deleting && <button type="button" className="button subtle" disabled={busy} onClick={() => { setConfirm(false); setPreview(null); setRetry(value => value + 1); }}>Revisar cantidades otra vez</button>}</div>}
-    </div><footer className={styles.actions}><button type="button" className="button subtle" disabled={busy} onClick={close}>Cancelar</button><button type="submit" className={`button ${deleting ? 'danger' : 'primary'}`} disabled={busy || (deleting && (!preview || !confirm)) || (!pause && !warningAccepted)}>{busy ? 'Registrando solicitud…' : pause ? `Pausar y ${deleting ? 'eliminar datos' : 'desconectar'}` : deleting ? 'Eliminar sólo datos locales' : 'Desconectar sin afirmar pausa'}</button></footer></form></dialog>;
+    </div><footer className={styles.actions}><button type="button" className="button subtle" disabled={busy} onClick={() => assistant.requestOpen()}>Ali: revisar este control</button><button type="button" className="button subtle" disabled={busy} onClick={close}>Cancelar</button><button type="submit" className={`button ${deleting ? 'danger' : 'primary'}`} disabled={busy || (deleting && (!preview || !confirm)) || (!pause && !warningAccepted)}>{busy ? 'Registrando solicitud…' : pause ? `Pausar y ${deleting ? 'eliminar datos' : 'desconectar'}` : deleting ? 'Eliminar sólo datos locales' : 'Desconectar sin afirmar pausa'}</button></footer></form></dialog>;
 }
 
-export default function SocialConnectionsSettings({ api, view, onViewChange, onNavigate, onInteractionStateChange, onMutation, revision = 0 }) {
+export default function SocialConnectionsSettings({ api, view, onViewChange, onNavigate, onInteractionStateChange, onMutation, revision = 0, socialCatalogRequest }) {
   const [refresh, setRefresh] = useState(0), [connectionRetry, setConnectionRetry] = useState(0), [settingsRetry, setSettingsRetry] = useState(0);
   const [notice, setNotice] = useState(''), [login, setLogin] = useState(null), [dialog, setDialog] = useState(null), [pauseRequests, setPauseRequests] = useState([]);
   const [acknowledged, setAcknowledged] = useState(null), [manualFirst, setManualFirst] = useState(false);
@@ -358,12 +382,18 @@ export default function SocialConnectionsSettings({ api, view, onViewChange, onN
     const status = connection?.disconnectStatus;
     if (status?.action === 'delete-platform-data' && status.receiptId) pendingDelete.current = { connectionId: connection.id, receiptId: status.receiptId };
     const pending = pendingDelete.current;
-    const receipt = pending?.connectionId === record && receipts?.find(item => item.receiptId === pending.receiptId);
+    const receipt = pending && pending.connectionId === record && receipts?.find(item => item.receiptId === pending.receiptId);
     if (receipt && changeRecord.current(null) !== false) {
       pendingDelete.current = null;
       setNotice(`Eliminación local completada. Recibo ${receipt.receiptId}.`);
     }
   }, [connection, receipts, record]);
+  useEffect(() => {
+    const action = socialCatalogRequest?.socialAction;
+    if (!action || !connection || socialCatalogRequest.view.record !== connection.id || modalOpen || freshnessBlocked || Object.keys(locks).length) return;
+    if (action === 'browser-login' && connection.integrationMethod === 'browser' && connectionRead.data?.browserRunner?.status === 'available') setLogin(connection);
+    if (action === 'disconnect' || action === 'delete-platform-data') setDialog({ connection, action });
+  }, [socialCatalogRequest, connection, modalOpen, freshnessBlocked, locks, connectionRead.data?.browserRunner?.status]);
   function focusConfiguration() {
     if (!options.current) return;
     const form = options.current.querySelector('form');
@@ -406,7 +436,7 @@ export default function SocialConnectionsSettings({ api, view, onViewChange, onN
     void invalidate();
   }
   const disconnected = listing ? connections.filter(item => item.state === 'disconnected') : [];
-  return <section className={`${styles.workspace} ${connectionStyles.socialConnections}`} aria-label="Configuración de redes sociales">
+  return <section className={`${styles.workspace} ${connectionStyles.socialConnections}`} aria-label="Configuración de redes sociales" tabIndex={-1} data-advisor-control="meta-settings-overview">
     <div className={styles.stack}>
       {!connection && <header className="workspace-heading"><div><p className={styles.eyebrow}>Facebook e Instagram</p><h2 ref={heading} tabIndex={-1}>{adding ? 'Alta guiada de Meta' : listing ? 'Tus conexiones' : missing ? 'No se encontró esta conexión' : 'Conexiones y publicación en Meta'}</h2><p>Guardar opciones o conectar no publica ni activa anuncios.</p></div></header>}
       {notice && <p className={styles.notice} role="status">{notice}</p>}
@@ -423,14 +453,15 @@ export default function SocialConnectionsSettings({ api, view, onViewChange, onN
       {connection && <ConnectionCard key={connection.id} api={api} connection={connection} title={connectionName(connection, connections)} heading={heading} requirement={requirement} runner={connectionRead.data?.browserRunner} freshnessBlocked={freshnessBlocked}
         operationsBlocked={otherThan(`connection:${connection.id}`)} report={report} onMutation={result => { if (result?.id) setAcknowledged(result); return invalidate(); }}
         onLogin={() => setLogin(connection)} onAction={action => setDialog({ connection, action })} onNewToken={() => startNew(true)} onNavigate={onNavigate}/>}
-      <details className={styles.detail} ref={options}>
+      <details className={styles.detail} ref={options} data-advisor-disclosure>
         <summary ref={optionsSummary}>Opciones de Meta</summary>
         <ReadStatus state={settingsRead} label="opciones de Meta" onRetry={() => setSettingsRetry(value => value + 1)}/>
         {settingsRead.data && <SocialSettingsForm api={api} settings={settingsRead.data} report={report} onSaved={invalidate} disabled={otherThan('settings') || modalOpen}/>}
       </details>
+      {connectionRead.data && <BrowserHealth data={connectionRead.data}/>}
       {settingsLocked && <p className={styles.help}>Guarda o descarta las opciones antes de administrar las cuentas.</p>}
       {pauseRequests.map(item => { const connection = connections.find(value => value.id === item.connectionId), receipt = connectionRead.data?.deletionReceipts?.find(value => value.receiptId === item.receiptId); return <article key={item.connectionId} className={styles.notice}><h3>Solicitud de pausa y desconexión · {item.name || 'Conexión'}</h3><p>{receipt ? 'Eliminación local completada tras pausa remota confirmada.' : connection?.state === 'disconnected' ? 'Desconexión completada. Consulta la evidencia de las entregas para el último estado confirmado.' : 'Pendiente: no se afirma que los anuncios hayan dejado de gastar.'}</p>{item.receiptId && <p>Recibo solicitado: {item.receiptId}</p>}<p>Operaciones: {item.operationIds.join(', ') || 'Sin identificadores disponibles'}</p></article>; })}
-      {!!connectionRead.data?.deletionReceipts?.length && <details className={styles.evidence}><summary>Recibos de eliminación local</summary>{connectionRead.data.deletionReceipts.map(receipt => <article key={receipt.receiptId}><h3>{receipt.receiptId}</h3><p>{date(receipt.deletedAt)} · {receipt.remoteSpendStopped ? 'Pausa remota confirmada' : 'Detención del gasto no confirmada'} · No se borró contenido en Meta</p><dl className="summary-values">{Object.entries(receipt.counts || {}).map(([key, value]) => <div key={key}><dt>{DELETION_COUNT_LABELS[key] || key}</dt><dd>{value}</dd></div>)}</dl></article>)}</details>}
+      {!!receipts?.length && <details className={styles.evidence} data-advisor-disclosure><summary>Recibos de eliminación local</summary><h3 tabIndex={-1} data-advisor-control="meta-disconnection-and-deletion-receipts">Evidencia de eliminación local</h3>{receipts.map(receipt => <article key={receipt.receiptId}><h3>{receipt.receiptId}</h3><p>{date(receipt.deletedAt)} · {receipt.remoteSpendStopped ? 'Pausa remota confirmada' : 'Detención del gasto no confirmada'} · No se borró contenido en Meta</p><dl className="summary-values">{Object.entries(receipt.counts || {}).map(([key, value]) => <div key={key}><dt>{DELETION_COUNT_LABELS[key] || key}</dt><dd>{value}</dd></div>)}</dl></article>)}</details>}
     </div>
     {login && <SocialBrowserLogin api={api} connection={login} onClose={() => { report('login', { dirty: false, busy: false }); setLogin(null); }} onConnected={invalidate} onInteractionStateChange={loginReport}/>}
     {dialog && <ConnectionDialog api={api} connection={dialog.connection} action={dialog.action} onClose={() => { report('dialog', { dirty: false, busy: false }); setDialog(null); }} onComplete={connectionCompleted} report={dialogReport}/>}
@@ -489,7 +520,7 @@ function SocialSettingsForm({ api, settings, report, onSaved, disabled }) {
     }
   }
   return <form className={styles.panel} method="post" onSubmit={submit} aria-label="Opciones de Meta" aria-busy={busy}>
-    <h3>Configurar la aplicación</h3>
+    <h3 tabIndex={-1} data-advisor-control="meta-app-options-form">Configurar la aplicación</h3>
     <p>Los cambios se aplican sin reiniciar. Cambiar app, secreto u origen exige volver a verificar las preparaciones pendientes. Para cambiar de app, desconecta antes las cuentas API.</p>
     <fieldset disabled={busy || disabled} className={styles.connectionFieldset}><legend>Configuración de la aplicación Meta</legend>
       <div className={styles.fieldGrid}>
@@ -498,8 +529,8 @@ function SocialSettingsForm({ api, settings, report, onSaved, disabled }) {
         <label className="field">ID de configuración de inicio de sesión<input name="loginConfigId" maxLength={100} value={form.loginConfigId} onChange={event => set('loginConfigId', event.target.value)} autoComplete="off" aria-describedby="social-login-config-help"/><span id="social-login-config-help" className={styles.help}>Facebook Login for Business → Configurations → configuración con Token de acceso de usuario. El token manual no usa este ID.</span></label>
         <label className="field">Secreto de app de Meta<input name="appSecret" type="password" maxLength={4096} value={form.appSecret} onChange={event => set('appSecret', event.target.value)} autoComplete="new-password" aria-describedby="social-secret-help"/><span id="social-secret-help" className={styles.help}>Meta for Developers → tu aplicación → Configuración de la app → Básica → Clave secreta de la app. {saved.hasAppSecret ? 'Hay un secreto guardado; deja el campo vacío para conservarlo.' : 'No hay secreto guardado.'} Cambiar la app requiere uno nuevo.</span></label>
       </div>
-      <label className={styles.checkRow}><input name="publishingEnabled" type="checkbox" checked={form.publishingEnabled} onChange={event => set('publishingEnabled', event.target.checked)}/>Habilitar publicación y activación</label>
-      <label className={styles.checkRow}><input name="browserEnabled" type="checkbox" checked={form.browserEnabled} onChange={event => set('browserEnabled', event.target.checked)}/>Habilitar acceso asistido por navegador</label>
+      <label className={styles.checkRow}><input name="publishingEnabled" type="checkbox" data-advisor-control="meta-publishing-enable-control" checked={form.publishingEnabled} onChange={event => set('publishingEnabled', event.target.checked)}/>Habilitar publicación y activación</label>
+      <label className={styles.checkRow}><input name="browserEnabled" type="checkbox" data-advisor-control="meta-browser-enable-control" checked={form.browserEnabled} onChange={event => set('browserEnabled', event.target.checked)}/>Habilitar acceso asistido por navegador</label>
       <p className={styles.warning}>La publicación es opcional y global. No es necesaria para consultar. Deshabilitarla impide nuevos envíos, no confirma detener gasto remoto ni revierte operaciones ya autorizadas.</p>
       <p className={styles.help}>Las claves de custodia se administran en el servidor; no hay que copiarlas ni pegarlas aquí.</p>
       <dl className="summary-values">{[

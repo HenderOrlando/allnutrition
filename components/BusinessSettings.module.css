@@ -165,3 +165,7 @@
     white-space: normal;
   }
 }
+
+@media (max-width: 400px) {
+  .settingsDialog :global(.editor-footer) :global(.button) { flex-basis: 0; padding-inline: 8px; }
+}

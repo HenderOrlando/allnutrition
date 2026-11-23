@@ -37,7 +37,7 @@ export default function UserManagement({api,onInteractionStateChange}) {
  return <div className={styles.users}>
   <section className="user-management-card" aria-labelledby="users-list-heading" aria-busy={loading}>
    <div className={styles.sectionHeading}>
-    <div><p className="eyebrow">Acceso al panel</p><h2 id="users-list-heading" ref={listHeading} tabIndex="-1">Usuarios registrados{users?` (${users.length})`:''}</h2></div>
+    <div><p className="eyebrow">Acceso al panel</p><h2 id="users-list-heading" ref={listHeading} tabIndex="-1" data-advisor-control="users-registered-list">Usuarios registrados{users?` (${users.length})`:''}</h2></div>
     <button type="button" className="button primary" onClick={()=>formHeading.current?.focus()} aria-controls="add-user-heading"><Icon name="plus" size={16}/>Preparar nuevo acceso</button>
    </div>
    <p>Consulta quién tiene acceso y el estado de cada cuenta. Todas tienen el mismo perfil de administrador.</p>
@@ -49,7 +49,7 @@ export default function UserManagement({api,onInteractionStateChange}) {
   </section>
   <section className="user-management-card" aria-labelledby="add-user-heading">
    <div className={styles.sectionHeading}>
-    <div><p className="eyebrow">Nuevo acceso</p><h2 id="add-user-heading" ref={formHeading} tabIndex="-1">Crear usuario</h2></div>
+    <div><p className="eyebrow">Nuevo acceso</p><h2 id="add-user-heading" ref={formHeading} tabIndex="-1" data-advisor-control="user-create-form-heading">Crear usuario</h2></div>
     <button type="button" className="text-button" onClick={()=>listHeading.current?.focus()} aria-controls="users-list-heading">Consultar usuarios</button>
    </div>
    <p>Crea un acceso individual para otra persona del equipo, sin compartir tu propia cuenta.</p>
@@ -74,7 +74,7 @@ export default function UserManagement({api,onInteractionStateChange}) {
       <h3>Antes de crear la cuenta</h3>
       <p>{email?<>Se creará el acceso para <strong>{email}</strong> con perfil Administrador.</>:'Completa el correo y ambas contraseñas. La cuenta solo se crea al confirmar con el botón.'}</p>
       <p className="unsaved-flag" role="status">{dirty?'Datos sin guardar':'Sin datos pendientes'}</p>
-      <button type="submit" className="button primary">{busy?'Creando…':'Crear usuario'}<Icon name="plus" size={16}/></button>
+      <button type="submit" className="button primary" data-advisor-control="user-create-confirmation">{busy?'Creando…':'Crear usuario'}<Icon name="plus" size={16}/></button>
      </div>
     </fieldset>
    </form>

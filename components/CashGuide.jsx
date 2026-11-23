@@ -152,7 +152,7 @@ export default function CashGuide({ tab, onNavigate, disabled = false }) {
 
   return (
     <details className={styles.cashHelp}>
-      <summary>Guía de caja</summary>
+      <summary data-advisor-control="cash-operation-guide">Guía de caja</summary>
       <p className={styles.guideRoutine}>
         Al empezar: revisa saldos y pendientes. Durante el día: registra cada hecho con su fecha real.
         {' '}Al terminar: cuenta el efectivo y registra el cierre.

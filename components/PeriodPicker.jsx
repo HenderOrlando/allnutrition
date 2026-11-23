@@ -9,7 +9,7 @@ export function reportDateLabel(value) {
   return `${parts[2]}/${parts[1]}/${parts[0]}`;
 }
 
-export default function PeriodPicker({ period = 'month', anchor, onChange, disabled = false }) {
+export default function PeriodPicker({ period = 'month', anchor, onChange, disabled = false, advisorControl }) {
   const id = useId(), date = anchor || bogotaDate();
   const [draft, setDraft] = useState(date);
   useEffect(() => { setDraft(date); }, [date]);
@@ -25,7 +25,7 @@ export default function PeriodPicker({ period = 'month', anchor, onChange, disab
   }
   return <fieldset className="report-period" disabled={disabled}>
     <legend>Período</legend>
-    <label htmlFor={`${id}-period`}>Frecuencia<select id={`${id}-period`} value={period} onChange={event => onChange({ period: event.target.value, anchor: date })}>{Object.entries(REPORT_PERIOD_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+    <label htmlFor={`${id}-period`}>Frecuencia<select id={`${id}-period`} data-advisor-control={advisorControl} value={period} onChange={event => onChange({ period: event.target.value, anchor: date })}>{Object.entries(REPORT_PERIOD_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     <label htmlFor={`${id}-anchor`}>Fecha de referencia<input id={`${id}-anchor`} type="date" min="0001-01-01" max="9998-12-31" required value={draft} onChange={event => chooseDate(event.target.value)} onBlur={() => setDraft(date)}/></label>
     <div className="report-period-arrows"><button className="button subtle" type="button" disabled={!previous} aria-label="Período anterior" onClick={() => onChange({ period, anchor: previous })}>Anterior</button><button className="button subtle" type="button" disabled={!next} aria-label="Período siguiente" onClick={() => onChange({ period, anchor: next })}>Siguiente</button></div>
     {bounds && <p className="small muted report-period-range">Del {reportDateLabel(bounds.startDate)} al {reportDateLabel(addDays(bounds.endDateExclusive, -1))} · America/Bogota</p>}

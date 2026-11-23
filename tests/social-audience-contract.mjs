@@ -62,7 +62,7 @@ async function fixture(store, { markets = ['MX'], method = null, enabled = true,
 }
 
 const cases = [
-  ['one or several markets reserve a single closed text call, then only save the draft', async store => {
+  ['one or several markets reserve a single text call and only explicit differences save the draft', async store => {
     for (const markets of [['MX'], ['MX', 'PE']]) {
       const f = await fixture(store, { markets, enabled: false });
       const settings = await f.configure((await store.db.get(`SELECT version FROM ${store.t('assistant_settings')} WHERE id=1`))?.version || 0, { enabled: true });
@@ -79,9 +79,14 @@ const cases = [
         await assert.rejects(f.act({ ...input, requestId: randomUUID() }), { status: 409 });
         assert.equal((await f.read()).version, f.draft.version);
       } finally { f.remote.barrier.release.resolve(); }
-      const outcome = await pending, stored = await f.read();
-      assert.equal(outcome.status, 'applied'); assert.deepEqual(await f.act(input), outcome); assert.equal(f.remote.assistantCalls.length, 1);
+      const outcome = await pending;
+      assert.equal(outcome.status, 'proposed'); assert.deepEqual(await f.act(input), outcome); assert.equal(f.remote.assistantCalls.length, 1);
       assert.deepEqual((await getSocialAudience(store, f.draft.id, f.session)).latestRequest, outcome);
+      assert.equal((await f.read()).version, f.draft.version);
+      const applied = await f.act({ action: 'apply', version: f.draft.version, requestId: randomUUID(), proposalId: outcome.proposalId,
+        selectedChanges: { age: true, interests: [] } });
+      assert.equal(applied.status, 'applied');
+      const stored = await f.read();
       assert.deepEqual(stored.marketCountries, markets); assert.deepEqual(stored.audience.countries, markets);
       assert.equal(stored.audienceMode, 'automatic'); assert.equal(stored.audience.ageMin, 24); assert.equal(stored.version, f.draft.version + 1);
       const packet = f.remote.assistantCalls[0], data = JSON.parse(packet.input[0].content);
@@ -90,6 +95,24 @@ const cases = [
       for (const secret of [CANARY, SECRET_CAPTION, f.admin, f.draft.id, f.session.sessionTokenHash]) assert.ok(!JSON.stringify(packet).includes(secret));
     }
     assert.deepEqual(await store.db.all(`SELECT id FROM ${store.t('social_deliveries')}`), []);
+  }],
+  ['automatic scope and age need separate choices; verified no-ops cannot create a draft version', async store => {
+    const f = await fixture(store, { markets: ['MX', 'PE'], audience: { ...WHOLE(['MX']), ageMin: 22, genders: [2] } });
+    const proposed = await f.act(f.request());
+    assert.equal(proposed.status, 'proposed');
+    assert.deepEqual(proposed.proposal.scope, { countries: ['MX', 'PE'] });
+    assert.deepEqual(proposed.proposal.age, { before: [22, 65], after: [24, 60] });
+    const apply = { action: 'apply', version: f.draft.version, requestId: randomUUID(), proposalId: proposed.proposalId, selectedChanges: { age: true, interests: [] } };
+    await assert.rejects(f.act(apply), { status: 400 });
+    assert.equal((await f.read()).version, f.draft.version);
+    await f.act({ ...apply, selectedChanges: { scope: true, age: false, interests: [] } });
+    assert.deepEqual((await f.read()).audience, { ...WHOLE(['MX', 'PE']), ageMin: 22, genders: [2] });
+    f.remote.result = answer({ ageMin: 22, ageMax: 65 });
+    const unchanged = await f.act(f.request({ version: f.draft.version + 1 }));
+    const noChanges = { ...apply, version: f.draft.version + 1, requestId: randomUUID(), proposalId: unchanged.proposalId };
+    await assert.rejects(f.act(noChanges), /edad guardada/);
+    await assert.rejects(f.act({ ...noChanges, selectedChanges: { age: false, interests: [] } }), /al menos una diferencia/);
+    assert.equal((await f.read()).version, f.draft.version + 1);
   }],
   ['missing markets block consent, and explicit broad uses the exact markets without an AI configuration', async store => {
     const empty = await fixture(store, { markets: [], enabled: false });
@@ -135,10 +158,11 @@ const cases = [
     const result = await f.act(f.request());
     assert.equal(result.status, 'needs_selection'); assert.equal((await f.read()).version, f.draft.version);
     assert.deepEqual(result.proposal.interests[0].candidates.map(item => item.providerId), ['880', '881']);
-    const input = { action: 'apply', version: f.draft.version, requestId: randomUUID(), proposalId: result.proposalId, selectedChanges: { age: true, interests: [] } };
+    const input = { action: 'apply', version: f.draft.version, requestId: randomUUID(), proposalId: result.proposalId, selectedChanges: { age: false, interests: [] } };
     await assert.rejects(f.act(input), { status: 400 });
-    const saved = await f.act({ ...input, selectedChanges: { age: true, interests: [{ index: 0, key: 'api:interest:881' }] } });
+    const saved = await f.act({ ...input, selectedChanges: { age: false, interests: [{ index: 0, key: 'api:interest:881' }] } });
     assert.equal(saved.status, 'applied'); assert.equal((await f.read()).audience.interests[0].providerId, '881');
+    assert.equal((await f.read()).audience.ageMin, 18);
   }],
   ['browser accepts only candidates from the confirmed authorized native draft', async store => {
     const f = await fixture(store, { method: 'browser' });
@@ -155,7 +179,10 @@ const cases = [
       candidates: [{ source: 'browser', providerId: null, label, key, context }] };
     await store.db.run(`UPDATE ${store.t('social_campaigns')} SET data=?,version=version+1 WHERE id=?`, [JSON.stringify({ ...JSON.parse(draft.data), preflight: proof }), f.draft.id]);
     const result = await f.act(f.request({ version: f.draft.version + 1 }));
-    assert.equal(result.status, 'applied'); assert.equal((await f.read()).audience.interests[0].key, key);
+    assert.equal(result.status, 'proposed'); assert.equal((await f.read()).audience.interests.length, 0);
+    await f.act({ action: 'apply', version: result.version, requestId: randomUUID(), proposalId: result.proposalId,
+      selectedChanges: { age: false, interests: [{ index: 0, key }] } });
+    assert.equal((await f.read()).audience.interests[0].key, key);
     assert.equal(f.remote.metaCalls.length, 0);
   }],
   ['invalid market/age/medical proposals, unknown acknowledgement and unavailability never change the draft', async store => {

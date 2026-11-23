@@ -12,7 +12,7 @@ import { ShipmentControls } from './ShipmentsWorkspace';
 import WorkspaceTabs from './WorkspaceTabs';
 import ImportedData from './ImportedData';
 import styles from './OrderExperience.module.css';
-import { useAssistantForm } from './AssistantBridge';
+import { useAssistantForm, validateAdvisorTarget } from './AssistantBridge';
 
 const blank = () => ({ requestId: crypto.randomUUID(), placedOn: bogotaDate(), cancellationOn:bogotaDate(), sellerId:null, customerName:'', phone:'', city:'', department:'', address:'', addressNotes:'', email:'', documentType:'', documentNumber:'', marketingCampaign:'', notes:'', status:'new', statusReason:'', deliveryMethod:'carrier', shippingChargeMinor:0, items:[] });
 const newShipment=()=>({carrier:'',tracking:'',estimatedDeliveryOn:'',split:false,assignments:{},replacesShipmentId:''});
@@ -27,12 +27,12 @@ const copyForm=record=>{
 const detailTabs=[{id:'agreement',label:'Acuerdo'},{id:'shipments',label:'Envíos'},{id:'collections',label:'Cobros'},{id:'profit',label:'Rentabilidad'}];
 const newOrderTabs=[{id:'agreement',label:'Destinatario y productos'}];
 
-function ShipmentCreateAssistant({detail,shipment,setShipment,orderLines,busy,dirty,onDirty,onInteractionStateChange,onMutate,onCommitted,assistantOpenRequest,onAssistantOpenHandled}) {
-  const section=useRef(null);
+function ShipmentCreateAssistant({detail,shipment,setShipment,orderLines,busy,dirty,onDirty,onInteractionStateChange,onMutate,onCommitted,assistantOpenRequest,onAssistantOpenHandled,section,summary}) {
   const [error,setError]=useState('');
+  const shipments=detail.shipments||[];
   const assistant=useAssistantForm({
     target:'shipment-create',entityId:detail.id,recordVersion:detail.version,values:shipment,dirty,busy,
-    referenceChoices:{assignments:Object.fromEntries(orderLines.map(line=>[line.lineId,Number(line.quantity)])),replacesShipmentId:(detail.shipments||[]).map(item=>item.id)},
+    referenceChoices:{assignments:Object.fromEntries(orderLines.map(line=>[line.lineId,Number(line.quantity)])),replacesShipmentId:shipments.map(item=>item.id)},
     applyPatch:patch=>{setShipment(old=>({...old,...patch}));onDirty();},
   });
   const controlBusy=busy||assistant.assistantBusy;
@@ -55,22 +55,22 @@ function ShipmentCreateAssistant({detail,shipment,setShipment,orderLines,busy,di
       else if(response.reason==='changed')setError('El envío cambió. Revisa los datos antes de guardar.');
     }catch(cause){setError(cause.message);}
   }
-  return <details ref={section} className="form-section">
-    <summary>Registrar guía o entrega local</summary>
+  return <details ref={section} className="form-section" data-advisor-disclosure="open-on-summary">
+    <summary ref={summary} data-advisor-control="shipment-create-form">Registrar guía o entrega local</summary>
     <button type="button" className="button subtle" disabled={controlBusy} onClick={assistant.openAssistant}>Ayúdame a preparar este envío</button>
     {error&&<p role="alert" className="error">{error}</p>}
     <form onSubmit={submit} onChangeCapture={onDirty}><fieldset className="editor-fieldset" disabled={controlBusy}><div className="product-form-grid">
       <label className="field">Transportadora<input maxLength={200} value={shipment.carrier} onChange={e=>setShipment({...shipment,carrier:e.target.value})}/></label>
       <label className="field">Número de guía<input maxLength={200} value={shipment.tracking} onChange={e=>setShipment({...shipment,tracking:e.target.value})}/></label>
       <label className="field">Entrega estimada<input type="date" value={shipment.estimatedDeliveryOn} onChange={e=>setShipment({...shipment,estimatedDeliveryOn:e.target.value})}/></label>
-      <label className="field">Reemplaza a<select value={shipment.replacesShipmentId} onChange={e=>setShipment({...shipment,replacesShipmentId:e.target.value,split:false,assignments:{}})}><option value="">Envío inicial o división</option>{(detail.shipments||[]).map(item=><option key={item.id} value={item.id}>{item.tracking||'Entrega sin guía'} · {item.carrier||'Local'}</option>)}</select></label>
+      <label className="field">Reemplaza a<select data-advisor-control={shipments.length?'shipment-create-replacement':undefined} value={shipment.replacesShipmentId} onChange={e=>setShipment({...shipment,replacesShipmentId:e.target.value,split:false,assignments:{}})}><option value="">Envío inicial o división</option>{shipments.map(item=><option key={item.id} value={item.id}>{item.tracking||'Entrega sin guía'} · {item.carrier||'Local'}</option>)}</select></label>
     </div>
-    {!shipment.replacesShipmentId&&<label className="checkbox-field"><input type="checkbox" checked={shipment.split} onChange={e=>setShipment({...shipment,split:e.target.checked})}/>Dividir envío</label>}
+    {!shipment.replacesShipmentId&&<label className="checkbox-field"><input type="checkbox" data-advisor-control="shipment-create-split" checked={shipment.split} onChange={e=>setShipment({...shipment,split:e.target.checked})}/>Dividir envío</label>}
     {shipment.split&&orderLines.map(line=><label className="field" key={line.lineId}>{line.title} (comprado: {line.quantity})<input type="number" min={0} max={line.quantity} step={1} value={shipment.assignments[line.lineId]??0} onChange={e=>setShipment({...shipment,assignments:{...shipment.assignments,[line.lineId]:Number(e.target.value)}})}/></label>)}
-    <button className="button primary" type="submit" disabled={controlBusy}>Registrar envío</button></fieldset></form>
+    <button className="button primary" type="submit" data-advisor-control={!shipments.length?'shipment-create-submit':undefined} disabled={controlBusy}>Registrar envío</button></fieldset></form>
   </details>;
 }
-export default function OrderEditor({ record, all, api, onClose, onSaved, onReload, onInteractionStateChange, assistantOpenRequest, onAssistantOpenHandled }) {
+export default function OrderEditor({ record, all, api, onClose, onSaved, onReload, onInteractionStateChange, assistantOpenRequest, onAssistantOpenHandled, advisorTargetRequest, onAdvisorTargetHandled, catalogTab }) {
   const [detail,setDetail]=useState(record), [form,setForm]=useState(()=>copyForm(record));
   const initial=useRef(JSON.stringify(form));
   const [busy,setBusy]=useState(false),[error,setError]=useState(null),[tab,setTab]=useState('agreement'),[people,setPeople]=useState([]),[peopleError,setPeopleError]=useState(''),[peopleRetry,setPeopleRetry]=useState(0),[peopleLoading,setPeopleLoading]=useState(true);
@@ -80,6 +80,8 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
   const shipmentCreateReporter=useCallback(state=>setShipmentInteractions(old=>({...old,create:state})),[]);
   const [factsDirty,setFactsDirty]=useState(false),[invalidMoney,setInvalidMoney]=useState({});
   const [financialAction,setFinancialAction]=useState(null),[financialState,setFinancialState]=useState({dirty:false,busy:false});
+  const [readyAdvisorTarget,setReadyAdvisorTarget]=useState(null);
+  const advisorHandled=useRef(null),shipmentCreateSection=useRef(null),shipmentCreateSummary=useRef(null),recipientInput=useRef(null),orderHeading=useRef(null);
   const [readyAssistantRequest,setReadyAssistantRequest]=useState(null);
   const assistantOpenLive=useRef(null);
   const reportFinancial=useCallback(state=>setFinancialState(state),[]);
@@ -92,12 +94,72 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
   const interactionBusy=formBusy||assistant.assistantBusy;
   const childParentBusy=busy||financialState.busy||assistant.assistantBusy;
   const shipmentBusyFor=key=>childParentBusy||Object.entries(shipmentInteractions).some(([id,state])=>id!==key&&state.busy);
-  assistantOpenLive.current={dirty,busy:interactionBusy,version:detail?.version,id:detail?.id,generation:assistant.generation};
+  assistantOpenLive.current={dirty,busy:interactionBusy,version:detail?.version,id:detail?.id,generation:assistant.generation,advisorTargetId:advisorTargetRequest?.id};
   const close=useDialog(dialog,{busy:interactionBusy,dirty,onClose:()=>{onInteractionStateChange({dirty:false,busy:false});onClose();}});
   useEffect(()=>{onInteractionStateChange({dirty,busy:interactionBusy});},[dirty,interactionBusy,onInteractionStateChange]);
   useEffect(()=>()=>onInteractionStateChange({dirty:false,busy:false}),[onInteractionStateChange]);
   useEffect(()=>{if(error)errorSummary.current?.focus();},[error]);
+  useEffect(()=>{
+    if(!catalogTab||dirty||interactionBusy)return;
+    setFinancialAction(null);
+    setTab(catalogTab);
+  },[catalogTab,dirty,interactionBusy]);
   useEffect(()=>{let active=true;setPeopleLoading(true);setPeopleError('');api('/api/admin/business/people').then(result=>{if(active)setPeople(result.records);}).catch(cause=>{if(active)setPeopleError(cause.message);}).finally(()=>{if(active)setPeopleLoading(false);});return()=>{active=false;};},[api,peopleRetry]);
+  useEffect(()=>{
+    const id=advisorTargetRequest?.id;
+    const target=validateAdvisorTarget(advisorTargetRequest);
+    if(!id||advisorHandled.current===id||readyAdvisorTarget?.id===id||target?.view.tab!=='list'||target.focus==='order-search')return;
+    if(target.view.record!==(detail?.id??'new'))return;
+    const stillClean=()=>assistantOpenLive.current.advisorTargetId===id&&!assistantOpenLive.current.dirty&&!assistantOpenLive.current.busy
+      && assistantOpenLive.current.id===detail?.id&&assistantOpenLive.current.version===detail?.version;
+    const fail=(message,status)=>{
+      advisorHandled.current=id;
+      setError(Object.assign(new Error(message),{status}));
+      onAdvisorTargetHandled?.(id,message);
+    };
+    if(dirty||interactionBusy){fail('Conserva los cambios del pedido antes de abrir la acción de Ali.');return;}
+    let active=true;
+    const prepare=()=>{
+      setFinancialAction(null);
+      setTab(target.focus==='order-shipment-create'?'shipments':'agreement');
+      setReadyAdvisorTarget({...target,id});
+    };
+    if(target.focus==='order-create'){prepare();return;}
+    const ref=target.selection;
+    api('/api/admin/orders/'+encodeURIComponent(ref.id)).then(order=>{
+      if(!active||!stillClean())return;
+      if(order.id!==ref.id||order.version!==ref.version||detail.version!==ref.version){
+        fail('El pedido cambió. Carga los datos actuales antes de continuar.',409);return;
+      }
+      if(target.focus==='order-shipment-create'&&order.status==='cancelled'){
+        fail('El pedido está cancelado y no admite un nuevo envío.');return;
+      }
+      prepare();
+    }).catch(cause=>{if(active&&stillClean())fail(cause.message,cause.status);});
+    return()=>{active=false;};
+  },[advisorTargetRequest,readyAdvisorTarget?.id,api,detail?.id,detail?.version,dirty,interactionBusy,onAdvisorTargetHandled]);
+  useEffect(()=>{
+    const request=readyAdvisorTarget;
+    if(!request||request.id!==advisorTargetRequest?.id||advisorHandled.current===request.id)return;
+    const createShipment=request.focus==='order-shipment-create';
+    const node=createShipment?shipmentCreateSummary.current:request.focus==='order-compare'?orderHeading.current:recipientInput.current;
+    if(!node||dirty||interactionBusy||(request.selection&&request.selection.version!==detail?.version)){
+      const message='El pedido o su borrador cambiaron. Revisa los datos antes de continuar.';
+      advisorHandled.current=request.id;
+      setError(new Error(message));onAdvisorTargetHandled?.(request.id,message);return;
+    }
+    advisorHandled.current=request.id;
+    if(createShipment){
+      shipmentCreateSection.current.open=true;
+      const {carrier,tracking}=request.selection;
+      if(carrier!==undefined||tracking!==undefined){
+        setShipment(old=>({...old,...(carrier!==undefined&&{carrier}),...(tracking!==undefined&&{tracking})}));
+        setFactsDirty(true);
+      }
+    }
+    node.focus();
+    onAdvisorTargetHandled?.(request.id);
+  },[readyAdvisorTarget,advisorTargetRequest?.id,detail?.version,dirty,interactionBusy,onAdvisorTargetHandled]);
   useEffect(()=>{
     const request=assistantOpenRequest,open=request?.open;
     if(!request){setReadyAssistantRequest(null);return;}
@@ -163,6 +225,7 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
   const products=all.products||[];
   const shippingExpenses=(detail?.expenses||[]).filter(expense=>expense.category==='shipping_out');
   const shipmentsWithoutFreight=(detail?.shipments||[]).filter(shipment=>!shippingExpenses.some(expense=>expense.shipmentId===shipment.id));
+  const orderWithoutFreight=detail?.id&&!detail.shipments?.length&&!shippingExpenses.length;
   const options=useMemo(()=>{
     const ownReservations=new Map((detail?.inventory?.products||[]).map(product=>[product.productId,product.reserved]));
     const forOrder=products.map(product=>({...product,stockReserved:Math.max(0,(product.stockReserved||0)-(ownReservations.get(product.id)||0))}));
@@ -184,7 +247,7 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
       return position===index?[]:[[(position>index?`${match[1]}-${position-1}`:key),value]];
     })));
   }
-  const input=(name,title,{required=false,type='text',disabled=false,maxLength=500}={})=><label className="field" key={name}>{title}{required?' *':''}<input name={name} type={type} value={form[name]??''} required={required} disabled={disabled} maxLength={maxLength} onChange={e=>set(name,e.target.value||null)}/></label>;
+  const input=(name,title,{required=false,type='text',disabled=false,maxLength=500}={})=><label className="field" key={name}>{title}{required?' *':''}<input ref={name==='customerName'?recipientInput:null} data-advisor-control={name==='customerName'&&!detail?.id?'order-agreement-form':undefined} name={name} type={type} value={form[name]??''} required={required} disabled={disabled} maxLength={maxLength} onChange={e=>set(name,e.target.value||null)}/></label>;
   const amount=(name,title,value,onChange,disabled=false,required=true)=><fieldset className="editor-fieldset" disabled={disabled}><Field field={{name,label:title,type:'moneyOptionalMinor',required}} value={value} onChange={onChange} onDraftInvalid={invalid=>setInvalidMoney(old=>({...old,[name]:invalid}))}/></fieldset>;
   async function save(e){
     e.preventDefault(); if(interactionBusy)return;
@@ -252,8 +315,13 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
     if(dirty){setForm(JSON.parse(initial.current));setFactsDirty(false);setInvalidMoney({});setShipmentInteractions({});setShipment(newShipment());}
     setFinancialAction(null);setFinancialState({dirty:false,busy:false});setTab(next);
   }
+  const collections=detail?.collections||[];
+  const reversedIds=new Set(collections.map(c=>c.reversalOf).filter(Boolean));
+  const canReverse=c=>['receipt','refund'].includes(c.kind)&&!c.reversalOf&&!reversedIds.has(c.id)&&c.holder!=='legacy';
+  const reversals=tab==='collections'?collections.filter(canReverse):[];
+  const receiptCount=reversals.filter(c=>c.kind==='receipt').length,refundCount=reversals.length-receiptCount;
   return <dialog ref={dialog} className={`editor-drawer ${styles.editor}`} aria-labelledby="order-title">
-    <header><div><p className="eyebrow">Pedidos · {detail?.id?'Detalle y operaciones':'Captura manual'}</p><h2 id="order-title" tabIndex={-1} data-dialog-initial-focus>{number(detail)}</h2><p>{detail?.id?'Acuerdo, envíos y movimientos del pedido':'Por crear · completa el destinatario y las referencias'}</p></div><button type="button" className="icon-button" aria-label="Cerrar pedido" disabled={interactionBusy} onClick={close}><Icon name="close"/></button></header>
+    <header><div><p className="eyebrow">Pedidos · {detail?.id?'Detalle y operaciones':'Captura manual'}</p><h2 id="order-title" ref={orderHeading} tabIndex={-1} data-dialog-initial-focus data-advisor-control={detail?.id&&tab==='agreement'&&!financialAction?'order-detail':undefined}>{number(detail)}</h2><p>{detail?.id?'Acuerdo, envíos y movimientos del pedido':'Por crear · completa el destinatario y las referencias'}</p></div><button type="button" className="icon-button" aria-label="Cerrar pedido" disabled={interactionBusy} onClick={close}><Icon name="close"/></button></header>
     <div className="drawer-body">
       {error&&<div ref={errorSummary} tabIndex={-1} className="error" role="alert">{error.message}{error.status===409&&<button type="button" className="text-button" onClick={onReload}>Cargar versión guardada</button>}</div>}
       {financialAction?<BusinessActionForm key={[financialAction.action,financialAction.context.documentId||financialAction.context.expense?.id||financialAction.context.shipment?.id||'',financialAction.requestId||''].join(':')} action={financialAction.action} context={{order:detail,...financialAction.context}} api={api} onSaved={financialSaved} onCancel={cancelFinancial} onInteractionStateChange={reportFinancial} onAssistantRegistered={financialRegistered}/>:<>
@@ -262,7 +330,7 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
       {detail?.id&&tab==='agreement'&&<section className={styles.quickActions} aria-label="Operaciones del pedido"><p className={styles.sectionLabel}>Registrar un hecho</p><div className="admin-actions order-primary-actions"><button type="button" className="button primary" data-financial-action disabled={interactionBusy||detail.totalMinor===0} onClick={()=>openFinancial('collection')}>Registrar cobro</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>changeTab('shipments')}>Actualizar envío</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>openFinancial('return')}>Registrar devolución</button></div><p className="small muted">El acuerdo, el movimiento de dinero y los eventos de envío se guardan por separado.</p></section>}
       {tab==='agreement'&&<form id="order-agreement" onSubmit={save} aria-busy={interactionBusy}><fieldset className="editor-fieldset" disabled={interactionBusy}>
         <section className="form-section"><h3>1. Destinatario y fecha</h3><p className="small muted">Datos para identificar y entregar el pedido. Los campos con * son obligatorios.</p><div className="product-form-grid">{input('customerName','Nombre del destinatario',{required:true,maxLength:150})}{input('phone','Celular',{required:true,type:'tel',maxLength:30})}{input('city','Ciudad',{required:true,maxLength:100})}{input('department','Departamento',{maxLength:100})}{input('address','Dirección exacta')}{input('placedOn','Fecha del pedido',{required:true,type:'date',disabled:frozen})}</div></section>
-        <section className="form-section"><h3>2. Productos y valor acordado</h3><p className="small muted">Guardar registra las reservas de todas las líneas y sus componentes. Las referencias sin conteo permiten registrar sin inventar existencias; un saldo contado en cero bloquea nuevas ventas. El servidor valida los saldos conocidos en conjunto.</p>{frozen&&<p className="hint">Acuerdo cerrado: cantidades, precios y cobros al cliente no se editan directamente. El costo de envío se puede completar o corregir abajo, sin cambiar el acuerdo.</p>}
+        <section className="form-section"><h3 tabIndex={detail?.id?-1:undefined} data-advisor-control={detail?.id?'order-agreement-detail':undefined}>2. Productos y valor acordado</h3><p className="small muted">Guardar registra las reservas de todas las líneas y sus componentes. Las referencias sin conteo permiten registrar sin inventar existencias; un saldo contado en cero bloquea nuevas ventas. El servidor valida los saldos conocidos en conjunto.</p>{frozen&&<p className="hint">Acuerdo cerrado: cantidades, precios y cobros al cliente no se editan directamente. El costo de envío se puede completar o corregir abajo, sin cambiar el acuerdo.</p>}
           {!form.items.length&&<p className={styles.emptyPrompt}>Aún no agregas referencias. Usa «Agregar referencia» para elegir un producto, obsequio o combo.</p>}
           {form.items.map((line,index)=><div className={`form-section ${styles.itemCard}`} key={line.lineId}><h4>Línea {index+1}</h4>
             <label className="field">Referencia {index+1}<select name={`item-${index}`} required disabled={frozen} value={line.itemId?`${line.kind}:${line.itemId}`:''} onChange={e=>{const item=options.find(p=>`${p.kind}:${p.id}`===e.target.value);lineChange(index,{kind:item?.kind||'products',itemId:item?.id||'',title:item?.title||'',productType:item?.productType||'product',unitPriceMinor:(item?.price||0)*100,discountMinor:0});}}><option value="">Selecciona un producto</option>{line.itemId&&!options.some(p=>p.id===line.itemId&&p.kind===line.kind)&&<option value={`${line.kind}:${line.itemId}`}>{line.title} · Referencia histórica</option>}{options.map(p=><option key={p.kind+':'+p.id} value={p.kind+':'+p.id} disabled={p.stockAvailable===0&&!(line.itemId===p.id&&line.kind===p.kind)}>{p.title} · {p.presentation||(p.kind==='combos'?'Combo':'Producto')}{p.productType==='gift'?' · Obsequio':''} · {p.stockAvailable==null?'Sin conteo · permite registrar':`${p.stockAvailable} disponibles para este pedido`}</option>)}</select></label>
@@ -282,41 +350,60 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
         {detail?.id&&<section className="form-section" aria-labelledby="order-shipping-costs-title">
           <h3 id="order-shipping-costs-title">Flete / costo de envío</h3>
           <p className="small muted">Costo de la transportadora, incluido el importado. Se puede corregir aunque el pedido esté entregado. No se suma otra vez al total del cliente ni registra un pago.</p>
+          {shippingExpenses.length>1&&<p tabIndex={-1} data-advisor-control="order-freight-correction">Hay varios costos guardados. Elige el costo por guía, importe y fecha antes de corregirlo.</p>}
           {shippingExpenses.map(expense=>{
             const linkedShipment=detail.shipments.find(shipment=>shipment.id===expense.shipmentId);
             return <article className="form-section" key={expense.id}>
               <h4>{linkedShipment?.tracking?`Guía ${linkedShipment.tracking}`:expense.concept||'Costo del pedido'}</h4>
               <p><strong>{displayMinor(expense.amountMinor)}</strong> · {expense.incurredOn||'Fecha del costo pendiente'}</p>
-              <button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>openShippingExpense(expense,linkedShipment)}>Corregir costo de envío</button>
+              <button type="button" className="button subtle" data-advisor-control={shippingExpenses.length===1?'order-freight-correction':undefined} disabled={interactionBusy} onClick={()=>openShippingExpense(expense,linkedShipment)}>Corregir costo de envío</button>
             </article>;
           })}
           {!shippingExpenses.length&&<p>No hay un costo de envío registrado.</p>}
           <div className="admin-actions">
-            {shipmentsWithoutFreight.map(shipment=><button type="button" className="button subtle" key={shipment.id} disabled={interactionBusy} onClick={()=>openShippingExpense(null,shipment)}>Registrar costo de envío{shipment.tracking?` · ${shipment.tracking}`:''}</button>)}
-            {!detail.shipments.length&&!shippingExpenses.length&&<button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>openShippingExpense()}>Registrar costo de envío</button>}
+            {shipmentsWithoutFreight.length>1&&<p tabIndex={-1} data-advisor-control="order-freight-cost">Elige la guía a la que corresponde el costo. No se registrará en las demás.</p>}
+            {shipmentsWithoutFreight.map(shipment=><button type="button" className="button subtle" data-advisor-control={shipmentsWithoutFreight.length===1?'order-freight-cost':undefined} key={shipment.id} disabled={interactionBusy} onClick={()=>openShippingExpense(null,shipment)}>Registrar costo de envío{shipment.tracking?` · ${shipment.tracking}`:''}</button>)}
+            {orderWithoutFreight&&<button type="button" className="button subtle" data-advisor-control="order-freight-cost" disabled={interactionBusy} onClick={()=>openShippingExpense()}>Registrar costo de envío</button>}
           </div>
         </section>}
-        <section className="form-section"><h3>3. Preparación</h3><label className="field">Estado comercial<select name="status" value={form.status} disabled={frozen} onChange={e=>set('status',e.target.value)}>{orderStates.filter(s=>s.value===form.status||['new','preparing','cancelled'].includes(s.value)).map(s=><option key={s.value} value={s.value}>{s.label}</option>)}</select></label>{form.status === 'cancelled' && <>{input('statusReason','Motivo de cancelación',{required:true})}{input('cancellationOn','Fecha de cancelación',{required:true,type:'date'})}</>}<p className="hint">El despacho y la entrega se registran como eventos en Envíos. Cancelar no inventa un reembolso.</p></section>
+        <section className="form-section"><h3>3. Preparación</h3>
+          <label className="field">Estado comercial<select name="status" data-advisor-control={detail?.id&&!frozen?(form.status==='cancelled'?undefined:'order-commercial-status'):undefined} value={form.status} disabled={frozen} onChange={e=>set('status',e.target.value)}>{orderStates.filter(s=>s.value===form.status||['new','preparing','cancelled'].includes(s.value)).map(s=><option key={s.value} value={s.value}>{s.label}</option>)}</select></label>
+          {form.status==='cancelled'&&<div tabIndex={-1} data-advisor-control={detail?.id&&!frozen?'order-cancellation':undefined}>{input('statusReason','Motivo de cancelación',{required:true})}{input('cancellationOn','Fecha de cancelación',{required:true,type:'date'})}</div>}
+          <p className="hint">El despacho y la entrega se registran como eventos en Envíos. Cancelar no inventa un reembolso.</p>
+        </section>
         <details className="form-section"><summary>Más detalles · referencias, documento y notas</summary><div className="product-form-grid">{input('addressNotes','Barrio y referencias')}{input('email','Correo del destinatario',{type:'email',maxLength:254})}{input('documentType','Tipo de documento',{maxLength:30})}{input('documentNumber','Número de documento',{maxLength:80})}</div><label className="field">Notas internas<textarea name="notes" value={form.notes||''} maxLength={3000} rows={3} onChange={e=>set('notes',e.target.value)}/></label></details>
         {detail?.id&&<ImportedData record={detail} title="Datos importados del pedido"/>}
       </fieldset></form>}
       {tab==='shipments'&&<section className="form-section"><h3>Envíos de este pedido</h3>{!(detail.shipments||[]).length&&<p>Aún no hay guías. La primera asigna todas las líneas por defecto.</p>}{(detail.shipments||[]).map(s=>{
         if(!shipmentReporters.current.has(s.id))shipmentReporters.current.set(s.id,state=>setShipmentInteractions(old=>({...old,[s.id]:state})));
         return <article key={s.id} className="form-section"><h4>{s.tracking||'Entrega sin guía'}</h4><ShipmentControls key={s.id} shipment={s} inventoryOpening={detail.inventoryOpening} orderLines={detail.items} siblings={detail.shipments||[]} onMutate={mutate} onCommitted={shipmentSaved} busy={shipmentBusyFor(s.id)} onInteractionStateChange={shipmentReporters.current.get(s.id)}/></article>;
-      })}{detail.status!=='cancelled'&&<ShipmentCreateAssistant detail={detail} shipment={shipment} setShipment={setShipment} orderLines={detail.items} busy={shipmentBusyFor('create')||agreementDirty} dirty={factsDirty} onDirty={()=>setFactsDirty(true)} onInteractionStateChange={shipmentCreateReporter} onMutate={mutate} onCommitted={shipmentCreated} assistantOpenRequest={readyAssistantRequest} onAssistantOpenHandled={onAssistantOpenHandled}/>}</section>}
-      {tab==='collections'&&<section className="form-section"><h3>Cobros y devoluciones de dinero</h3>
+      })}{detail.status!=='cancelled'&&<ShipmentCreateAssistant detail={detail} shipment={shipment} setShipment={setShipment} orderLines={detail.items} busy={shipmentBusyFor('create')||agreementDirty} dirty={factsDirty} onDirty={()=>setFactsDirty(true)} onInteractionStateChange={shipmentCreateReporter} onMutate={mutate} onCommitted={shipmentCreated} assistantOpenRequest={readyAssistantRequest} onAssistantOpenHandled={onAssistantOpenHandled} section={shipmentCreateSection} summary={shipmentCreateSummary}/>}</section>}
+      {tab==='collections'&&<section className="form-section"><h3 tabIndex={-1} data-advisor-control="order-collection-summary">Cobros y devoluciones de dinero</h3>
         <p>Estado: {label(paymentStates,detail.paymentSummary?.status)}</p>
         <dl className="summary-values">{[['Cobrado neto','netCollectedMinor'],['Saldo del cliente','outstandingMinor'],['Saldo a favor / por reembolsar','refundDueMinor']].map(([title,key])=><div key={key}><dt>{title}</dt><dd>{displayMinor(detail.paymentSummary?.[key])}</dd></div>)}</dl>
-        <div className="admin-actions"><button type="button" data-financial-action className="button primary" disabled={detail.totalMinor===0} onClick={()=>openFinancial('collection')}>Registrar cobro</button><button type="button" className="button subtle" disabled={!detail.paymentSummary?.netCollectedMinor} onClick={()=>openFinancial('refund')}>Registrar reembolso</button>{detail.paymentSummary?.legacyReview&&<button type="button" className="button subtle" onClick={()=>openFinancial('resolve-legacy-payment')}>Conciliar pago histórico</button>}</div>
+        <div className="admin-actions">
+          <button type="button" data-financial-action data-advisor-control="order-business-collection" className="button primary" disabled={detail.totalMinor===0} onClick={()=>openFinancial('collection')}>Registrar cobro</button>
+          <button type="button" data-advisor-control="order-business-refund" className="button subtle" disabled={!detail.paymentSummary?.netCollectedMinor} onClick={()=>openFinancial('refund')}>Registrar reembolso</button>
+          {detail.paymentSummary?.legacyReview&&<button type="button" className="button subtle" onClick={()=>openFinancial('resolve-legacy-payment')}>Conciliar pago histórico</button>}
+        </div>
         <h4 className={styles.subheading}>Movimientos registrados</h4>
-        {!(detail.collections||[]).length&&<p className={styles.emptyPrompt}>No hay cobros ni reembolsos registrados en este pedido.</p>}
-        <ul className="order-financial-facts">{(detail.collections||[]).map(c=>{const reversed=(detail.collections||[]).some(other=>other.reversalOf===c.id),canReverse=['receipt','refund'].includes(c.kind)&&!c.reversalOf&&!reversed&&c.holder!=='legacy';return <li key={c.id}><span>{({receipt:'Cobro',refund:'Reembolso',reversal:'Reversión'}[c.kind])||c.kind} · {displayMinor(c.amountMinor)} · {c.occurredOn||'Fecha pendiente'} · {({business:'Negocio',platform:'Plataforma',legacy:'Histórico por conciliar'}[c.holder])||c.holder}{reversed?' · Revertido':''}</span>{canReverse&&<button type="button" className="button subtle" onClick={()=>openFinancial('document-reverse',{documentType:c.kind==='refund'?'refund':'collection',documentId:c.id,documentVersion:c.version??1})}>Revertir {c.kind==='refund'?'reembolso':'cobro'}</button>}</li>;})}</ul>
+        {!collections.length&&<p className={styles.emptyPrompt}>No hay cobros ni reembolsos registrados en este pedido.</p>}
+        {receiptCount>1&&<p tabIndex={-1} data-advisor-control="order-finance-reverse-collection">Hay varios cobros vigentes. Elige el cobro por importe, fecha y titular antes de revertirlo.</p>}
+        {refundCount>1&&<p tabIndex={-1} data-advisor-control="order-finance-reverse-refund">Hay varios reembolsos vigentes. Elige el reembolso por importe, fecha y titular antes de revertirlo.</p>}
+        <ul className="order-financial-facts">{collections.map(c=>{
+          const isRefund=c.kind==='refund', singular=isRefund?refundCount===1:receiptCount===1;
+          return <li key={c.id}><span>{({receipt:'Cobro',refund:'Reembolso',reversal:'Reversión'}[c.kind])||c.kind} · {displayMinor(c.amountMinor)} · {c.occurredOn||'Fecha pendiente'} · {({business:'Negocio',platform:'Plataforma',legacy:'Histórico por conciliar'}[c.holder])||c.holder}{reversedIds.has(c.id)?' · Revertido':''}</span>{canReverse(c)&&<button type="button" className="button subtle" data-advisor-control={singular?(isRefund?'order-finance-reverse-refund':'order-finance-reverse-collection'):undefined} onClick={()=>openFinancial('document-reverse',{documentType:isRefund?'refund':'collection',documentId:c.id,documentVersion:c.version??1})}>Revertir {isRefund?'reembolso':'cobro'}</button>}</li>;
+        })}</ul>
         <p className="hint">Los cobros son hechos separados del acuerdo. Un recaudo de plataforma no es dinero disponible en el banco.</p>
       </section>}
-      {tab==='profit'&&<section className="form-section"><h3>Acumulado del pedido</h3>
+      {tab==='profit'&&<section className="form-section"><h3 tabIndex={-1} data-advisor-control="order-profitability">Acumulado del pedido</h3>
         <p>Reconocimiento: {detail.recognition?.on||'Pendiente de fecha / regla'}</p><p>Costos históricos: {detail.items.every(l=>l.unitCostMinor!=null)?displayMinor(detail.items.reduce((s,l)=>s+l.unitCostMinor*l.quantity,0)):'Por completar'}</p>
         <p>Contribución: {detail.financialSummary?.complete&&detail.financialSummary?.contributionMinor!=null?displayMinor(detail.financialSummary.contributionMinor):'Por completar'}</p>
-        <div className="admin-actions"><button type="button" data-financial-action className="button primary" onClick={()=>openFinancial('return')}>Registrar devolución</button><button type="button" className="button subtle" onClick={()=>openFinancial('complete-costs')}>Completar o corregir costos</button><button type="button" className="button subtle" onClick={()=>openFinancial('expense')}>Registrar gasto del pedido</button></div>
+        <div className="admin-actions">
+          <button type="button" data-financial-action data-advisor-control="order-return-form" className="button primary" onClick={()=>openFinancial('return')}>Registrar devolución</button>
+          <button type="button" data-advisor-control="order-historical-costs" className="button subtle" onClick={()=>openFinancial('complete-costs')}>Completar o corregir costos</button>
+          <button type="button" data-advisor-control="order-expense-launch" className="button subtle" onClick={()=>openFinancial('expense')}>Registrar gasto del pedido</button>
+        </div>
         <h4 className={styles.subheading}>Devoluciones y cancelaciones registradas</h4>
         {!(detail.returns||[]).length&&<p className={styles.emptyPrompt}>No hay devoluciones ni cancelaciones registradas.</p>}
         <ul>{(detail.returns||[]).map(r=><li key={r.id}>{r.kind==='cancellation'?'Cancelación':'Devolución'} · {r.occurredOn} · {r.reason}</li>)}</ul>
@@ -324,6 +411,6 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
       </section>}
       </>}
     </div>
-    {!financialAction&&<footer className="editor-footer"><span role="status">{interactionBusy?'Guardando…':dirty?'Cambios sin guardar':number(detail)}</span><button type="button" className="button subtle" onClick={assistant.openAssistant} disabled={interactionBusy}>Ayúdame con este formulario</button><button type="button" className="button subtle" onClick={close} disabled={interactionBusy}>Cerrar</button>{tab==='agreement'&&<button className="button primary" type="submit" form="order-agreement" disabled={interactionBusy||Object.values(invalidMoney).some(Boolean)}>{detail?.id?'Guardar cambios':'Crear pedido'}<Icon name="check" size={16}/></button>}</footer>}
+    {!financialAction&&<footer className="editor-footer"><span role="status">{interactionBusy?'Guardando…':dirty?'Cambios sin guardar':number(detail)}</span><button type="button" className={`button subtle ${styles.footerHelp}`} onClick={assistant.openAssistant} disabled={interactionBusy}>Ayúdame con este formulario</button><button type="button" className="button subtle" onClick={close} disabled={interactionBusy}>Cerrar</button>{tab==='agreement'&&<button className="button primary" type="submit" form="order-agreement" data-advisor-control="order-save-agreement" disabled={interactionBusy||Object.values(invalidMoney).some(Boolean)}>{detail?.id?'Guardar cambios':'Crear pedido'}<Icon name="check" size={16}/></button>}</footer>}
   </dialog>;
 }

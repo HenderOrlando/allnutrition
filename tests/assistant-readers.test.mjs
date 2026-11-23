@@ -282,6 +282,41 @@ test('business resources retain real versions and agreements, filter inactive en
   assert.doesNotMatch(JSON.stringify(settings),/apiKey|password|csrf|ciphertext|sessionToken/);
 });
 
+test('automation reports only the saved heartbeat and distinguishes absence from current activity',async()=>{
+  let stored;
+  const fixture={store:{readSnapshot:fn=>fn({t:table=>table,db:{async get(sql){assert.match(sql,/FROM job_runs WHERE key='scheduler:heartbeat'/);return stored;}}})},session};
+  const query={resource:'automation'},empty=await readDomain(fixture,'business',query);
+  assert.equal(empty.records[0].status,'never');
+  assert.equal(empty.records[0].lastHeartbeatAt,null);
+  stored={state:'failed',updated_at:'2020-01-01T00:00:00.000Z',error_code:'PRIVATE_HEALTH'};
+  const error=await readDomain(fixture,'business',query);
+  assert.equal(error.records[0].status,'error');
+  assert.equal(error.evidence.find(item=>item.field==='status').coverage.state,'partial');
+  assert.doesNotMatch(JSON.stringify(error),/PRIVATE_HEALTH/);
+  await assert.rejects(()=>readDomain(fixture,'business',{...query,id:'arbitrary-job'}),/Filtro no permitido/);
+});
+
+test('Heka exposes saved configuration and the bounded local journal, never a remote check or private payload',async()=>{
+  const at='2026-11-02T12:00:00.000Z',ids=Array.from({length:21},()=>randomUUID());
+  const fixture={store:{readSnapshot:fn=>fn({t:table=>table,db:{
+    async get(sql){assert.match(sql,/FROM heka_api_settings/);return {environment:'test',ciphertext:'SECRET_HEKA',version:3};},
+    async all(sql){assert.match(sql,/FROM heka_api_mutations.*LIMIT 100/);return ids.map((id,index)=>({id,operation:'createGuide',environment:'test',state:index===20?'sending':'succeeded',guide_number:'GU-123',created_at:at,updated_at:at,lease_until:at,actor_id:'PRIVATE_HEKA',payload:'SECRET_HEKA'}));}
+  }})},session};
+  const status=await readDomain(fixture,'business',{resource:'heka-status'});
+  assert.deepEqual(status.records,[{configured:true,environment:'test'}]);
+  assert.equal(status.summary.permissionVerified,false);
+  const first=await readDomain(fixture,'business',{resource:'heka-journal',page:1});
+  const last=await readDomain(fixture,'business',{resource:'heka-journal',page:2});
+  assert.equal(first.records.length,20);
+  assert.equal(first.records[0].reference,'GU-123');
+  assert.deepEqual(last.records,[{id:ids[20],operation:'createGuide',environment:'test',state:'uncertain',updatedAt:at,reference:null}]);
+  assert.equal(last.evidence.find(item=>item.field==='state').coverage.state,'partial');
+  assert.doesNotMatch(JSON.stringify({status,first,last}),/SECRET_HEKA|PRIVATE_HEKA|ciphertext|payload/);
+  await assert.rejects(()=>readDomain(fixture,'business',{resource:'heka-status',id:ids[0]}),/Filtro no permitido/);
+  await assert.rejects(()=>readAssistantBusiness(fixture.store,session,{domain:'business',query:{resource:'heka-journal'},select:{fields:['payload']}}),/Campo no aplicable/);
+  await assert.rejects(()=>readAssistantBusiness(fixture.store,null,{domain:'business',query:{resource:'heka-journal'}}),{code:'ASSISTANT_AUTH_REQUIRED'});
+});
+
 test('imports expose config, bounded row diagnostics and batch metadata without workbook bytes',async t=>{
   const f=await businessFixture(t),batch=await createImportBatch(f.store,{requestId:randomUUID(),sourceId:f.source.id},f.actorId);
   const configured=await updateImportBatch(f.store,batch.id,{requestId:randomUUID(),version:batch.version,config:{formatVersion:2,sheets:[businessWorkbookProfile()]}},f.actorId);
@@ -316,6 +351,50 @@ test('persisted social analysis is pure even when stale; metric and business pro
   assert.doesNotMatch(JSON.stringify({projected,result,assisted}),/SYNTHETIC-IMPROVEMENTS-SECRET|accessToken|sessionEpoch|configurationFingerprint|remoteRefs|ciphertext/);
 });
 
+test('social operation resolves only its exact ID and returns status with no execution detail',async()=>{
+  const campaignId=randomUUID(), operationId=randomUUID(), at='2026-11-02T12:00:00.000Z';
+  const fixture={store:{readSnapshot:fn=>fn({t:table=>table,db:{async get(sql,[id]){
+    assert.match(sql,/FROM social_operations WHERE id=\?/);
+    if(id===operationId)return {id,campaign_id:campaignId,step:'publish',state:'sent',updated_at:at,data:JSON.stringify({actorId:'PRIVATE_OWNER',result:{payload:'SECRET_OP'}})};
+  }}})},session};
+  const query={kind:'operation',id:operationId},data=await readDomain(fixture,'advertising',query);
+  assert.deepEqual(data.records,[{id:operationId,campaignId,step:'publish',state:'sent',updatedAt:at}]);
+  assert.equal(data.evidence.find(item=>item.field==='state').coverage.state,'partial');
+  assert.doesNotMatch(JSON.stringify(data),/PRIVATE_OWNER|SECRET_OP|payload/);
+  await assert.rejects(()=>readDomain(fixture,'advertising',{kind:'operation',id:campaignId}),{status:404});
+  await assert.rejects(()=>readDomain(fixture,'advertising',{kind:'operation',id:'Publicación 1'}),/ID exacto/);
+  await assert.rejects(()=>readAssistantBusiness(fixture.store,session,{domain:'advertising',query,select:{fields:['result']}}),/Campo no aplicable/);
+});
+
+test('social learnings page within the same campaign and show only comparable evidence',async()=>{
+  const campaignId=randomUUID(),otherId=randomUUID(),at='2026-11-02T12:00:00.000Z';
+  const ids=Array.from({length:21},()=>randomUUID()).sort().reverse();
+  const fixture={store:{readSnapshot:fn=>fn({provider:'sqlite',t:table=>table,db:{
+    async get(sql,[id]){assert.match(sql,/FROM social_campaigns WHERE id=\?/);return [campaignId,otherId].includes(id)?{id}:undefined;},
+    async all(sql,args){assert.match(sql,/FROM social_recommendations.*LIMIT \?/);assert.deepEqual(args.slice(0,3),[campaignId,campaignId,campaignId]);assert.equal(args.at(-1),21);
+      const remaining=args.length===4?ids:ids.filter(id=>id<args.at(-2));
+      return remaining.map(id=>({id,campaign_id:campaignId,created_at:at,state:'evaluated',approval_data:'{"spec":{"mode":"paid"}}',data:JSON.stringify({
+        conclusion:'not_improved',successCriterion:{metric:'ctrLinkPercent',operator:'gt',target:1,text:'PRIVATE_LEARNING'},before:'SECRET_LEARNING',
+        evaluation:{complete:id!==ids[20],asOf:at,metric:'ctrLinkPercent',parentValue:1,childValue:0.8,beforePeriod:{start:'2026-10-20',end:'2026-10-25'},afterPeriod:{start:'2026-10-26',end:'2026-10-31'}}
+      })}));}
+  }})},session};
+  const query={kind:'learnings',campaignId},first=await readDomain(fixture,'advertising',query);
+  assert.equal(first.records.length,20);
+  assert.equal(first.records[0].evaluation.parentValue,1);
+  assert.deepEqual(first.records[0].criterion,{metric:'ctrLinkPercent',operator:'gt',target:1});
+  assert.ok(first.summary.nextCursor);
+  const last=await readDomain(fixture,'advertising',{...query,cursor:first.summary.nextCursor});
+  assert.equal(last.records.length,1);
+  assert.equal(last.records[0].id,ids[20]);
+  assert.equal(last.records[0].evaluation.complete,false);
+  assert.ok(!Object.hasOwn(last.records[0].evaluation,'parentValue'));
+  assert.equal(last.summary.nextCursor,null);
+  assert.doesNotMatch(JSON.stringify({first,last}),/PRIVATE_LEARNING|SECRET_LEARNING/);
+  await assert.rejects(()=>readDomain(fixture,'advertising',{...query,campaignId:otherId,cursor:first.summary.nextCursor}),/Cursor/);
+  await assert.rejects(()=>readDomain(fixture,'advertising',{...query,campaignId:randomUUID()}),{status:404});
+  await assert.rejects(()=>readDomain(fixture,'advertising',{kind:'learnings',campaignId:'nombre de campaña'}),/ID exacto/);
+});
+
 test('all curated guides resolve stable local step IDs and canonical destinations',async()=>{
   const rows=listAssistantGuideTasks();
   for(const task of rows) {
@@ -330,6 +409,9 @@ test('all curated guides resolve stable local step IDs and canonical destination
   const data=await readAll({readSnapshot:fn=>fn({})},session,{domain:'application',query:{taskId:'orders'}});
   assert.equal(data.records[0].steps[0].id,'orders:open');
   assert.ok(data.evidence.some(item=>item.entityId==='orders'&&item.field==='title'));
+  const heka=getAssistantGuide('heka');
+  assert.ok(heka.steps.some(step=>step.id==='heka:journal'&&step.text.includes('no repitas el envío')));
+  assert.match(getAssistantGuide('assistant').steps.find(step=>step.id==='assistant:credential').text,/Cuenta de Google para Gemini/);
 });
 
 test('evidence identity changes with version/cut, null is unknown, long strings disclose truncation',()=>{

@@ -45,11 +45,11 @@ export default function useDialog(ref, { busy = false, dirty = false, onClose, o
       scrollLocks.delete(lock);
       if (!scrollLocks.size) {
         document.body.style.overflow = originalOverflow;
-        if (pagePosition) window.scrollTo(...pagePosition);
+        if (pagePosition) window.scrollTo({ left: pagePosition[0], top: pagePosition[1], behavior: 'instant' });
         pagePosition = null;
       }
       for (const [ancestor, left, top] of priorScroll) {
-        if (ancestor.isConnected) { ancestor.scrollLeft = left; ancestor.scrollTop = top; }
+        if (ancestor.isConnected) ancestor.scrollTo({ left, top, behavior: 'instant' });
       }
       const priorDialog = prior?.closest?.('dialog');
       const openDialogs = [...document.querySelectorAll('dialog[open]')];

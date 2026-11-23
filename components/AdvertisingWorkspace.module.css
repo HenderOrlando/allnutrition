@@ -143,6 +143,10 @@ small.help { display: block; margin-top: 4px; font-weight: 400; overflow-wrap: a
 .dialogFooter { position: sticky; bottom: 0; padding: 12px 20px; border-block-start: 1px solid var(--admin-line); background: var(--admin-surface); }
 .dialogBody > fieldset { display: grid; gap: 12px; padding: 0; border: 0; margin: 0; }
 .dialogBody > fieldset > legend { margin-bottom: 12px; font-weight: 700; }
+.resultActionDialog[open] { display: flex; flex-direction: column; overflow: hidden; }
+.resultActionDialog > .dialogHeader { flex-shrink: 0; }
+.resultActionDialog > .dialogHeader h2 { margin-block: 0 8px; }
+.resultActionDialog > .dialogBody { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
 .browserDialog { width: min(1320px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow: auto; overflow-wrap: anywhere; }
 .browserViewport { width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--admin-line); border-radius: 8px; }
 .browserViewport canvas { display: block; width: 100%; height: auto; aspect-ratio: 8 / 5; touch-action: manipulation; }

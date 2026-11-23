@@ -1,10 +1,11 @@
 'use client';
-import { useAssistantForm } from './AssistantBridge';
+import { useAssistantForm, validateAdvisorTarget } from './AssistantBridge';
 import { assistantFormDescriptor } from '@/lib/assistant/forms.mjs';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Field } from './Fields';
 import useDialog from './useDialog';
 import Icon from './Icons';
+import ImportedData from './ImportedData';
 import { bogotaDate, businessDate } from '@/lib/business/dates.mjs';
 import { formatMoneyMinor, MAX_MONEY_MINOR } from '@/lib/business/money.mjs';
 import styles from './FinanceExperience.module.css';
@@ -17,7 +18,7 @@ const actionGuidance={
   'account-save':'Identifica la cuenta y su responsable. La apertura requiere un saldo confirmado, incluso cero; no se reescribe al editar.',
   expense:'Registra la obligación. Dejar pendiente no mueve dinero; registrar y pagar ahora añade la salida completa solo si lo eliges.',
   income:'Registra dinero recibido no ligado a una venta. Para cobrar una venta, abre el pedido.',
-  transfer:'Mueve dinero entre dos cuentas propias distintas. Registra salida y entrada, sin cambiar el total ni crear una venta o gasto.',
+  transfer:'Registra un traslado que ya ocurrió entre cuentas propias distintas. No envía dinero al banco ni cambia el total entre cuentas.',
   advance:'Registra una salida real para una persona; se aplicará a su remuneración sin volver a generar gasto.',
   'pay-expense':'Registra únicamente el dinero que salió: puedes pagar el saldo completo o un abono, con su cuenta y fecha reales.',
   'expense-recovery':'Registra el dinero recuperado del proveedor como una entrada. Agota el crédito sin reducir el gasto por segunda vez.',
@@ -51,6 +52,7 @@ const display=value=>value==null?'Sin dato':Number.isSafeInteger(value)&&Math.ab
 const active=rows=>{const reversed=new Set(rows.filter(r=>r.reversalOf).map(r=>r.reversalOf));return rows.filter(r=>!r.reversalOf&&!reversed.has(r.id));};
 const validMoney=value=>Number.isSafeInteger(value)&&Math.abs(value)<=MAX_MONEY_MINOR;
 const validDate=value=>{try{return businessDate(value);}catch{return null;}};
+export const hasImportedExpenseSupport=expense=>Boolean(expense?.sourceAsOf||expense?.importIdentity);
 function ActionMoneyField(props){
   const callback=useRef(props.onDraftInvalid);callback.current=props.onDraftInvalid;
   useEffect(()=>()=>callback.current(false),[]);
@@ -60,28 +62,29 @@ function remainingSettlement(settlement){
   const receipts=active(settlement?.receipts||[]);
   return (settlement?.lines||[]).map(line=>({collectionId:line.collectionId,label:line.label,grossMinor:line.grossMinor-receipts.reduce((s,r)=>s+(r.lines||[]).filter(l=>l.collectionId===line.collectionId).reduce((s,l)=>s+l.grossMinor,0),0),deductions:(line.deductions||[]).map(d=>({expenseId:d.expenseId,label:d.label,amountMinor:d.amountMinor-receipts.reduce((s,r)=>s+(r.lines||[]).filter(l=>l.collectionId===line.collectionId).flatMap(l=>l.deductions||[]).filter(x=>x.expenseId===d.expenseId).reduce((s,x)=>s+x.amountMinor,0),0)}))}));
 }
-function initial(action,context){
+function initial(action,context,guidedClosing,configuration){
   const {order,expense,settlement,payroll,account,closing,entry,shipment}=context,today=bogotaDate();
   const contextualAccount=account?.active&&(action!=='cash-close'||account.type==='cash')?account.id:null;
   return {orderId:expense?.id?expense.orderId:order?.id,version:action==='document-reverse'?(context.documentVersion??1):action==='link-shipment'?(shipment?.version??1):expense?.version||order?.version||settlement?.version||payroll?.version||closing?.version||account?.version||1,
-    occurredOn:today,effectiveOn:today,receivedOn:today,incurredOn:expense?.id?expense.incurredOn:context.expenseOnly?null:today,closingOn:today,
+    occurredOn:today,effectiveOn:today,receivedOn:today,incurredOn:expense?.id?expense.incurredOn:context.expenseOnly?null:today,closingOn:guidedClosing?guidedClosing.closingOn:today,
     amountMinor:action==='expense'?expense?.amountMinor??null:action==='collection'?order?.paymentSummary?.outstandingMinor??null:action==='refund'?order?.paymentSummary?.refundDueMinor??null:action==='pay-expense'?expense?.outstandingMinor??null:action==='expense-recovery'?expense?.creditMinor??null:action==='payroll-pay'?payroll?.amountToPayMinor??null:null,
-    accountId:action==='expense'?null:contextualAccount,expensePaymentMode:'pending',holder:'business',shipmentId:shipment?.id||expense?.shipmentId||null,method:'Transferencia',reference:'',reason:'',concept:action==='income'?'owner_funding':expense?.concept||'',description:'',supplier:expense?.supplier||'',category:expense?.category||'other',allowCredit:false,
+    accountId:action==='expense'?null:guidedClosing?guidedClosing.id:contextualAccount,expensePaymentMode:'pending',holder:'business',shipmentId:shipment?.id||expense?.shipmentId||null,method:'Transferencia',reference:'',reason:'',concept:action==='income'?'owner_funding':expense?.concept||'',description:'',supplier:expense?.supplier||'',category:expense?.category||'other',allowCredit:false,
     expenseId:expense?.id,sourceKey:expense?.sourceKey,reviewConfirmed:false,settlementId:settlement?.id,payrollId:payroll?.id,personId:payroll?.personId||expense?.personId||context.person?.id||null,startOn:payroll?.startOn||today.slice(0,8)+'01',endOnExclusive:payroll?.endOnExclusive||'',
     closingId:closing?.id,cashEntryId:entry?.id,documentId:context.documentId||entry?.sourceId||'',documentType:context.documentType||'collection',
-    fromAccountId:account?.active?account.id:null,toAccountId:null,countedMinor:null,shippingCreditMinor:0,mode:'opening_balance',
+    fromAccountId:account?.active?account.id:null,toAccountId:null,countedMinor:guidedClosing?guidedClosing.countedMinor:null,shippingCreditMinor:0,mode:'',
     inventoryOpeningIncluded:'',
     lines:action==='settlement-confirm'?remainingSettlement(settlement):action==='settlement-save'?(settlement?.lines||[]):action==='return'?(order?.items||[]).map(l=>({lineId:l.lineId,quantity:0,condition:'recoverable'})):[],
-    assignments:(order?.items||[]).map(l=>({lineId:l.lineId,quantity:order?.shipments?.length?0:l.quantity})),
+    assignments:(order?.items||[]).map(l=>({lineId:l.lineId,quantity:context.requireExplicitAssignments||order?.shipments?.length?0:l.quantity})),
     lineCosts:(order?.items||[]).map(l=>({lineId:l.lineId,selected:l.unitCostMinor==null,unitCostMinor:l.unitCostMinor,components:l.components?.map(c=>({productId:c.productId,unitCostMinor:c.unitCostMinor}))||[]})),
     receiptAmountMinor:null,refundAmountMinor:null,receiptOn:'',refundOn:'',sourceId:settlement?.sourceId||context.source?.id||null,externalKey:settlement?.externalId||'',reportedOn:settlement?.reportedOn||today,netMinor:settlement?.netMinor??null,
-    bonusMinor:0,discountMinor:0,name:account?.name||'',type:account?.type||'cash',active:account?.active??true,
+    bonusMinor:0,discountMinor:0,name:account?.name||'',type:account?.type||(configuration&&action==='account-save'?'':'cash'),active:account?.active??true,
     responsibleId:account?.responsibleId||context.person?.id||null,newPersonName:'',openingOn:account?.openingOn||today,
     openingBalanceMinor:null,minimumMinor:account?.minimumMinor??null,closingEnabled:account?.closingEnabled??false,
     closingTime:account?.closingTime??null,toleranceMinor:account?.toleranceMinor??0};
 }
-export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInteractionStateChange=()=>{},onAssistantRegistered,configuration=false}){
-  const [form,setForm]=useState(()=>initial(action,context)),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loaded,setLoaded]=useState(false),[accounts,setAccounts]=useState([]),[people,setPeople]=useState([]),[sources,setSources]=useState([]),[preview,setPreview]=useState(null),[invalid,setInvalid]=useState({});
+export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInteractionStateChange=()=>{},onAssistantRegistered,configuration=false,advisorTargetRequest,onAdvisorTargetHandled,accountOperation}){
+  const guidedClosing=advisorTargetRequest?.focus==='cash-close-form'?advisorTargetRequest.selection:null;
+  const [form,setForm]=useState(()=>initial(action,context,guidedClosing,configuration)),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loaded,setLoaded]=useState(false),[accounts,setAccounts]=useState([]),[people,setPeople]=useState([]),[sources,setSources]=useState([]),[preview,setPreview]=useState(null),[invalid,setInvalid]=useState({});
   const requestId=useRef(crypto.randomUUID()),baseline=useRef(JSON.stringify(form)),errorRef=useRef(null),sequence=useRef(0);
   const lastPayload=useRef(null),confirmRequest=useRef({key:null,id:crypto.randomUUID()}),preparedPayroll=useRef(null);
   const personRequestId=useRef(crypto.randomUUID());
@@ -90,35 +93,67 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const [selectionNotice,setSelectionNotice]=useState('');
   const [closingPreview,setClosingPreview]=useState({key:'',status:'idle',value:null,error:''}),[closingRetry,setClosingRetry]=useState(0);
   const closingSequence=useRef(0),closingErrorRef=useRef(null);
+  const formRef=useRef(null),reviewCheckbox=useRef(null),advisorAcknowledged=useRef(null);
+  const accountControlFocused=useRef(false);
+  const [acceptedClosingKey,setAcceptedClosingKey]=useState(null);
   const closingKey=JSON.stringify([form.accountId,form.closingOn]);
   const closingCurrent=closingPreview.key===closingKey&&closingPreview.status==='ready'?closingPreview.value:null;
   const countedValid=validMoney(form.countedMinor)&&form.countedMinor>=0&&!invalid.countedMinor;
   const differenceCandidate=closingCurrent&&countedValid?form.countedMinor-closingCurrent.expectedMinor:null;
   const closingDifference=validMoney(differenceCandidate)?differenceCandidate:null;
-  const closingReady=!!closingCurrent&&countedValid&&closingDifference!==null;
+  const closingReviewChanged=Boolean(guidedClosing&&closingCurrent&&
+    (closingRetry>0||closingCurrent.reviewKey!==guidedClosing.reviewKey||closingCurrent.expectedMinor!==guidedClosing.expectedMinor));
+  const closingNeedsReview=closingReviewChanged&&acceptedClosingKey!==closingCurrent.reviewKey;
+  const closingReady=!!closingCurrent&&countedValid&&closingDifference!==null&&!closingNeedsReview;
   const expenseEdit=action==='expense'&&!!context.expense?.id;
   const expenseOnly=action==='expense'&&context.expenseOnly===true;
-  const expenseReview=action==='expense'&&Boolean(context.expense?.sourceAsOf||context.expense?.importIdentity||expenseOnly&&!context.expense?.id&&context.shipment?.costObservations?.shipping_out?.sourceAsOf);
+  const expenseReview=action==='expense'&&(hasImportedExpenseSupport(context.expense)||expenseOnly&&!context.expense?.id&&Boolean(context.shipment?.costObservations?.shipping_out?.sourceAsOf));
   if(preview)preparedPayroll.current=preview;
   const payrollReview=preparedPayroll.current;
   const assistantAction=action==='payroll-prepare'&&payrollReview?'payroll-confirm':action;
   const assistantTarget=`business-action:${assistantAction}`;
-  const assistantAvailable=Boolean(assistantFormDescriptor(assistantTarget));
+  const nativeHandoff=Boolean(advisorTargetRequest||accountOperation);
+  const assistantAvailable=!nativeHandoff&&Boolean(assistantFormDescriptor(assistantTarget));
   const assistantEntity=action==='account-save'?context.account:action==='link-shipment'?context.shipment:['expense','pay-expense','expense-recovery'].includes(action)?context.expense:['settlement-save','settlement-confirm'].includes(action)?context.settlement:action==='payroll-prepare'&&payrollReview?{id:payrollReview.id||payrollReview.payrollId,version:payrollReview.version}:['payroll-prepare','payroll-confirm','payroll-pay'].includes(action)?context.payroll:action==='cash-reopen'?context.closing:action==='cash-reverse'?context.entry:action==='document-reverse'?{id:context.documentId||context.entry?.sourceId,version:context.documentVersion}:action==='cash-close'?context.account:['collection','refund','return','complete-costs','resolve-legacy-payment'].includes(action)?context.order:null;
   const assistantEntityId=assistantEntity?.id||null;
   const assistantVersion=assistantEntity?.version??null;
   const dirty=JSON.stringify(form)!==baseline.current||Object.values(invalid).some(Boolean);
   const assistantValues={...payload(),...(action==='payroll-prepare'&&payrollReview?{payrollId:payrollReview.id||payrollReview.payrollId,version:payrollReview.version??form.version}:{})};
-  const assistant=useAssistantForm({target:assistantTarget,entityId:assistantEntityId,recordVersion:assistantVersion,values:Object.fromEntries(Object.entries(assistantValues).filter(([key])=>!['allowCredit','reviewConfirmed','inventoryOpeningIncluded','active','closingEnabled','type'].includes(key))),dirty,busy:busy||!loaded||!assistantAvailable||Object.values(invalid).some(Boolean),referenceChoices:{accountId:accounts.filter(item=>item.active&&(action!=='cash-close'||item.type==='cash')).map(item=>item.id),fromAccountId:accounts.filter(item=>item.active).map(item=>item.id),toAccountId:accounts.filter(item=>item.active&&item.id!==form.fromAccountId).map(item=>item.id),personId:people.filter(item=>item.active||item.id===form.personId).map(item=>item.id),responsibleId:people.filter(item=>item.active||item.id===form.responsibleId).map(item=>item.id),sourceId:sources.filter(item=>item.active||item.id===form.sourceId).map(item=>item.id),shipmentId:(context.order?.shipments||[]).map(item=>item.id),lineId:(context.order?.items||[]).map(line=>line.lineId),assignments:Object.fromEntries((context.order?.items||[]).map(line=>[line.lineId,Number(line.quantity)]))},applyPatch:applyAssistantPatch});
+  const assistant=useAssistantForm({enabled:!nativeHandoff,target:assistantTarget,entityId:assistantEntityId,recordVersion:assistantVersion,values:Object.fromEntries(Object.entries(assistantValues).filter(([key])=>!['allowCredit','reviewConfirmed','inventoryOpeningIncluded','active','closingEnabled','type'].includes(key))),dirty,busy:busy||!loaded||!assistantAvailable||Object.values(invalid).some(Boolean),referenceChoices:{accountId:accounts.filter(item=>item.active&&(action!=='cash-close'||item.type==='cash')).map(item=>item.id),fromAccountId:accounts.filter(item=>item.active).map(item=>item.id),toAccountId:accounts.filter(item=>item.active&&item.id!==form.fromAccountId).map(item=>item.id),personId:people.filter(item=>item.active||item.id===form.personId).map(item=>item.id),responsibleId:people.filter(item=>item.active||item.id===form.responsibleId).map(item=>item.id),sourceId:sources.filter(item=>item.active||item.id===form.sourceId).map(item=>item.id),shipmentId:(context.order?.shipments||[]).map(item=>item.id),lineId:(context.order?.items||[]).map(line=>line.lineId),assignments:Object.fromEntries((context.order?.items||[]).map(line=>[line.lineId,Number(line.quantity)]))},applyPatch:applyAssistantPatch});
   useEffect(()=>{if(loaded&&assistantAvailable)onAssistantRegistered?.({formId:assistant.formId,target:assistantTarget,entityId:assistantEntityId,recordVersion:assistantVersion});},[loaded,assistantAvailable,assistant.formId,assistantTarget,assistantEntityId,assistantVersion,onAssistantRegistered]);
   const assistantBusy=assistantAvailable&&assistant.assistantBusy,interactionBusy=busy||assistantBusy;
+  const submitBlocked=interactionBusy||!loaded||Object.values(invalid).some(Boolean)||action==='cash-close'&&!closingReady
+    ||action==='link-shipment'&&(!context.order?.id||context.requireExplicitAssignments&&!form.assignments.some(line=>line.quantity>0))
+    ||Boolean(accountOperation&&form[accountOperation.field]===Boolean(context.account?.[accountOperation.field]));
   useEffect(()=>{onInteractionStateChange({busy:interactionBusy,dirty});},[interactionBusy,dirty,onInteractionStateChange]);
   useEffect(()=>()=>onInteractionStateChange({busy:false,dirty:false}),[onInteractionStateChange]);
   useEffect(()=>{if(error)errorRef.current?.focus();},[error]);
+  useEffect(()=>{
+    const id=advisorTargetRequest?.id;
+    if(!id||advisorAcknowledged.current===id)return;
+    const problem=error||(guidedClosing&&closingPreview.key===closingKey&&closingPreview.status==='error'?closingPreview.error:'');
+    if(problem){advisorAcknowledged.current=id;onAdvisorTargetHandled?.(id,problem);return;}
+    if(!loaded||guidedClosing&&!closingCurrent)return;
+    const field=guidedClosing?'countedMinor':!context.account?'name':context.account.active?'responsibleId':'active';
+    const control=closingNeedsReview?reviewCheckbox.current:formRef.current?.elements.namedItem(field);
+    control?.focus();
+    advisorAcknowledged.current=id;
+    onAdvisorTargetHandled?.(id,control&&document.activeElement===control?undefined:'No se pudo enfocar el control de Caja.');
+  },[advisorTargetRequest,closingKey,closingPreview,closingNeedsReview,closingCurrent,context.account,error,guidedClosing,loaded,onAdvisorTargetHandled]);
+  useEffect(()=>{
+    if(!loaded||!accountOperation||accountControlFocused.current)return;
+    const control=formRef.current?.elements.namedItem(accountOperation.field);
+    if(!control)return;
+    const disclosure=control.closest('details');
+    if(disclosure)disclosure.open=true;
+    control.focus({preventScroll:true});
+    control.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+    accountControlFocused.current=true;
+  },[loaded,accountOperation]);
   async function load(){
     const seq=++sequence.current;setError('');
     try {
-      const needsAccounts=!expenseOnly&&!['return','complete-costs','link-shipment','account-save'].includes(action),needsPeople=!expenseOnly&&['expense','advance','payroll-prepare','payroll-confirm','account-save'].includes(action),needsSources=action==='settlement-save';
+      const needsAccounts=!expenseOnly&&!guidedClosing&&!['return','complete-costs','link-shipment','account-save'].includes(action),needsPeople=!expenseOnly&&['expense','advance','payroll-prepare','payroll-confirm','account-save'].includes(action),needsSources=action==='settlement-save';
       const [accountData,settings,personData,sourceData,platformData]=await Promise.all([needsAccounts?api('/api/admin/business/accounts'):null,needsAccounts?api('/api/admin/business/settings'):null,needsPeople?api('/api/admin/business/people'):null,needsSources?api('/api/admin/business/sources'):null,needsSources?api('/api/admin/business/platforms'):null]);
       if(seq!==sequence.current)return;
       setAccounts(accountData?.records||[]);setPeople(personData?.records||[]);setSources((sourceData?.records||[]).map(source=>({...source,platformName:platformData?.records?.find(platform=>platform.id===source.platformId)?.name||'Plataforma no disponible'})));
@@ -140,17 +175,28 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
     if(!form.accountId||!validDate(form.closingOn)){setClosingPreview({key:closingKey,status:'idle',value:null,error:''});return;}
     setClosingPreview({key:closingKey,status:'loading',value:null,error:''});
     const params=new URLSearchParams({preview:'1',account:form.accountId,closingOn:form.closingOn});
+    if(guidedClosing)params.set('review','1');
     api('/api/admin/finance/closings?'+params).then(value=>{
-      if(current===closingSequence.current)setClosingPreview({key:closingKey,status:'ready',value,error:''});
+      if(current!==closingSequence.current)return;
+      if(guidedClosing&&(value?.accountId!==guidedClosing.id||value.closingOn!==guidedClosing.closingOn||
+          value.accountVersion!==guidedClosing.version||typeof value.reviewKey!=='string'||!/^[a-f0-9]{64}$/.test(value.reviewKey)||!validMoney(value.expectedMinor))){
+        throw new Error('La cuenta o la fecha cambiaron. Vuelve a consultar la tarea de Ali antes de cerrar.');
+      }
+      setClosingPreview({key:closingKey,status:'ready',value,error:''});
     }).catch(cause=>{
       if(current===closingSequence.current)setClosingPreview({key:closingKey,status:'error',value:null,error:cause.message});
     });
     return()=>{closingSequence.current++;};
-  },[action,api,closingKey,closingRetry]);
+  },[action,api,closingKey,closingRetry,guidedClosing]);
   useEffect(()=>{if(closingPreview.key===closingKey&&closingPreview.error)closingErrorRef.current?.focus();},[closingPreview.error,closingPreview.key,closingKey]);
+  function reloadClosing(){
+    closingSequence.current++;setAcceptedClosingKey(null);
+    setClosingPreview({key:closingKey,status:'loading',value:null,error:''});setClosingRetry(value=>value+1);
+  }
   const set=(key,value)=>{
     if(key==='sourceId'&&form.lines.length){setError('Quita los cobros vinculados antes de cambiar la cuenta de plataforma.');return;}
     if(action==='cash-close'&&['accountId','closingOn'].includes(key)){closingSequence.current++;setClosingPreview({key:'',status:'idle',value:null,error:''});}
+    if(guidedClosing&&key==='countedMinor'&&value!==form.countedMinor)setAcceptedClosingKey(null);
     if(key==='fromAccountId'&&value===form.toAccountId)setSelectionNotice('El destino coincidía con el nuevo origen. Elige otra cuenta de destino.');
     else if(key==='fromAccountId'||key==='toAccountId')setSelectionNotice('');
     setForm(old=>({...old,[key]:value,
@@ -162,6 +208,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   function applyAssistantPatch(patch){
     for(const [key,value] of Object.entries(patch)){
       if(['allowCredit','reviewConfirmed','inventoryOpeningIncluded','active','closingEnabled','type'].includes(key))continue;
+      if(action==='resolve-legacy-payment'&&key==='mode')continue;
       if(key==='lineCosts'){
         set(key,form.lineCosts.map(line=>{const proposed=value.find(item=>item.lineId===line.lineId);return proposed?{...line,...proposed,selected:true}:{...line,selected:false};}));
       }else if(key==='lines'&&['return','settlement-confirm'].includes(action)){
@@ -169,20 +216,20 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       }else set(key,value);
     }
   }
-  const input=(key,title,{required=false,type='text',nullable=false,disabled=false,description=''}={})=>{
+  const input=(key,title,{required=false,type='text',nullable=false,disabled=false,description='',advisorControl}={})=>{
     const id=`${fieldId}-${key}`,help=`${id}-help`;
-    return <div className="field" key={key}><label htmlFor={id}>{title}{required?' *':''}</label><input id={id} type={type} name={key} value={form[key]??''} required={required} disabled={disabled} aria-describedby={help} maxLength={key==='reason'?2000:300} onInvalid={e=>e.currentTarget.setAttribute('aria-invalid','true')} onInput={e=>{if(e.currentTarget.validity.valid)e.currentTarget.removeAttribute('aria-invalid');}} onChange={e=>set(key,nullable&&!e.target.value?null:e.target.value)}/><small id={help} className="muted field-description">{required?'Obligatorio.':'Opcional.'} {description}</small></div>;
+    return <div className="field" key={key}><label htmlFor={id}>{title}{required?' *':''}</label><input id={id} type={type} name={key} value={form[key]??''} required={required} disabled={disabled} data-advisor-control={advisorControl} aria-describedby={help} maxLength={key==='reason'?2000:300} onInvalid={e=>e.currentTarget.setAttribute('aria-invalid','true')} onInput={e=>{if(e.currentTarget.validity.valid)e.currentTarget.removeAttribute('aria-invalid');}} onChange={e=>set(key,nullable&&!e.target.value?null:e.target.value)}/><small id={help} className="muted field-description">{required?'Obligatorio.':'Opcional.'} {description}</small></div>;
   };
   const amount=(key,title,value=form[key],onChange=value=>set(key,value),{required=true,signed=false}={})=><ActionMoneyField key={key} field={{name:key,label:title,type:'moneyOptionalMinor',required,signed,description:`${required?'Obligatorio.':'Opcional.'} Pesos COP. Punto para miles, coma para centavos; vacío no es cero. No se redondean importes.`}} value={value} onChange={onChange} onDraftInvalid={value=>setInvalid(old=>({...old,[key]:value}))}/>;
-  const select=(key,title,options,{required=true,disabled=false,description=''}={})=>{
+  const select=(key,title,options,{required=true,disabled=false,description='',advisorControl}={})=>{
     const id=`${fieldId}-${key}`,help=`${id}-help`;
-    return <div className="field" key={key}><label htmlFor={id}>{title}{required?' *':''}</label><select id={id} name={key} value={form[key]??''} required={required} disabled={disabled} aria-describedby={help} onInvalid={e=>e.currentTarget.setAttribute('aria-invalid','true')} onChange={e=>{e.currentTarget.removeAttribute('aria-invalid');set(key,e.target.value||null);}}><option value="">Selecciona una opción</option>{options.map(([id,name])=><option value={id} key={id}>{name}</option>)}</select><small id={help} className="muted field-description">{required?'Obligatorio.':'Opcional.'} {description}</small></div>;
+    return <div className="field" key={key}><label htmlFor={id}>{title}{required?' *':''}</label><select id={id} name={key} value={form[key]??''} required={required} disabled={disabled} data-advisor-control={advisorControl} aria-describedby={help} onInvalid={e=>e.currentTarget.setAttribute('aria-invalid','true')} onChange={e=>{e.currentTarget.removeAttribute('aria-invalid');set(key,e.target.value||null);}}><option value="">Selecciona una opción</option>{options.map(([id,name])=><option value={id} key={id}>{name}</option>)}</select><small id={help} className="muted field-description">{required?'Obligatorio.':'Opcional.'} {description}</small></div>;
   };
   const accountSelect=(key='accountId',title='Cuenta',required=true)=>{
     const options=accounts.filter(a=>a.active&&(action!=='cash-close'||a.type==='cash')&&(key!=='toAccountId'||a.id!==form.fromAccountId));
     return <div>{select(key,title,options.map(a=>[a.id,a.name]),{required,description:key==='fromAccountId'?'Cuenta de donde salió el dinero.':key==='toAccountId'?'Cuenta propia distinta que recibió el dinero.':'Selecciona el lugar real donde entró o salió el dinero.'})}{!options.length&&<p className={styles.queryHelp}>{key==='toAccountId'&&accounts.some(a=>a.active)?'No hay otra cuenta activa distinta del origen.':'No hay cuentas activas elegibles.'} Cancela este formulario y crea o reactiva una cuenta en Configuración → Cuentas; después vuelve a registrar el hecho.</p>}</div>;
   };
-  const personSelect=(required=true)=><>{select('personId','Persona responsable',people.filter(p=>p.active||p.id===form.personId).map(p=>[p.id,p.name]),{required})}<details><summary>Crear persona sin acceso al panel</summary>{input('newPersonName','Nombre de la persona nueva')}<button type="button" className="button subtle" disabled={busy||!form.newPersonName.trim()} onClick={()=>createResponsible('personId')}>Crear persona</button></details></>;
+  const personSelect=(required=true)=><>{select('personId','Persona responsable',people.filter(p=>p.active||p.id===form.personId).map(p=>[p.id,p.name]),{required})}<details><summary data-advisor-control="finance-form-create-person">Crear persona sin acceso al panel</summary>{input('newPersonName','Nombre de la persona nueva')}<button type="button" className="button subtle" disabled={busy||!form.newPersonName.trim()} onClick={()=>createResponsible('personId')}>Crear persona</button></details></>;
   const reason=()=>input('reason','Motivo',{required:true});
   async function createResponsible(key='responsibleId'){
     if(busy||!form.newPersonName.trim())return;setBusy(true);setError('');
@@ -240,11 +287,31 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
     }catch(cause){setError(cause.message);}
   }
   async function submit(event){
-    event.preventDefault();if(busy||assistantBusy||!loaded||Object.values(invalid).some(Boolean)||action==='cash-close'&&!closingReady||(action==='link-shipment'&&!context.order?.id))return;
+    event.preventDefault();if(submitBlocked)return;
     const accountEdit=action==='account-save'&&context.account?.id;
     const path=action==='account-save'?'/api/admin/business/accounts'+(accountEdit?'/'+encodeURIComponent(context.account.id):''):'/api/admin/business/actions/'+action;
-    const body=payload(),key=JSON.stringify({...body,requestId:undefined});if(lastPayload.current!==null&&lastPayload.current!==key)requestId.current=crypto.randomUUID();lastPayload.current=key;body.requestId=requestId.current;
-    const save=async()=>{setBusy(true);try{return await api(path,{method:accountEdit?'PUT':'POST',body:JSON.stringify(body)});}catch(cause){setError(cause.message);return false;}finally{setBusy(false);}};
+    const body=payload();
+    if(guidedClosing){
+      const {accountVersion,expectedMinor,reviewKey}=closingCurrent;
+      body.cashClosingReview={accountVersion,expectedMinor,reviewKey};
+    }
+    const key=JSON.stringify({...body,requestId:undefined});if(lastPayload.current!==null&&lastPayload.current!==key)requestId.current=crypto.randomUUID();lastPayload.current=key;body.requestId=requestId.current;
+    const save=async()=>{
+      setBusy(true);setError('');
+      try{return await api(path,{method:accountEdit?'PUT':'POST',body:JSON.stringify(body)});}
+      catch(cause){
+        if(guidedClosing&&cause.status===409){
+          closingSequence.current++;setAcceptedClosingKey(null);
+          setClosingPreview({key:closingKey,status:'error',value:null,error:cause.message});
+        }else setError(cause.message);
+        return false;
+      }finally{setBusy(false);}
+    };
+    if(nativeHandoff){
+      const response=await save();
+      if(response!==false)await onSaved(response);
+      return;
+    }
     if(action==='payroll-prepare'){
       const response=await save();if(response!==false)setPreview(response);
       return;
@@ -261,6 +328,10 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const order=context.order;
   const settlementAmountsValid=form.lines.every(l=>validMoney(l.grossMinor)&&(l.deductions||[]).every(d=>validMoney(d.amountMinor)))&&!Object.values(invalid).some(Boolean);
   const net=settlementAmountsValid?form.lines.reduce((sum,l)=>sum+l.grossMinor-(l.deductions||[]).reduce((s,d)=>s+d.amountMinor,0),0):null;
+  const declaration=action==='settlement-save', correctingDeclaration=declaration&&Boolean(context.settlement?.id);
+  const singleCollection=form.lines.length===1;
+  const deductionCount=declaration?form.lines.reduce((count,line)=>count+line.deductions.length,0):0;
+  const reversalReceipt=context.settlementReceipt;
   const payingExpense=action==='expense'&&!expenseOnly&&!expenseEdit&&form.expensePaymentMode==='pay_now';
   const amountValid=validMoney(form.amountMinor)&&!invalid.amountMinor;
   const reviewEffect=action==='expense'?(expenseEdit?'Corrige la obligación sin mover dinero ni repetir pagos; los sobrepagos quedan como crédito.':payingExpense?'Registra la obligación y el pago completo: sale dinero de la cuenta elegida.':'Registra el gasto pendiente; no se mueve dinero.'):{
@@ -268,7 +339,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   }[action];
   const reviewAccount=id=>accounts.find(a=>a.id===id)?.name;
   const reviewDate=action==='expense'&&!payingExpense?form.incurredOn:action==='settlement-save'?form.reportedOn:action==='settlement-confirm'?form.receivedOn:form.effectiveOn;
-  return <form onSubmit={submit} aria-busy={interactionBusy} className={`business-action-form ${styles.actionForm}`}>
+  return <form ref={formRef} onSubmit={submit} onKeyDown={event=>{if(event.key==='Enter'&&event.target.name==='newPersonName'&&!event.nativeEvent.isComposing)event.preventDefault();}} aria-busy={interactionBusy} className={`business-action-form ${styles.actionForm}`}>
     {expenseOnly&&<h3>{context.expense?.id?'Corregir':'Registrar'} flete / costo de envío</h3>}
     {error&&<div ref={errorRef} tabIndex={-1} className="error" role="alert">{error}{!loaded&&<button type="button" className="text-button" onClick={load}>Reintentar</button>}</div>}
     {!loaded&&!error&&<p role="status">Cargando datos de la acción…</p>}
@@ -276,20 +347,21 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       {actionGuidance[action]&&<p className={styles.formGuide}>{expenseOnly?'Registra solo el costo de la transportadora. No cambia el total del cliente ni mueve caja. Los pagos anteriores se conservan y se gestionan por separado.':action==='expense'&&context.expense?.id?'Corrige el gasto con un motivo. Sus pagos anteriores se conservan; un sobrepago permanece como crédito para recuperar.':actionGuidance[action]}</p>}
       {actionExamples[action]&&<details><summary>Ver ejemplo de esta operación</summary><p><strong>Ejemplo ficticio:</strong> {actionExamples[action]}</p></details>}
       {action==='account-save'&&<>
+        {accountOperation&&<p className="hint"><strong>{context.account?.name}:</strong> {accountOperation.instruction}</p>}
         <div className="product-form-grid">{input('name','Nombre de cuenta',{required:true})}
           {context.account?.id?<p className="hint">Tipo: {{cash:'Caja en efectivo',bank:'Banco',wallet:'Billetera'}[form.type]}. La apertura y su saldo inicial no se reescriben.</p>:select('type','Tipo de cuenta',[['cash','Caja en efectivo'],['bank','Banco'],['wallet','Billetera']])}
           {select('responsibleId','Persona responsable',people.filter(p=>p.active||p.id===form.responsibleId).map(p=>[p.id,p.name]))}
           {input('openingOn','Fecha de apertura',{required:true,type:'date',disabled:Boolean(context.account?.id)})}
           {!context.account?.id&&amount('openingBalanceMinor','Saldo inicial confirmado (COP)',form.openingBalanceMinor,value=>set('openingBalanceMinor',value),{signed:true})}
         </div>
-        <details><summary>Crear responsable sin acceso al panel</summary><p className="hint">No requiere contraseña ni correo.</p>{input('newPersonName','Nombre del responsable nuevo')}<button type="button" className="button subtle" disabled={busy||!form.newPersonName.trim()} onClick={()=>createResponsible()}>Crear responsable</button></details>
-        <details><summary>Mínimo y cierre de efectivo</summary>
+        <details><summary data-advisor-control="finance-form-create-person">Crear responsable sin acceso al panel</summary><p className="hint">No requiere contraseña ni correo.</p>{input('newPersonName','Nombre del responsable nuevo')}<button type="button" className="button subtle" disabled={busy||!form.newPersonName.trim()} onClick={()=>createResponsible()}>Crear responsable</button></details>
+        <details data-advisor-disclosure><summary>Mínimo y cierre de efectivo</summary>
           {amount('minimumMinor','Saldo mínimo opcional (COP)',form.minimumMinor,value=>set('minimumMinor',value),{required:false,signed:true})}
-          {form.type==='cash'&&<><label className="checkbox-field"><input type="checkbox" checked={form.closingEnabled} onChange={e=>set('closingEnabled',e.target.checked)}/>Exigir cierre diario de esta caja</label>
+          {form.type==='cash'&&<><label className="checkbox-field"><input type="checkbox" name="closingEnabled" data-advisor-control="business-account-closing-checkbox" checked={form.closingEnabled} onChange={e=>set('closingEnabled',e.target.checked)}/>Exigir cierre diario de esta caja</label>
             {form.closingEnabled&&<div className="product-form-grid">{input('closingTime','Hora de cierre en Bogotá',{required:true,type:'time',nullable:true})}{amount('toleranceMinor','Tolerancia de diferencia (COP)')}</div>}
           </>}
         </details>
-        {context.account?.id&&<label className="checkbox-field"><input type="checkbox" checked={form.active} onChange={e=>set('active',e.target.checked)}/>Cuenta activa para nuevos movimientos</label>}
+        {context.account?.id&&<label className="checkbox-field"><input type="checkbox" name="active" data-advisor-control="business-account-active-checkbox" checked={form.active} onChange={e=>set('active',e.target.checked)}/>Cuenta activa para nuevos movimientos</label>}
       </>}
       {(action==='collection'||action==='refund')&&<>
         <p className="hint">{action==='collection'?'Saldo del cliente: '+display(order?.paymentSummary?.outstandingMinor):'Saldo a favor: '+display(order?.paymentSummary?.refundDueMinor)}. El recaudo en plataforma no entra en la cuenta bancaria hasta confirmar una liquidación.</p>
@@ -297,11 +369,11 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
           {form.holder==='business'?accountSelect():select('shipmentId','Envío de plataforma',(order?.shipments||[]).filter(s=>s.sourceId).map(s=>[s.id,s.tracking||s.id]))}
           {input('method','Método',{required:true})}{input('reference','Referencia',{required:true})}
         </div>
-        {action==='refund'?reason():<details><summary>Saldo a favor explícito</summary><label className="checkbox-field"><input type="checkbox" checked={form.allowCredit} onChange={e=>set('allowCredit',e.target.checked)}/>Permitir cobro superior al saldo, dejando saldo a favor visible</label></details>}
+        {action==='refund'?reason():<details data-advisor-disclosure><summary>Saldo a favor explícito</summary><label className="checkbox-field"><input type="checkbox" data-advisor-control="order-collection-allow-credit" checked={form.allowCredit} onChange={e=>set('allowCredit',e.target.checked)}/>Permitir cobro superior al saldo, dejando saldo a favor visible</label></details>}
       </>}
       {action==='return'&&<>
         {input('occurredOn','Fecha de devolución',{required:true,type:'date'})}{reason()}
-        {order?.inventoryOpening&&(!form.occurredOn||form.occurredOn===order.inventoryOpening.on)&&<label className="field">Relación con el conteo físico del {order.inventoryOpening.on}<select required value={form.inventoryOpeningIncluded} onChange={e=>set('inventoryOpeningIncluded',e.target.value)}><option value="">Confirma cuándo ocurrió</option><option value="false">Posterior al conteo</option><option value="true">Ya estaba reflejado en el conteo</option></select></label>}
+        {order?.inventoryOpening&&(!form.occurredOn||form.occurredOn===order.inventoryOpening.on)&&<label className="field">Relación con el conteo físico del {order.inventoryOpening.on}<select data-advisor-control="order-return-opening" required value={form.inventoryOpeningIncluded} onChange={e=>set('inventoryOpeningIncluded',e.target.value)}><option value="">Confirma cuándo ocurrió</option><option value="false">Posterior al conteo</option><option value="true">Ya estaba reflejado en el conteo</option></select></label>}
         {(order?.items||[]).map(line=>{const item=form.lines.find(l=>l.lineId===line.lineId);return <section className="form-section" key={line.lineId}><h4>{line.title}</h4><p>Comprado: {line.quantity}. El servidor calcula el crédito acumulado y evita devolver dos veces las unidades.</p><div className="product-form-grid"><label className="field">Cantidad a devolver<input type="number" min={0} max={line.quantity} step={1} value={item.quantity} onChange={e=>set('lines',form.lines.map(l=>l.lineId===line.lineId?{...l,quantity:Number(e.target.value)}:l))}/></label><label className="field">Condición<select value={item.condition} onChange={e=>set('lines',form.lines.map(l=>l.lineId===line.lineId?{...l,condition:e.target.value}:l))}><option value="recoverable">Mercancía recuperable</option><option value="non_recoverable">No recuperable</option></select></label></div></section>;})}
         {amount('shippingCreditMinor','Flete cobrado que se acredita (COP)')}<p className="hint">La devolución comercial no mueve caja. Registra el reembolso por separado cuando ocurra.</p>
       </>}
@@ -311,7 +383,10 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       </>}
       {action==='resolve-legacy-payment'&&<>
         <p className="hint">Conserva la historia sin inventar un depósito por el antiguo estado Pagado. Elige una sola alternativa.</p>
-        {select('mode','Conciliación',[['opening_balance','Ya incluido en saldo inicial'],['cash_movement','Registrar movimiento real ahora']])}
+        <fieldset className="field"><legend>Cómo conciliar este pago</legend>
+          <label className="checkbox-field"><input type="radio" name="mode" value="opening_balance" required checked={form.mode==='opening_balance'} data-advisor-control="order-legacy-opening" onChange={event=>set('mode',event.target.value)}/>Ya incluido en saldo inicial, sin nuevo movimiento de caja</label>
+          <label className="checkbox-field"><input type="radio" name="mode" value="cash_movement" required checked={form.mode==='cash_movement'} data-advisor-control="order-legacy-cash" onChange={event=>set('mode',event.target.value)}/>Registrar un movimiento real en la cuenta elegida</label>
+        </fieldset>
         {form.mode==='cash_movement'&&<>{input('occurredOn','Fecha real del movimiento',{type:'date',required:true})}{accountSelect()}{input('method','Método',{required:true})}{input('reference','Referencia',{required:true})}</>}{reason()}
         {order?.legacyFinancialReview?.reason==='ambiguous_refund'&&<div className="product-form-grid">{amount('receiptAmountMinor','Cobro histórico comprobado (COP)')}{amount('refundAmountMinor','Reembolso histórico comprobado (COP)')}{input('receiptOn','Fecha del cobro histórico',{required:true,type:'date'})}{input('refundOn','Fecha del reembolso histórico',{required:true,type:'date'})}</div>}
       </>}
@@ -319,8 +394,9 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         {expenseEdit&&!order?.shipments?.length&&<p>Envío vinculado: {form.shipmentId?'Se conserva el envío ya asociado; consulta su identificación desde el pedido.':'Sin envío asociado.'} La categoría y el envío no se cambian al corregir.</p>}
         {action==='expense'&&<fieldset className={styles.fieldGroup}><legend>Datos del gasto</legend><div className="product-form-grid">{select('category','Categoría',['advertising','operating','other','shipping_out','shipping_return','shipping_insurance','platform_fee'].map(id=>[id,expenseCategoryLabels[id]]),{disabled:expenseOnly||Boolean(context.expense?.id)})}{input('concept','Concepto',{required:true})}{input('supplier','Proveedor (opcional)')}{input('incurredOn','Fecha del gasto',{type:'date',nullable:true})}{Boolean(order?.shipments?.length)&&select('shipmentId','Envío vinculado',order.shipments.map(s=>[s.id,s.tracking||'Entrega local']),{required:false,disabled:expenseOnly||Boolean(context.expense?.id)})}</div></fieldset>}
         {action==='expense'&&(context.expense?.id||expenseReview)&&<>{reason()}<p>La corrección conserva pagos anteriores; un sobrepago queda como crédito para recuperar, no como ingreso ficticio.</p></>}
-        {expenseReview&&<label className="checkbox-field"><input type="checkbox" name="reviewConfirmed" required checked={form.reviewConfirmed} onChange={event=>set('reviewConfirmed',event.target.checked)}/>Confirmo la corrección del costo importado después de revisar su soporte.</label>}
-        {action==='expense'&&!context.expense?.id&&!expenseOnly&&<details><summary>Responsable opcional del gasto</summary>{personSelect(false)}</details>}
+        {expenseReview&&context.expense?.importedFields?.length>0&&<details><summary>Consultar datos de origen</summary><ImportedData record={context.expense} title="Datos importados del gasto"/></details>}
+        {expenseReview&&<label className="checkbox-field"><input type="checkbox" name="reviewConfirmed" data-advisor-control="cash-expense-confirm-import-review" data-cash-expense-review-id={context.expense?.id} required checked={form.reviewConfirmed} onChange={event=>set('reviewConfirmed',event.target.checked)}/>Confirmo la corrección del costo importado después de revisar su soporte.</label>}
+        {action==='expense'&&!context.expense?.id&&!expenseOnly&&<details data-advisor-disclosure><summary>Responsable opcional del gasto</summary>{personSelect(false)}</details>}
         {action==='income'&&<>{select('concept','Concepto',['owner_funding','other_non_sale'].map(id=>[id,cashMovementLabels[id]]))}{input('description','Descripción',{required:true})}<p className="hint">Este ingreso aumenta caja, nunca ventas.</p></>}
         {action==='advance'&&<>{personSelect()}{input('concept','Concepto del anticipo',{required:true})}<p className="hint">El anticipo reduce deuda de sueldo al aplicarse; no vuelve a generar gasto.</p></>}
         <fieldset className={styles.fieldGroup}><legend>{expenseOnly?'Costo del envío':action==='expense'?'Importe del gasto':'Movimiento de dinero'}</legend><div className="product-form-grid">
@@ -329,9 +405,9 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         </div>{selectionNotice&&<p role="status">{selectionNotice}</p>}</fieldset>
         {action==='expense'&&!expenseOnly&&!expenseEdit&&<fieldset className={styles.fieldGroup} aria-describedby={`${fieldId}-expense-payment-help`}><legend>¿Ya salió el dinero?</legend>
           <div className={styles.paymentChoices}>
-            <label htmlFor={`${fieldId}-pending`}><input id={`${fieldId}-pending`} type="radio" name="expensePaymentMode" value="pending" checked={form.expensePaymentMode==='pending'} onChange={()=>set('expensePaymentMode','pending')}/>Dejar pendiente</label>
-            <label htmlFor={`${fieldId}-pay-now`}><input id={`${fieldId}-pay-now`} type="radio" name="expensePaymentMode" value="pay_now" checked={form.expensePaymentMode==='pay_now'} disabled={!accounts.some(a=>a.active)} onChange={()=>set('expensePaymentMode','pay_now')}/>Registrar y pagar ahora</label>
-          </div><p id={`${fieldId}-expense-payment-help`} className={styles.queryHelp}>Dejar pendiente no mueve dinero. Pagar ahora registra el pago completo; para un abono, guarda pendiente y después usa «Pagar saldo o abono». La fecha del gasto y la del pago son hechos distintos.</p>
+            <label htmlFor={`${fieldId}-pending`}><input id={`${fieldId}-pending`} type="radio" name="expensePaymentMode" value="pending" data-advisor-control={order?'order-expense-pending':undefined} checked={form.expensePaymentMode==='pending'} onChange={()=>set('expensePaymentMode','pending')}/>Dejar pendiente</label>
+            <label htmlFor={`${fieldId}-pay-now`}><input id={`${fieldId}-pay-now`} type="radio" name="expensePaymentMode" value="pay_now" data-advisor-control={order?'order-expense-pay-now':undefined} checked={form.expensePaymentMode==='pay_now'} disabled={!accounts.some(a=>a.active)} onChange={()=>set('expensePaymentMode','pay_now')}/>Registrar y pagar ahora</label>
+          </div><p id={`${fieldId}-expense-payment-help`} className={styles.queryHelp}>Dejar pendiente no mueve dinero. Pagar ahora registra en Caja un pago completo que ya hiciste; no se envía dinero al banco ni al proveedor. Para un abono, guarda pendiente y después usa «Pagar saldo o abono». La fecha del gasto y la del pago son hechos distintos.</p>
           {!accounts.some(a=>a.active)&&<p>No hay cuenta activa para pagar. Puedes guardar pendiente, o cancelar y crear/reactivar una cuenta en Configuración → Cuentas.</p>}
           {payingExpense&&<div className="product-form-grid">{accountSelect('accountId','Cuenta de pago')}{input('effectiveOn','Fecha del pago',{required:true,type:'date',description:'Fecha real en que salió el dinero.'})}{input('reference','Referencia',{description:'Soporte del pago completo; opcional.'})}</div>}
         </fieldset>}
@@ -340,39 +416,55 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         {action==='pay-expense'&&<p>Saldo del gasto: {display(context.expense?.outstandingMinor)}.</p>}
       </>}
       {action==='cash-close'&&<>
-        <section className={styles.closingStep}><h3>1. Cuenta y fecha</h3><div className="product-form-grid">{accountSelect()}{input('closingOn','Fecha de cierre',{required:true,type:'date',description:'El esperado se consulta para esta cuenta al terminar la fecha elegida, en Bogotá.'})}</div></section>
+        <section className={styles.closingStep}><h3>1. Cuenta y fecha</h3><div className="product-form-grid">{guidedClosing?select('accountId','Cuenta',[[context.account.id,context.account.name]],{disabled:true,description:'Es la caja que elegiste en la tarea.'}):accountSelect()}{input('closingOn','Fecha de cierre',{required:true,type:'date',disabled:Boolean(guidedClosing),description:'El esperado se consulta para esta cuenta al terminar la fecha elegida, en Bogotá.'})}</div></section>
         <section className={styles.closingStep}><h3>2. Dinero contado</h3>{amount('countedMinor','Dinero contado (COP)')}<p className={styles.queryHelp}>Cuenta el efectivo real. Si no hay efectivo, escribe 0; dejar vacío no equivale a cero.</p></section>
         <section className={`${styles.closingStep} ${styles.closingComparison}`} aria-busy={!!form.accountId&&!!validDate(form.closingOn)&&closingPreview.status!=='error'&&!closingCurrent}>
           <h3>3. Comparación</h3>
-          {!form.accountId||!validDate(form.closingOn)?<p>Selecciona cuenta y fecha para consultar el saldo esperado.</p>:closingPreview.key===closingKey&&closingPreview.status==='error'?<div role="alert" tabIndex={-1} ref={closingErrorRef} className="error"><p>{closingPreview.error}</p><button type="button" className="button subtle" onClick={()=>{closingSequence.current++;setClosingPreview({key:closingKey,status:'loading',value:null,error:''});setClosingRetry(value=>value+1);}}>Reintentar consulta</button><p>Conserva tu conteo: puedes corregir cuenta o fecha sin registrar ningún cierre.</p></div>:!closingCurrent?<p role="status">Consultando saldo esperado para esta cuenta y fecha…</p>:<>
+          {guidedClosing&&<p className={styles.queryHelp}>Todos los importes están en pesos colombianos (COP).</p>}
+          {!form.accountId||!validDate(form.closingOn)?<p>Selecciona cuenta y fecha para consultar el saldo esperado.</p>:closingPreview.key===closingKey&&closingPreview.status==='error'?<div role="alert" tabIndex={-1} ref={closingErrorRef} className="error"><p>{closingPreview.error}</p><button type="button" className="button subtle" onClick={reloadClosing}>{guidedClosing?'Consultar nueva comparación':'Reintentar consulta'}</button><p>{guidedClosing?'Tu conteo se conserva. Si ya existe un cierre, vuelve a consultar la tarea para ver el registro.':'Conserva tu conteo: puedes corregir cuenta o fecha sin registrar ningún cierre.'}</p></div>:!closingCurrent?<p role="status">Consultando saldo esperado para esta cuenta y fecha…</p>:<>
             <dl className={styles.closingAmounts}><div><dt>Esperado al {closingCurrent.closingOn}</dt><dd>{display(closingCurrent.expectedMinor)}</dd></div><div><dt>Contado</dt><dd>{countedValid?display(form.countedMinor):'Escribe el conteo real'}</dd></div></dl>
             <p role="status" className={styles.closingDifference}>{closingDifference===null?(countedValid?'La diferencia excede el límite monetario; revisa los importes.':'La diferencia se calcula al escribir un conteo válido.'):closingDifference<0?'Faltante de '+display(-closingDifference):closingDifference>0?'Sobrante de '+display(closingDifference):'Sin diferencia'}</p>
+            {closingReviewChanged&&<div><p role="status">La comparación se actualizó. Revisa el esperado, tu conteo y la diferencia antes de confirmar.</p><label className="checkbox-field"><input type="checkbox" ref={reviewCheckbox} checked={!closingNeedsReview} onChange={event=>setAcceptedClosingKey(event.target.checked?closingCurrent.reviewKey:null)}/>He revisado la nueva comparación</label></div>}
           </>}
           <h4>Al guardar</h4><p>El saldo se vuelve a comprobar al guardar. Cerrar conserva la diferencia, no ajusta el dinero. Las fechas alcanzadas quedan bloqueadas hasta reabrir con motivo.</p>
         </section>
       </>}
       {action==='cash-reopen'&&<><p>Reabrir conserva el cierre original. El siguiente cierre tendrá una revisión nueva.</p>{reason()}</>}
+      {action==='cash-reverse'&&context.entry&&<section className={styles.fieldGroup} aria-label="Movimiento original">
+        <h3>Movimiento original</h3>
+        <p>{reviewAccount(context.entry.accountId)||'Cuenta no disponible'} · {context.entry.effectiveOn} · {display(context.entry.amountMinor)} · {context.entry.reference||'Sin referencia'}</p>
+        {context.entry.kind==='transfer'&&<p>Se contrarregistran las dos caras del traslado, no solo la cuenta que estás viendo.</p>}
+      </section>}
+      {action==='document-reverse'&&context.settlement&&<div className={styles.fieldGroup}>
+        <p>Declaración {context.settlement.externalId||'sin referencia'} · {context.settlement.reportedOn||'Fecha declarada desconocida'}</p>
+        {reversalReceipt&&<p>Recibo {reversalReceipt.externalId||'sin referencia'} · {reversalReceipt.receivedOn} · Neto: {display(reversalReceipt.netMinor)}</p>}
+      </div>}
       {['cash-reverse','document-reverse'].includes(action)&&<><p className="hint">La reversión añade el movimiento contrario y conserva el original. Las dependencias activas deben deshacerse primero; no se borra una venta.</p>{input('effectiveOn','Fecha de reversión',{required:true,type:'date'})}{reason()}</>}
       {action==='settlement-confirm'&&<>
+        <p>Declaración {context.settlement?.externalId||'sin referencia'} · {context.settlement?.reportedOn||'Fecha declarada desconocida'}</p>
         <p>Declarado neto: {display(context.settlement?.netMinor)}. Confirma solo el dinero efectivamente recibido o retenido, no el estado de entrega.</p>
         <div className="product-form-grid">{input('receivedOn','Fecha de recepción',{required:true,type:'date'})}{accountSelect('accountId','Cuenta de recepción',net!==0)}{input('externalKey','Referencia única del recibo')}</div>
         {form.lines.map((line,index)=><section className="form-section" key={line.collectionId}><h4>{line.label||`Cobro vinculado ${index+1}`}</h4>{amount('gross-'+index,'Bruto asignado (COP)',line.grossMinor,value=>set('lines',form.lines.map((l,i)=>i===index?{...l,grossMinor:value}:l)))}{line.deductions.map((deduction,j)=>amount('deduction-'+index+'-'+j,`${deduction.label||'Retención / recuperación '+(j+1)} (COP)`,deduction.amountMinor,value=>set('lines',form.lines.map((l,i)=>i===index?{...l,deductions:l.deductions.map((d,k)=>k===j?{...d,amountMinor:value}:d)}:l)),{signed:true}))}</section>)}
         <p><strong>Neto de este recibo: {display(net)}</strong></p><p className="hint">Bruto menos retenciones = neto. Neto cero no genera movimiento; neto negativo registra salida real. Retenciones pagan los gastos existentes, no crean otro gasto.</p>
       </>}
-      {action==='settlement-save'&&<>
+      {declaration&&<>
         {!sources.some(s=>s.active)&&<p>No hay una cuenta de plataforma activa. Cancela y ve a Configuración → Plataformas para crearla o reactivarla antes de declarar.</p>}
-        {select('sourceId','Cuenta de plataforma',sources.filter(s=>s.active||s.id===form.sourceId).map(s=>[s.id,[s.platformName,s.name].filter(Boolean).join(' · ')]))}{input('reportedOn','Fecha declarada',{type:'date',nullable:true})}{input('externalKey','Referencia de liquidación',{required:true})}
+        {select('sourceId','Cuenta de plataforma',sources.filter(s=>s.active||s.id===form.sourceId).map(s=>[s.id,[s.platformName,s.name].filter(Boolean).join(' · ')]),{advisorControl:!correctingDeclaration?'cash-settlement-declaration-source':undefined})}{input('reportedOn','Fecha declarada',{type:'date',nullable:true})}{input('externalKey','Referencia de liquidación',{required:true})}
         <p>Vincula cobros y gastos existentes. Una diferencia sin soporte queda pendiente, no se inventa un gasto para cuadrarla.</p>
-        {form.lines.length>0&&<p className="hint">Conserva la cuenta de plataforma de los cobros elegidos. Si cambias de cuenta, quita primero sus líneas.</p>}
-        {form.lines.map((line,index)=><section className="form-section" key={line.collectionId}>
-          <h4>{line.label||`Cobro vinculado ${index+1}`}</h4>
-          {amount('declared-gross-'+index,'Bruto declarado (COP)',line.grossMinor,value=>set('lines',form.lines.map((l,i)=>i===index?{...l,grossMinor:value}:l)))}
-          {line.deductions.map((d,j)=><div key={d.expenseId}><p>{d.label||`Gasto vinculado ${j+1}`}</p>{amount('declared-deduction-'+index+'-'+j,'Retención positiva / recuperación negativa (COP)',d.amountMinor,value=>set('lines',form.lines.map((l,i)=>i===index?{...l,deductions:l.deductions.map((x,k)=>k===j?{...x,amountMinor:value}:x)}:l)),{signed:true})}<button type="button" className="text-button" onClick={()=>set('lines',form.lines.map((l,i)=>i===index?{...l,deductions:l.deductions.filter((_,k)=>k!==j)}:l))}>Quitar gasto</button></div>)}
-          <FinanceCandidatePicker api={api} type="expenses" source={form.sourceId} collection={line.collectionId} excluded={line.deductions.map(d=>d.expenseId)} onSelect={row=>set('lines',form.lines.map((l,i)=>i===index?{...l,deductions:[...l.deductions,{expenseId:row.id,amountMinor:row.availableMinor,label:candidateLabel(row)}]}:l))}/>
-          <button type="button" className="text-button" onClick={()=>set('lines',form.lines.filter((_,i)=>i!==index))}>Quitar cobro y sus gastos</button>
-        </section>)}
-        <FinanceCandidatePicker api={api} type="collections" source={form.sourceId} excluded={form.lines.map(l=>l.collectionId)} onSelect={row=>set('lines',[...form.lines,{collectionId:row.id,grossMinor:row.availableGrossMinor,deductions:[],label:candidateLabel(row)}])}/>
-        {context.settlement?.id&&reason()}
+        {form.lines.length>0&&<section aria-labelledby={`${fieldId}-declaration-lines`}>
+          <h3 id={`${fieldId}-declaration-lines`} tabIndex={-1} aria-describedby={`${fieldId}-declaration-lines-help`}
+            data-advisor-control={!singleCollection?'cash-settlement-choose-collection':deductionCount>1?'cash-settlement-choose-deduction':undefined}>Cobros y gastos del borrador</h3>
+          <p className="hint" id={`${fieldId}-declaration-lines-help`}>Identifica el cobro por pedido y guía, y el gasto por su concepto. Si cambias de cuenta de plataforma, quita primero sus líneas.</p>
+          {form.lines.map((line,index)=><section className="form-section" key={line.collectionId} aria-labelledby={`${fieldId}-collection-${line.collectionId}`}>
+            <h4 id={`${fieldId}-collection-${line.collectionId}`}>{line.label||`Cobro vinculado ${index+1}`}</h4>
+            {amount('declared-gross-'+index,'Bruto declarado (COP)',line.grossMinor,value=>set('lines',form.lines.map((l,i)=>i===index?{...l,grossMinor:value}:l)))}
+            {line.deductions.map((d,j)=><div key={d.expenseId}><p>{d.label||`Gasto vinculado ${j+1}`}</p>{amount('declared-deduction-'+index+'-'+j,'Retención positiva / recuperación negativa (COP)',d.amountMinor,value=>set('lines',form.lines.map((l,i)=>i===index?{...l,deductions:l.deductions.map((x,k)=>k===j?{...x,amountMinor:value}:x)}:l)),{signed:true})}<button type="button" className="text-button" data-advisor-control={deductionCount===1?'cash-settlement-remove-deduction':undefined} onClick={()=>set('lines',form.lines.map((l,i)=>i===index?{...l,deductions:l.deductions.filter((_,k)=>k!==j)}:l))}>Quitar gasto</button></div>)}
+            <FinanceCandidatePicker api={api} type="expenses" source={form.sourceId} collection={line.collectionId} advisorFocus={singleCollection} excluded={line.deductions.map(d=>d.expenseId)} onSelect={row=>set('lines',form.lines.map((l,i)=>i===index?{...l,deductions:[...l.deductions,{expenseId:row.id,amountMinor:row.availableMinor,label:candidateLabel(row)}]}:l))}/>
+            <button type="button" className="text-button" data-advisor-control={singleCollection?'cash-settlement-remove-collection':undefined} onClick={()=>set('lines',form.lines.filter((_,i)=>i!==index))}>Quitar cobro y sus gastos</button>
+          </section>)}
+        </section>}
+        <FinanceCandidatePicker api={api} type="collections" source={form.sourceId} advisorFocus excluded={form.lines.map(l=>l.collectionId)} onSelect={row=>set('lines',[...form.lines,{collectionId:row.id,grossMinor:row.availableGrossMinor,deductions:[],label:candidateLabel(row)}])}/>
+        {correctingDeclaration&&input('reason','Motivo',{required:true,advisorControl:'cash-settlement-declaration-reason'})}
         {amount('netMinor','Neto declarado (COP)',form.netMinor,value=>set('netMinor',value),{signed:true})}
         <p>Neto de líneas vinculadas: {display(net)}</p>
       </>}
@@ -380,7 +472,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         <div className="product-form-grid">{personSelect()}{input('startOn','Inicio del período',{required:true,type:'date'})}{input('endOnExclusive','Fecha de corte (este día no se incluye)',{required:true,type:'date'})}{amount('bonusMinor','Bonificación (COP)')}{amount('discountMinor','Descuento interno (COP)')}</div>{(form.bonusMinor>0||form.discountMinor>0)&&reason()}
         <p className="hint">Para incluir septiembre completo, usa el 1 de septiembre como inicio y el 1 de octubre como fecha de corte.</p>
         <p className="hint">Control interno, no liquidación laboral legal ni nómina electrónica. Los anticipos no duplican costo; créditos de comisión se compensan antes de pagar.</p>
-        {preview&&<section className="form-section" aria-live="polite"><h4>Revisión del período · {cashStateLabels[preview.state]||'Estado no disponible'}</h4><dl className="summary-values">{[['Devengado','earnedMinor'],['Obligaciones pendientes','outstandingMinor'],['Créditos del período','creditMinor'],['Créditos disponibles anteriores','availableCreditMinor'],['Anticipos disponibles','advanceAvailableMinor'],['Anticipos a aplicar','advanceToApplyMinor'],['Anticipos aplicados','advanceAppliedMinor'],['Pago nuevo propuesto','amountToPayMinor']].filter(([,key])=>preview[key]!=null).map(([title,key])=><div key={key}><dt>{title}</dt><dd>{display(preview[key])}</dd></div>)}</dl><p>Días por materializar: {preview.missingDayCount??0}. Confirmar registra devengos una sola vez; pagar es una acción separada.</p>{(preview.obligations||[]).map(e=><p key={e.id}>{expenseCategoryLabels[e.category]||e.concept||'Gasto registrado'} · {display(e.amountMinor)}</p>)}{(preview.carriedCredits||[]).map(e=><p key={e.id}>Crédito {expenseCategoryLabels[e.category]||'Gasto registrado'} · {display(e.creditMinor)}</p>)}<button className="button primary" type="button" onClick={confirmPrepared}>Confirmar período revisado</button></section>}
+        {preview&&<section className="form-section" aria-live="polite"><h4>Revisión del período · {cashStateLabels[preview.state]||'Estado no disponible'}</h4><dl className="summary-values">{[['Devengado','earnedMinor'],['Obligaciones pendientes','outstandingMinor'],['Créditos del período','creditMinor'],['Créditos disponibles anteriores','availableCreditMinor'],['Anticipos disponibles','advanceAvailableMinor'],['Anticipos a aplicar','advanceToApplyMinor'],['Anticipos aplicados','advanceAppliedMinor'],['Pago nuevo propuesto','amountToPayMinor']].filter(([,key])=>preview[key]!=null).map(([title,key])=><div key={key}><dt>{title}</dt><dd>{display(preview[key])}</dd></div>)}</dl><p>Días por materializar: {preview.missingDayCount??0}. Confirmar registra devengos una sola vez; pagar es una acción separada.</p>{(preview.obligations||[]).map(e=><p key={e.id}>{expenseCategoryLabels[e.category]||e.concept||'Gasto registrado'} · {display(e.amountMinor)}</p>)}{(preview.carriedCredits||[]).map(e=><p key={e.id}>Crédito {expenseCategoryLabels[e.category]||'Gasto registrado'} · {display(e.creditMinor)}</p>)}<button className="button primary" type="button" data-advisor-control="cash-payroll-confirm-period" onClick={confirmPrepared}>Confirmar período revisado</button></section>}
       </>}
       {action==='payroll-pay'&&<><p>Pago nuevo tras créditos y anticipos: {display(context.payroll?.amountToPayMinor)}. Obligaciones pendientes: {display(context.payroll?.outstandingMinor)}; anticipos disponibles: {display(context.payroll?.advanceAvailableMinor)}.</p><div className="product-form-grid">{amount('amountMinor','Pago nuevo (COP)')}{accountSelect()}{input('effectiveOn','Fecha del pago',{required:true,type:'date'})}{input('reference','Referencia')}</div></>}
       {action==='link-shipment'&&<><p>{context.order?.id?`Pedido seleccionado: AN-${context.order.number}`:'Selecciona primero un pedido conocido en la búsqueda.'}</p>{context.order?.id&&<fieldset><legend>Unidades de este envío</legend><p>Asigna solo las unidades de esta guía. El servidor comprueba las cantidades acumuladas entre envíos activos.</p>{context.order.items.map(l=><label className="field" key={l.lineId}>{l.title} · Compradas {l.quantity}<input type="number" min="0" max={l.quantity} step="1" value={form.assignments.find(a=>a.lineId===l.lineId)?.quantity??0} onChange={e=>set('assignments',form.assignments.map(a=>a.lineId===l.lineId?{...a,quantity:Number(e.target.value)}:a))}/></label>)}</fieldset>}{reason()}<p>No se vincula por similitud de nombre o teléfono.</p></>}
@@ -395,19 +487,47 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
         </dl><p>{reviewEffect}</p><p className={styles.queryHelp}>Revisa el hecho y sus soportes. No se proyectan saldos futuros con el saldo actual.</p>
       </section>}
     </fieldset>
-    <footer className="editor-footer"><span role="status">{busy?'Guardando…':assistantBusy?'Aplicando asistencia…':dirty?'Cambios sin guardar':''}</span>{assistantAvailable&&<button type="button" className="button subtle" disabled={interactionBusy||!loaded} onClick={assistant.openAssistant}>Ayúdame con este formulario</button>}{onCancel&&<button type="button" className="button subtle" disabled={interactionBusy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={interactionBusy||!loaded||Object.values(invalid).some(Boolean)||action==='cash-close'&&!closingReady||(action==='link-shipment'&&!context.order?.id)}>{expenseOnly?'Guardar costo de envío':action==='expense'?(expenseEdit?'Guardar corrección del gasto':payingExpense?'Registrar gasto y pago':'Guardar gasto pendiente'):configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':titles[action]||'Guardar'}</button></footer>
+    <footer className="editor-footer"><span role="status">{busy?'Guardando…':assistantBusy?'Aplicando asistencia…':dirty?'Cambios sin guardar':''}</span>{assistantAvailable&&<button type="button" className="button subtle" disabled={interactionBusy||!loaded} onClick={assistant.openAssistant}>Ayúdame con este formulario</button>}{onCancel&&<button type="button" className="button subtle" disabled={interactionBusy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={submitBlocked}>{expenseOnly?'Guardar costo de envío':action==='expense'?(expenseEdit?'Guardar corrección del gasto':payingExpense?'Registrar gasto y pago':'Guardar gasto pendiente'):configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':correctingDeclaration?'Guardar corrección de la declaración':titles[action]||'Guardar'}</button></footer>
   </form>;
 }
-function candidateLabel(row){return [row.orderNumber?`AN-${row.orderNumber}`:'Sin pedido',row.tracking||row.concept||row.category,row.date||'Fecha desconocida'].filter(Boolean).join(' · ');}
-function FinanceCandidatePicker({api,type,source,collection,excluded,onSelect}){
-  const [q,setQ]=useState(''),[page,setPage]=useState(1),[data,setData]=useState(null),[error,setError]=useState(''),[loading,setLoading]=useState(false),[retry,setRetry]=useState(0),[expanded,setExpanded]=useState(false),seq=useRef(0);
+function candidateLabel(row){return [row.orderNumber?`AN-${row.orderNumber}`:'Sin pedido',row.tracking,row.concept||(!row.tracking?row.category:null),row.date||'Fecha desconocida'].filter(Boolean).join(' · ');}
+function FinanceCandidatePicker({api,type,source,collection,advisorFocus,excluded,onSelect}){
+  const [q,setQ]=useState(''),[page,setPage]=useState(1),[data,setData]=useState(null),[error,setError]=useState(''),[loading,setLoading]=useState(false),[retry,setRetry]=useState(0),[expanded,setExpanded]=useState(false),seq=useRef(0),guideId=useId();
   useEffect(()=>{const current=++seq.current;setData(null);if(!source||!expanded)return;setLoading(true);setError('');const params=new URLSearchParams({candidates:type,source,page:String(page),q});if(collection)params.set('collection',collection);api('/api/admin/finance/settlements?'+params).then(value=>{if(current===seq.current)setData(value);}).catch(cause=>{if(current===seq.current)setError(cause.message);}).finally(()=>{if(current===seq.current)setLoading(false);});return()=>{seq.current++;};},[api,type,source,collection,q,page,retry,expanded]);
-  return <details className="finance-candidates" onToggle={e=>setExpanded(e.currentTarget.open)}><summary>{type==='collections'?'Buscar y añadir cobro':'Buscar y añadir gasto o crédito'}</summary>{!source?<p>Elige una cuenta de plataforma.</p>:<><label className="field">Buscar por pedido, guía o concepto<input value={q} onChange={e=>{setQ(e.target.value);setPage(1);}} maxLength={100}/></label>{loading&&<p role="status">Actualizando candidatos…</p>}{error&&<p role="alert">{error}<button type="button" onClick={()=>setRetry(x=>x+1)}>Reintentar</button></p>}{data&&<><ul>{data.records.map(row=><li key={row.id}><span>{candidateLabel(row)} · Disponible: {display(row.availableGrossMinor??row.availableMinor)}</span><button type="button" className="button subtle" disabled={loading||excluded.includes(row.id)} onClick={()=>onSelect(row)}>{excluded.includes(row.id)?'Vinculado':'Añadir'}</button></li>)}</ul>{!data.records.length&&<p>No hay registros elegibles para esta búsqueda.</p>}<div className="cash-pagination"><button type="button" disabled={loading||page===1} onClick={()=>setPage(p=>p-1)}>Anterior</button><span>Página {page} · {data.total} registros</span><button type="button" disabled={loading||page*20>=data.total} onClick={()=>setPage(p=>p+1)}>Siguiente</button></div></>}</>}</details>;
+  const collections=type==='collections',kind=collections?'collections':'deductions';
+  return <details className="finance-candidates" data-advisor-disclosure onToggle={e=>setExpanded(e.currentTarget.open)}>
+    <summary>{collections?'Buscar y añadir cobro':'Buscar y añadir gasto o crédito'}</summary>
+    {!source?<p>Elige una cuenta de plataforma.</p>:<>
+      <label className="field">Buscar por pedido, guía o concepto<input value={q} data-advisor-control={advisorFocus?'cash-settlement-search-'+kind:undefined} onChange={e=>{setQ(e.target.value);setPage(1);}} maxLength={100}/></label>
+      <section aria-label={collections?'Cobros elegibles':'Gastos y créditos elegibles'} aria-describedby={guideId}
+        tabIndex={-1} data-advisor-control={advisorFocus?'cash-settlement-add-'+(collections?'collection':'deduction'):undefined}>
+        <p className="hint" id={guideId}>Identifica el registro exacto y elige Añadir. La selección solo cambia el borrador.</p>
+        {loading&&<p role="status">Actualizando candidatos…</p>}
+        {error&&<p role="alert">{error}<button type="button" onClick={()=>setRetry(x=>x+1)}>Reintentar</button></p>}
+        {data&&<><ul>{data.records.map(row=><li key={row.id}><span>{candidateLabel(row)} · Disponible: {display(row.availableGrossMinor??row.availableMinor)}</span><button type="button" className="button subtle" disabled={loading||excluded.includes(row.id)} onClick={()=>onSelect(row)}>{excluded.includes(row.id)?'Vinculado':'Añadir'}</button></li>)}</ul>
+          {!data.records.length&&<p>No hay registros elegibles para esta búsqueda.</p>}
+          <div className="cash-pagination"><button type="button" disabled={loading||page===1} onClick={()=>setPage(p=>p-1)}>Anterior</button><span>Página {page} · {data.total} registros</span><button type="button" disabled={loading||page*20>=data.total} onClick={()=>setPage(p=>p+1)}>Siguiente</button></div>
+        </>}
+      </section>
+    </>}
+  </details>;
 }
-export default function BusinessActionDialog({action,context,api,onClose,onSaved,onInteractionStateChange=()=>{},onAssistantRegistered,configuration=false}){
+export default function BusinessActionDialog({action,context,api,onClose,onSaved,onInteractionStateChange=()=>{},onAssistantRegistered,configuration=false,advisorTargetRequest,onAdvisorTargetHandled,accountOperation}){
   const ref=useRef(null),[interaction,setInteraction]=useState({busy:false,dirty:false});
   const close=useDialog(ref,{...interaction,onClose});
   const callback=useRef(onInteractionStateChange);callback.current=onInteractionStateChange;
   const report=useRef(state=>{setInteraction(state);callback.current(state);}).current;
-  return <dialog ref={ref} className={`editor-drawer ${styles.actionDialog}`} aria-labelledby="business-action-title"><header><div><p className="eyebrow">Operación del negocio</p><h2 id="business-action-title" tabIndex={-1} data-dialog-initial-focus>{configuration&&action==='account-save'?(context.account?.id?'Editar cuenta':'Crear cuenta'):titles[action]}</h2></div><button type="button" className="icon-button" onClick={close} disabled={interaction.busy} aria-label="Cerrar formulario"><Icon name="close"/></button></header><div className="drawer-body"><BusinessActionForm action={action} context={context} api={api} onSaved={onSaved} onCancel={close} onInteractionStateChange={report} onAssistantRegistered={onAssistantRegistered} configuration={configuration}/></div></dialog>;
+  const target=advisorTargetRequest?validateAdvisorTarget(advisorTargetRequest):null;
+  const selection=target?.selection,account=context?.account;
+  const validAdvisor=target?.capabilityId==='cash.close-day'&&(target.focus==='cash-close-form'&&action==='cash-close'&&account?.active||
+    target.focus==='cash-close-account'&&action==='account-save')&&
+    (selection?account?.type==='cash'&&selection.id===account.id&&selection.version===account.version:!account);
+  const advisorError=advisorTargetRequest&&!validAdvisor?'El formulario no coincide con la cuenta o el paso de Ali. Vuelve a consultar la tarea.':'';
+  useEffect(()=>{if(advisorError)onAdvisorTargetHandled?.(advisorTargetRequest.id,advisorError);},[advisorError,advisorTargetRequest?.id,onAdvisorTargetHandled]);
+  const declaration=action==='settlement-save', settlementId=context?.settlement?.id;
+  const title=configuration&&action==='account-save'?(context.account?.id?'Editar cuenta':'Crear cuenta'):declaration&&settlementId?'Completar o corregir declaración':titles[action];
+  return <dialog ref={ref} className={`editor-drawer ${styles.actionDialog}`} aria-labelledby="business-action-title"
+    data-cash-settlement-form={declaration?'declaration':undefined} data-cash-settlement-id={declaration?settlementId||'':undefined}>
+    <header><div><p className="eyebrow">Operación del negocio</p><h2 id="business-action-title" tabIndex={-1} data-dialog-initial-focus>{title}</h2></div><button type="button" className="icon-button" onClick={close} disabled={interaction.busy} aria-label="Cerrar formulario"><Icon name="close"/></button></header><div className="drawer-body">{advisorError?<p role="alert">{advisorError}</p>:<BusinessActionForm action={action} context={context} api={api} onSaved={onSaved} onCancel={close} onInteractionStateChange={report} onAssistantRegistered={onAssistantRegistered} configuration={configuration} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={onAdvisorTargetHandled} accountOperation={accountOperation}/>}</div>
+  </dialog>;
 }

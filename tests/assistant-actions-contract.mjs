@@ -4,6 +4,7 @@ import { createAdmin, login } from '../lib/auth.mjs';
 import { emptyRecord } from '../lib/schema.mjs';
 import { createBusinessBasics, createBusinessFixture, businessOrderInput } from './business-fixtures.mjs';
 import { saveAccount, accountBalance, recordIncome } from '../lib/business/cash.mjs';
+import { resolveLegacyPayment } from '../lib/business/collections.mjs';
 import { getBusinessSettings } from '../lib/business/settings.mjs';
 import { recordExpense } from '../lib/business/expenses.mjs';
 import { preparePayroll } from '../lib/business/payroll.mjs';
@@ -602,7 +603,7 @@ export async function runAssistantActionsContracts(t, factory) {
     const payrollPaid = await command(f, 'payroll-pay', { payrollId: payroll.result.id, accountId: account.id, effectiveOn: `${year}-10-01`, amountMinor: payroll.result.amountToPayMinor }, { entityId: payroll.result.id, recordVersion: payroll.result.version });
     assert.equal(payrollPaid.result.state, 'paid');
   });
-  await t.test('settlement declarations/receipts, orphan shipment linking and legacy resolution preserve original facts', async t => {
+  await t.test('settlement and shipment actions preserve original facts; only the native form resolves legacy payment', async t => {
     const f = await fixture(t, factory), business = await createBusinessFixture(f.store, { actorId: f.session.user.id });
     const { year, account, a, settlement } = business;
     const declaration = await command(f, 'settlement-save', { settlementId: settlement.id, reportedOn: `${year}-09-06`, reason: 'Corregir fecha declarada' }, { entityId: settlement.id, recordVersion: settlement.version });
@@ -625,10 +626,16 @@ export async function runAssistantActionsContracts(t, factory) {
       await tx.db.run(`INSERT INTO ${tx.t('order_collections')}(id,order_id,shipment_id,kind,holder,amount_minor,occurred_on,cash_entry_id,reversal_of,external_key,recorded_at,data) VALUES(?,?,NULL,'receipt','legacy',10000,?,NULL,NULL,?,?,?)`, [randomUUID(), legacy.id, `${year}-09-02`, `legacy:${legacy.id}:payment`, new Date().toISOString(), JSON.stringify({ source: 'legacy', requiresReconciliation: true })]);
     });
     const historical = await f.store.order(legacy.id), before = await accountBalance(f.store, account.id);
-    const resolved = await command(f, 'resolve-legacy-payment', { orderId: legacy.id, mode: 'opening_balance', reason: 'Incluido en apertura sintética' }, { entityId: legacy.id, recordVersion: historical.version });
-    assert.equal(resolved.result.order.paymentSummary.legacyReview, false);
+    const input = { orderId: legacy.id, mode: 'opening_balance', reason: 'Incluido en apertura sintética' };
+    await assert.rejects(
+      () => command(f, 'resolve-legacy-payment', input, { entityId: legacy.id, recordVersion: historical.version }),
+      { status: 400 },
+    );
+    assert.deepEqual(await f.store.order(legacy.id), historical);
+    const resolved = await resolveLegacyPayment(f.store, { ...input, requestId: randomUUID(), version: historical.version }, f.session.user.id);
+    assert.equal(resolved.order.paymentSummary.legacyReview, false);
     assert.equal(await accountBalance(f.store, account.id), before);
-    assert.equal(resolved.result.documents[0].cashEntryId, null);
+    assert.equal(resolved.documents[0].cashEntryId, null);
   });
   await t.test('account controls, policy agreements and alert configuration are saved only after human review', async t => {
     const f = await fixture(t, factory, { basics: true }), { person, year, account } = f.business;

@@ -18,6 +18,11 @@ const STOCK_UNITS={day:['Días',1],week:['Semanas',7],month:['Meses (30 días)',
 const SALE={confirmed:'Al confirmar el pedido',dispatched:'Al recoger el envío',delivered:'Al completar la entrega'};
 const EARN={delivered:'Al entregar',customer_paid:'Cuando el cliente paga todo',business_received:'Cuando el negocio recibe todo el bruto'};
 const FREQUENCY={weekly:'Semanal',halfmonthly:'Quincenal (1–15 y 16–fin)',monthly:'Mensual'};
+const PERSON_OBLIGATIONS=[
+  {focus:'settings-person-new-salary',title:'Agregar un convenio de sueldo',label:'Persona para el convenio nuevo',button:'Abrir formulario de sueldo'},
+  {focus:'settings-person-salary-end-date',title:'Cerrar una vigencia de sueldo guardada',label:'Persona para cerrar el convenio',button:'Abrir convenios guardados',needsAgreement:true},
+  {focus:'settings-person-new-commission',title:'Agregar una vigencia de comisión particular',label:'Persona para la comisión particular',button:'Abrir formulario de comisión'},
+];
 const noop=()=>{};
 const money=value=>value==null?'Sin dato':formatMoneyMinor(value);
 const dateTime=value=>value?new Date(value).toLocaleString('es-CO',{timeZone:'America/Bogota'}):'Sin registro';
@@ -31,8 +36,8 @@ function initialEditor(editor,data) {
   if(editor.kind==='alert-rule') return {enabled:row.enabled,thresholds:{...row.thresholds},selectedStatuses:[...(row.selectedStatuses||[])],responsibleId:row.responsibleId||'',reminderHours:row.reminderHours||24,reason:''};
   return {responsibleId:row.responsibleId||'',state:row.state==='acknowledged'?'acknowledged':'',reason:''};
 }
-function Select({label,value,onChange,options,required=false,empty='Sin asignar',disabled=false}) {
-  return <label className="field">{label}<select value={value??''} required={required} disabled={disabled} onChange={event=>onChange(event.target.value)}><option value="">{empty}</option>{options.map(([id,title])=><option value={id} key={id}>{title}</option>)}</select></label>;
+function Select({label,value,onChange,options,required=false,empty='Sin asignar',disabled=false,advisorControl}) {
+  return <label className="field">{label}<select data-advisor-control={advisorControl} value={value??''} required={required} disabled={disabled} onChange={event=>onChange(event.target.value)}><option value="">{empty}</option>{options.map(([id,title])=><option value={id} key={id}>{title}</option>)}</select></label>;
 }
 function Input({label,value,onChange,type='text',required=false,min,max,disabled=false}) {
   return <label className="field">{label}<input type={type} value={value??''} required={required} min={min} max={max} disabled={disabled} maxLength={type==='text'?2000:undefined} onChange={event=>onChange(type==='number'?event.target.value===''?'':Number(event.target.value):event.target.value)}/></label>;
@@ -83,6 +88,14 @@ function SettingsEditor({editor,data:loadedData,api,onClose,onSaved,onInteractio
   useEffect(()=>{onAssistantRegistered?.({formId:assistant.formId,target:assistantTarget,entityId:editor.row?.id||null,recordVersion:assistantVersion});},[assistant.formId,assistantTarget,editor.row?.id,assistantVersion,onAssistantRegistered]);
   const interactionBusy=busy||assistant.assistantBusy;
   const close=useDialog(ref,{busy:interactionBusy,dirty,onClose});
+  useEffect(()=>{
+    if(!editor.focus)return;
+    const target=ref.current?.querySelector(`[data-advisor-control="${editor.focus}"]`);
+    if(!target)return;
+    const disclosure=target.closest('details[data-advisor-disclosure]');
+    if(disclosure)disclosure.open=true;
+    target.focus();
+  },[editor.focus]);
   useEffect(()=>{onInteractionStateChange({busy:interactionBusy,dirty});},[interactionBusy,dirty,onInteractionStateChange]);
   useEffect(()=>()=>onInteractionStateChange({busy:false,dirty:false}),[onInteractionStateChange]);
   useEffect(()=>{if(error)errorRef.current?.focus();},[error]);
@@ -132,17 +145,69 @@ function SettingsEditor({editor,data:loadedData,api,onClose,onSaved,onInteractio
   }
   const title={person:editor.row?'Editar persona':'Crear persona',platform:editor.row?'Editar plataforma':'Crear plataforma',source:editor.row?'Editar cuenta de plataforma':'Crear otra cuenta de plataforma',policy:'Agregar vigencia de reglas',preferences:'Editar preferencias del negocio','alert-rule':'Configurar aviso',alert:'Atender alerta'}[editor.kind];
   const submitLabel={person:editor.row?'Guardar persona':'Crear persona',platform:editor.row?'Guardar plataforma':'Crear plataforma',source:editor.row?'Guardar cuenta de plataforma':'Crear cuenta de plataforma',policy:'Agregar vigencia',preferences:'Guardar preferencias','alert-rule':'Guardar aviso',alert:'Guardar atención'}[editor.kind];
-  return <dialog ref={ref} className={`editor-drawer business-settings-dialog ${styles.settingsDialog}`} aria-labelledby="settings-editor-title"><header><h2 id="settings-editor-title" tabIndex={-1} data-dialog-initial-focus>{title}</h2><button type="button" className="button subtle" disabled={interactionBusy} onClick={close}>Cerrar formulario</button></header><form className={styles.settingsForm} onSubmit={submit} aria-busy={interactionBusy}><div className="drawer-body">
+  return <dialog ref={ref} className={`editor-drawer business-settings-dialog ${styles.settingsDialog}`} aria-labelledby="settings-editor-title" data-person-id={editor.kind==='person'?editor.row?.id:undefined}><header><h2 id="settings-editor-title" tabIndex={-1} data-dialog-initial-focus>{title}</h2><button type="button" className="button subtle" disabled={interactionBusy} onClick={close}>Cerrar formulario</button></header><form className={styles.settingsForm} onSubmit={submit} aria-busy={interactionBusy}><div className="drawer-body">
     {error&&<div className="error" tabIndex={-1} role="alert" ref={errorRef}>{error}</div>}<fieldset className="editor-fieldset" disabled={interactionBusy}>
     {['person','platform','source'].includes(editor.kind)&&<fieldset className={styles.fieldGroup}><legend>{editor.kind==='person'?'Identificar persona':editor.kind==='platform'?'Identificar plataforma':'Identificar cuenta de plataforma'}</legend><Input label="Nombre" required value={form.name} onChange={value=>set('name',value)}/><label className="checkbox-field"><input type="checkbox" checked={form.active} onChange={event=>set('active',event.target.checked)}/>Activo para nuevos registros</label>{editor.row&&<p className="hint">Archivar conserva los pedidos, movimientos y demás historia.</p>}</fieldset>}
-    {editor.kind==='person'&&<><p>No requiere correo ni contraseña. Esta persona puede ser responsable o vendedor; no es automáticamente el administrador que guarda.</p><details><summary>Vincular usuario de acceso (opcional)</summary><Select label="Usuario existente" value={form.userId} onChange={value=>set('userId',value)} options={data.users.map(user=>[user.id,user.email])} empty="Sin usuario vinculado"/></details>
-      <details><summary>Sueldos internos ({form.salaryAgreements.length} convenios)</summary><p>Control interno, no liquidación laboral legal. El importe corresponde a un período, distribuido por días calendario. No tener convenio significa que no aplica sueldo fijo.</p>{form.salaryAgreements.map((agreement,index)=>{const saved=editor.row?.salaryAgreements?.some(row=>row.id===agreement.id);return <fieldset className="settings-subform" key={agreement.id}><legend>Convenio {index+1}{saved?' · guardado':''}</legend>{saved?<><p>{FREQUENCY[agreement.frequency]} · {money(agreement.amountPerPeriodMinor)} · desde {agreement.effectiveFrom} · {agreement.enabled?'Activo':'Inactivo'}</p><Input label="Último día de vigencia (opcional)" type="date" value={agreement.effectiveTo} min={agreement.effectiveFrom} onChange={value=>updateRow('salaryAgreements',index,'effectiveTo',value||null)}/><p className="hint">Para cambiar importe o frecuencia, cierra la vigencia y agrega otro convenio. Los devengos y períodos confirmados no se reescriben.</p></>:<><Field field={{name:'salary-'+index,label:'Sueldo por período (COP)',type:'moneyOptionalMinor',required:true}} value={agreement.amountPerPeriodMinor} onChange={value=>updateRow('salaryAgreements',index,'amountPerPeriodMinor',value)} onDraftInvalid={value=>setInvalid(old=>({...old,['salary-'+agreement.id]:value}))}/><Select label="Frecuencia" required value={agreement.frequency} options={Object.entries(FREQUENCY)} onChange={value=>updateRow('salaryAgreements',index,'frequency',value)}/><div className="product-form-grid"><Input label="Vigente desde" type="date" required value={agreement.effectiveFrom} onChange={value=>updateRow('salaryAgreements',index,'effectiveFrom',value)}/><Input label="Vigente hasta (inclusive, opcional)" type="date" value={agreement.effectiveTo} onChange={value=>updateRow('salaryAgreements',index,'effectiveTo',value||null)}/><Input label="Días después del período para pagar" type="number" min={0} max={90} required value={agreement.payDayOffset} onChange={value=>updateRow('salaryAgreements',index,'payDayOffset',value)}/></div><button type="button" className="text-button" onClick={()=>{set('salaryAgreements',form.salaryAgreements.filter((_,i)=>i!==index));setInvalid(old=>{const next={...old};delete next['salary-'+agreement.id];return next;});}}>Quitar convenio nuevo</button></>}</fieldset>;})}<button type="button" className="button subtle" onClick={addSalary}>Agregar convenio</button></details>
-      <details><summary>Comisión particular ({form.commissionOverrides.length} vigencias)</summary><p>Sin vigencia propia, se usa la regla general. Una versión deshabilitada permite dejar de generar comisión desde esa fecha.</p>{form.commissionOverrides.map((override,index)=>{const saved=editor.row?.commissionOverrides?.some(row=>row.id===override.id);return <fieldset className="settings-subform" key={override.id}><legend>Vigencia {index+1}</legend>{saved?<p>Desde {override.effectiveOn} · {override.enabled?(override.mode==='percent'?formatCommissionRate(override.rateBps)+' %':money(override.fixedMinor)):'Comisión deshabilitada'} · {EARN[override.earnWhen]}</p>:<><Input label="Vigente desde" type="date" required value={override.effectiveOn} onChange={value=>updateRow('commissionOverrides',index,'effectiveOn',value)}/><CommissionFields value={override} onChange={value=>set('commissionOverrides',form.commissionOverrides.map((row,i)=>i===index?value:row))} onInvalid={value=>setInvalid(old=>({...old,['commission-'+override.id]:value}))}/><button type="button" className="text-button" onClick={()=>{set('commissionOverrides',form.commissionOverrides.filter((_,i)=>i!==index));setInvalid(old=>{const next={...old};delete next['commission-'+override.id];return next;});}}>Quitar vigencia nueva</button></>}</fieldset>;})}<button type="button" className="button subtle" onClick={addCommission}>Agregar vigencia de comisión</button></details>
+    {editor.kind==='person'&&<><p>No requiere correo ni contraseña. Esta persona puede ser responsable o vendedor; no es automáticamente el administrador que guarda.</p><details open={editor.showUserLink||undefined}><summary>Vincular usuario de acceso (opcional)</summary><p>Elige un usuario existente o retira el vínculo. Guardar esta relación no crea cuentas ni cambia permisos.</p><Select label="Usuario existente" value={form.userId} onChange={value=>set('userId',value)} options={data.users.map(user=>[user.id,user.email])} empty="Sin usuario vinculado"/></details>
+      <details data-advisor-disclosure>
+        <summary>Sueldos internos ({form.salaryAgreements.length} convenios)</summary>
+        <p>Control interno, no liquidación laboral legal. El importe corresponde a un período, distribuido por días calendario. No tener convenio significa que no aplica sueldo fijo.</p>
+        {editor.row?.salaryAgreements?.length>0&&<p tabIndex={-1} data-advisor-control="settings-person-salary-end-date">Elige el convenio guardado por sus fechas y condiciones. Indica su último día de vigencia en esa fila.</p>}
+        {form.salaryAgreements.map((agreement,index)=>{
+          const saved=editor.row?.salaryAgreements?.some(row=>row.id===agreement.id);
+          return <fieldset className="settings-subform" key={agreement.id}>
+            <legend>Convenio {index+1}{saved?' · guardado':''}</legend>
+            {saved?<><p>{FREQUENCY[agreement.frequency]} · {money(agreement.amountPerPeriodMinor)} · desde {agreement.effectiveFrom} · {agreement.enabled?'Activo':'Inactivo'}</p>
+              <Input label="Último día de vigencia (opcional)" type="date" value={agreement.effectiveTo} min={agreement.effectiveFrom} onChange={value=>updateRow('salaryAgreements',index,'effectiveTo',value||null)}/>
+              <p className="hint">Para cambiar importe o frecuencia, cierra la vigencia y agrega otro convenio. Los devengos y períodos confirmados no se reescriben.</p>
+            </>:<>
+              <Field field={{name:'salary-'+index,label:'Sueldo por período (COP)',type:'moneyOptionalMinor',required:true}} value={agreement.amountPerPeriodMinor} onChange={value=>updateRow('salaryAgreements',index,'amountPerPeriodMinor',value)} onDraftInvalid={value=>setInvalid(old=>({...old,['salary-'+agreement.id]:value}))}/>
+              <Select label="Frecuencia" required value={agreement.frequency} options={Object.entries(FREQUENCY)} onChange={value=>updateRow('salaryAgreements',index,'frequency',value)}/>
+              <div className="product-form-grid"><Input label="Vigente desde" type="date" required value={agreement.effectiveFrom} onChange={value=>updateRow('salaryAgreements',index,'effectiveFrom',value)}/><Input label="Vigente hasta (inclusive, opcional)" type="date" value={agreement.effectiveTo} onChange={value=>updateRow('salaryAgreements',index,'effectiveTo',value||null)}/><Input label="Días después del período para pagar" type="number" min={0} max={90} required value={agreement.payDayOffset} onChange={value=>updateRow('salaryAgreements',index,'payDayOffset',value)}/></div>
+              <button type="button" className="text-button" onClick={()=>{set('salaryAgreements',form.salaryAgreements.filter((_,i)=>i!==index));setInvalid(old=>{const next={...old};delete next['salary-'+agreement.id];return next;});}}>Quitar convenio nuevo</button>
+            </>}
+          </fieldset>;
+        })}
+        <button type="button" className="button subtle" data-advisor-control="settings-person-new-salary" onClick={addSalary}>Agregar convenio</button>
+      </details>
+      <details data-advisor-disclosure>
+        <summary>Comisión particular ({form.commissionOverrides.length} vigencias)</summary>
+        <p>Sin vigencia propia, se usa la regla general. Una versión deshabilitada permite dejar de generar comisión desde esa fecha.</p>
+        {form.commissionOverrides.map((override,index)=>{
+          const saved=editor.row?.commissionOverrides?.some(row=>row.id===override.id);
+          return <fieldset className="settings-subform" key={override.id}>
+            <legend>Vigencia {index+1}</legend>
+            {saved?<p>Desde {override.effectiveOn} · {override.enabled?(override.mode==='percent'?formatCommissionRate(override.rateBps)+' %':money(override.fixedMinor)):'Comisión deshabilitada'} · {EARN[override.earnWhen]}</p>:<>
+              <Input label="Vigente desde" type="date" required value={override.effectiveOn} onChange={value=>updateRow('commissionOverrides',index,'effectiveOn',value)}/>
+              <CommissionFields value={override} onChange={value=>set('commissionOverrides',form.commissionOverrides.map((row,i)=>i===index?value:row))} onInvalid={value=>setInvalid(old=>({...old,['commission-'+override.id]:value}))}/>
+              <button type="button" className="text-button" onClick={()=>{set('commissionOverrides',form.commissionOverrides.filter((_,i)=>i!==index));setInvalid(old=>{const next={...old};delete next['commission-'+override.id];return next;});}}>Quitar vigencia nueva</button>
+            </>}
+          </fieldset>;
+        })}
+        <button type="button" className="button subtle" data-advisor-control="settings-person-new-commission" onClick={addCommission}>Agregar vigencia de comisión</button>
+      </details>
     </>}
     {editor.kind==='platform'&&<p>Una plataforma es el origen comercial del archivo, no la transportadora. Al crearla se guarda automáticamente la cuenta Principal.</p>}
     {editor.kind==='source'&&<p>Plataforma: {data.platforms.find(platform=>platform.id===form.platformId)?.name}. La cuenta no puede cambiar de plataforma. Sus perfiles comparten identidades; otra cuenta conserva identidades independientes.</p>}
     {editor.kind==='policy'&&<><p>Se agrega una versión efectiva nueva. Los pedidos conservan su regla histórica; esto no recalcula ni cambia precios, costos o caja anteriores.</p><PolicyFields form={form} set={set} onInvalid={value=>setInvalid(old=>({...old,policy:value}))}/><label className="checkbox-field"><input type="checkbox" required checked={policyAcknowledged} onChange={event=>setPolicyAcknowledged(event.target.checked)}/>Revisé la fecha de vigencia y entiendo que no cambia los pedidos anteriores.</label></>}
-    {editor.kind==='preferences'&&<><p>Moneda COP · zona America/Bogota. No se configura otro proveedor ni se inicia un proceso desde este formulario.</p><div className="product-form-grid">{['defaultReceiptAccountId','defaultPaymentAccountId'].map((key,index)=><Select key={key} label={index?'Cuenta predeterminada para pagos':'Cuenta predeterminada para recibos'} value={form[key]} onChange={value=>set(key,value||null)} options={data.accounts.filter(account=>account.active).map(account=>[account.id,account.name])} empty="Sin cuenta predeterminada"/>)}</div><fieldset className="settings-subform"><legend>Informes dentro del panel</legend><Input label="Generar desde la fecha" type="date" required value={form.reportsStartOn} onChange={value=>set('reportsStartOn',value)}/><Input label="Hora local de generación (Bogotá)" type="time" required value={form.reportGenerationTime} onChange={value=>set('reportGenerationTime',value)}/><div className="check-grid">{PERIODS.map(([id,label])=><label className="checkbox-field" key={id}><input type="checkbox" checked={form.reportPeriods.includes(id)} onChange={event=>set('reportPeriods',event.target.checked?[...form.reportPeriods,id]:form.reportPeriods.filter(period=>period!==id))}/>{label}</label>)}</div><p className="hint">06:00 es la hora inicial recomendada. La ejecución requiere un proceso externo activo; guardar preferencias no lo inicia.</p></fieldset><fieldset className="settings-subform"><legend>Avisos generales</legend><Select label="Responsable general" value={form.alertDefaults.responsibleId} onChange={value=>set('alertDefaults',{...form.alertDefaults,responsibleId:value||null})} options={personOptions}/><Input label="Recordatorio cada (horas calendario)" type="number" min={1} max={87600} required value={form.alertDefaults.reminderHours} onChange={value=>set('alertDefaults',{...form.alertDefaults,reminderHours:value})}/></fieldset><label className="checkbox-field"><input type="checkbox" checked={form.setupPolicyConfirmed} onChange={event=>set('setupPolicyConfirmed',event.target.checked)}/>Revisé y acepto las reglas de venta, comisión y fechas logísticas guardadas.</label></>}
+    {editor.kind==='preferences'&&<>
+      <p>Moneda COP · zona America/Bogota. No se configura otro proveedor ni se inicia un proceso desde este formulario.</p>
+      <div className="product-form-grid">{['defaultReceiptAccountId','defaultPaymentAccountId'].map((key,index)=><Select key={key} label={index?'Cuenta predeterminada para pagos':'Cuenta predeterminada para recibos'} value={form[key]} onChange={value=>set(key,value||null)} options={data.accounts.filter(account=>account.active).map(account=>[account.id,account.name])} empty="Sin cuenta predeterminada"/>)}</div>
+      <fieldset className="settings-subform"><legend>Informes dentro del panel</legend>
+        <Input label="Generar desde la fecha" type="date" required value={form.reportsStartOn} onChange={value=>set('reportsStartOn',value)}/>
+        <Input label="Hora local de generación (Bogotá)" type="time" required value={form.reportGenerationTime} onChange={value=>set('reportGenerationTime',value)}/>
+        <div className="check-grid">{PERIODS.map(([id,label])=><label className="checkbox-field" key={id}><input type="checkbox" checked={form.reportPeriods.includes(id)} onChange={event=>set('reportPeriods',event.target.checked?[...form.reportPeriods,id]:form.reportPeriods.filter(period=>period!==id))}/>{label}</label>)}</div>
+        <p className="hint">06:00 es la hora inicial recomendada. La ejecución requiere un proceso externo activo; guardar preferencias no lo inicia.</p>
+      </fieldset>
+      <fieldset className="settings-subform"><legend>Avisos generales</legend>
+        <Select label="Responsable general" value={form.alertDefaults.responsibleId} onChange={value=>set('alertDefaults',{...form.alertDefaults,responsibleId:value||null})} options={personOptions}/>
+        <Input label="Recordatorio cada (horas calendario)" type="number" min={1} max={87600} required value={form.alertDefaults.reminderHours} onChange={value=>set('alertDefaults',{...form.alertDefaults,reminderHours:value})}/>
+      </fieldset>
+      <fieldset className="settings-subform"><legend>Aceptación de reglas guardadas</legend>
+        <details><summary>Ver las reglas vigentes antes de aceptar</summary><PolicySummary rules={data.settings.rulesVersions}/></details>
+        <label className="checkbox-field"><input type="checkbox" data-advisor-control="settings-preferences-policy-acknowledgement" checked={form.setupPolicyConfirmed} onChange={event=>set('setupPolicyConfirmed',event.target.checked)}/>Revisé y acepto las reglas de venta, comisión y fechas logísticas guardadas.</label>
+      </fieldset>
+    </>}
     {editor.kind==='alert-rule'&&<><h3>{TYPES[editor.row.type]}</h3><label className="checkbox-field"><input type="checkbox" checked={form.enabled} onChange={event=>set('enabled',event.target.checked)}/>Regla habilitada</label>
       {['shipment_label_stale','shipment_no_update','platform_not_updated'].includes(editor.row.type)&&<Input label="Umbral (horas calendario)" type="number" required min={1} max={87600} value={form.thresholds.hours} onChange={value=>set('thresholds',{hours:value})}/>}
       {editor.row.type==='settlement_overdue'&&<Input label="Umbral (días calendario)" type="number" required min={1} max={3650} value={form.thresholds.days} onChange={value=>set('thresholds',{days:value})}/>}
@@ -151,8 +216,158 @@ function SettingsEditor({editor,data:loadedData,api,onClose,onSaved,onInteractio
       {['cash_below_minimum','cash_difference','cash_close_missing'].includes(editor.row.type)&&<p>El saldo mínimo, tolerancia y hora de cierre se configuran por cuenta. Sin parámetros necesarios no se puede acreditar una condición.</p>}
       <Select label="Responsable de esta regla (opcional)" value={form.responsibleId} onChange={value=>set('responsibleId',value)} options={personOptions}/><Input label="Recordatorio cada (horas calendario)" type="number" min={1} max={87600} required value={form.reminderHours} onChange={value=>set('reminderHours',value)}/><p>Habilitar no evalúa la condición ni crea alertas. Eso corresponde al proceso automático cuando esté operativo.</p></>}
     {editor.kind==='alert'&&<><h3>{editor.row.title}</h3><p>{editor.row.reason}</p><Select label="Responsable" value={form.responsibleId} onChange={value=>set('responsibleId',value)} options={personOptions}/><label className="checkbox-field"><input type="checkbox" checked={form.state==='acknowledged'} onChange={event=>set('state',event.target.checked?'acknowledged':'')} disabled={editor.row.state==='acknowledged'}/>En atención</label><p>En atención conserva la condición pendiente. Se resuelve únicamente cuando el problema deja de cumplirse; no se borra ni se oculta una deuda.</p></>}
-    <fieldset className={styles.fieldGroup}><legend>Trazabilidad del cambio</legend><Input label="Motivo del cambio" required={!!editor.row||editor.kind==='policy'} value={form.reason} onChange={value=>set('reason',value)}/></fieldset></fieldset></div><footer className="editor-footer"><span role="status">{busy?'Guardando…':assistant.assistantBusy?'Aplicando asistencia…':dirty?'Cambios sin guardar':''}</span><button type="button" className="button subtle" disabled={interactionBusy} onClick={assistant.openAssistant}>Ayúdame con este formulario</button><button type="button" className="button subtle" disabled={interactionBusy} onClick={close}>Cancelar edición</button><button type="submit" className="button primary" disabled={interactionBusy||Object.values(invalid).some(Boolean)}>{submitLabel}</button></footer>
+    <fieldset className={styles.fieldGroup}><legend>Trazabilidad del cambio</legend><Input label="Motivo del cambio" required={!!editor.row||editor.kind==='policy'} value={form.reason} onChange={value=>set('reason',value)}/></fieldset></fieldset></div>
+    <footer className="editor-footer">
+      <span role="status">{busy?'Guardando…':assistant.assistantBusy?'Aplicando asistencia…':dirty?'Cambios sin guardar':''}</span>
+      <button type="button" className="button subtle" disabled={interactionBusy} onClick={assistant.openAssistant}>Ayúdame<span className="editor-footer-context"> con este formulario</span></button>
+      <button type="button" className="button subtle" disabled={interactionBusy} onClick={close}>Cancelar<span className="editor-footer-context"> edición</span></button>
+      <button type="submit" className="button primary" disabled={interactionBusy||Object.values(invalid).some(Boolean)||editor.kind==='policy'&&!policyAcknowledged}>{submitLabel}</button>
+    </footer>
   </form></dialog>;
+}
+
+function RecordChoice({title,label,button,control,records,options,onOpen,children,disabled}) {
+  const [id,setId]=useState('');
+  const selected=records.find(record=>record.id===id);
+  return <details data-advisor-disclosure>
+    <summary>{title}</summary>
+    {children}
+    <div className="settings-filters">
+      <Select label={label} value={selected?.id||''} empty="Selecciona una opción" options={options} onChange={setId} advisorControl={control} disabled={disabled}/>
+    </div>
+    <button type="button" className="button subtle" disabled={disabled||!selected} onClick={()=>onOpen(selected)}>{button}</button>
+  </details>;
+}
+
+const accountOperations={
+  'cash.archive-account':{label:'Cuenta para archivar',field:'active',matches:account=>account.active===true,instruction:'Desmarca «Cuenta activa para nuevos movimientos» y guarda. Los movimientos anteriores se conservan.'},
+  'cash.reactivate-account':{label:'Cuenta para reactivar',field:'active',matches:account=>account.active===false,instruction:'Marca «Cuenta activa para nuevos movimientos» y guarda. No se registra otra apertura.'},
+  'cash.enable-closing-rule':{label:'Caja para exigir cierre diario',field:'closingEnabled',matches:account=>account.type==='cash'&&!account.closingEnabled,instruction:'Marca «Exigir cierre diario de esta caja», verifica la hora de Bogotá y la tolerancia, y guarda. Esto no registra un cierre.'},
+  'cash.disable-closing-rule':{label:'Caja para retirar la obligación de cierre',field:'closingEnabled',matches:account=>account.type==='cash'&&account.closingEnabled===true,instruction:'Desmarca «Exigir cierre diario de esta caja» y guarda. Los cierres anteriores se conservan.'},
+};
+function AccountSettings({accounts,api,unavailable,accountCatalogRequest,onCreate,onOpen}) {
+  const [request,setRequest]=useState(null),[opening,setOpening]=useState(false),[error,setError]=useState('');
+  const sequence=useRef(0);
+  useEffect(()=>()=>{sequence.current++;},[]);
+  useEffect(()=>{
+    if(accountCatalogRequest?.accountIntent&&Object.hasOwn(accountOperations,accountCatalogRequest.accountIntent)){
+      setRequest({id:accountCatalogRequest.id,accountIntent:accountCatalogRequest.accountIntent});
+    }
+  },[accountCatalogRequest]);
+  const operation=request&&accountOperations[request.accountIntent];
+  const records=operation?accounts.filter(operation.matches):accounts;
+  const disabled=unavailable||opening;
+  async function openAccount(selected,accountOperation){
+    const current=++sequence.current;
+    setOpening(true);setError('');
+    try{
+      const account=await api('/api/admin/business/accounts/'+encodeURIComponent(selected.id));
+      if(current!==sequence.current)return;
+      if(account.id!==selected.id||!Number.isSafeInteger(account.version))throw new Error('No se pudo comprobar la cuenta elegida.');
+      if(accountOperation&&!accountOperation.matches(account))throw new Error('La cuenta ya no reúne las condiciones de esta acción. Actualiza la lista para volver a elegir.');
+      onOpen({account,accountOperation});
+    }catch(cause){if(current===sequence.current)setError(cause.message);}
+    finally{if(current===sequence.current)setOpening(false);}
+  }
+  return <section className="settings-card" aria-labelledby="business-accounts-heading">
+    <div className="settings-card-heading">
+      <h2 id="business-accounts-heading" tabIndex={-1} data-advisor-control={!disabled?'business-account-list':undefined}>Cuentas de caja y bancos</h2>
+      <button type="button" className="button primary" data-advisor-control="business-create-account" disabled={disabled} onClick={onCreate}>Crear cuenta</button>
+    </div>
+    <p>Define las cuentas donde registras recibos y pagos, su apertura y sus responsables. No son cuentas de plataforma ni usuarios del panel; crearlas no registra una venta ni un recaudo.</p>
+    {opening&&<p role="status">Consultando la versión actual de la cuenta…</p>}
+    {error&&<p role="alert" className="error">{error}</p>}
+    <div className="settings-subform">
+      <RecordChoice key={request?.id||'edit'} title={operation?.label||'Elegir cuenta para editar'} label={operation?.label||'Cuenta para editar'} button="Abrir editor de cuenta" control={operation?'business-account-operation-choice':'business-edit-account'} records={records} options={records.map(account=>[account.id,`${account.name} · ${account.active?'Activa':'Archivada'}`])} disabled={disabled} onOpen={account=>openAccount(account,operation)}>
+        {operation&&<p>Elige la cuenta exacta. {operation.instruction}</p>}
+        {!records.length&&<p>{operation?'No hay cuentas que cumplan las condiciones de esta acción.':'No hay cuentas para editar.'}</p>}
+      </RecordChoice>
+      {operation&&<button type="button" className="text-button" disabled={disabled} onClick={()=>{setRequest(null);setError('');}}>Volver a la elección de cualquier cuenta</button>}
+    </div>
+    {!accounts.length?<p>No hay cuentas guardadas. Crea una cuenta con su saldo de apertura explícito, incluso si es cero.</p>:<ul className="settings-records">
+      {accounts.map(account=><li key={account.id}><div><strong>{account.name}</strong><p>{account.active?'Activa':'Archivada'} · apertura {account.openingOn}</p></div><button type="button" className="button subtle" disabled={disabled} onClick={()=>openAccount(account)}>Editar cuenta</button></li>)}
+    </ul>}
+  </section>;
+}
+
+function CommercialSettings({platforms,sources,profiles,onEdit,onNavigate}) {
+  const platformGroups=new Map(platforms.map(platform=>[platform.id,{platform,accounts:[]}]));
+  const platformOptions=platforms.map(platform=>[platform.id,`${platform.name}${platform.active?'':' · Archivada'}`]);
+  const knownSources=[],sourceOptions=[];
+  for(const source of sources){
+    const group=platformGroups.get(source.platformId);
+    if(!group)continue;
+    const {platform,accounts}=group;
+    if(source.name==='Principal')accounts.unshift(source);
+    else accounts.push(source);
+    knownSources.push(source);
+    sourceOptions.push([source.id,`${platform.name} · ${source.name}${source.active?'':' · Cuenta archivada'}${platform.active?'':' · Plataforma archivada'}`]);
+  }
+  return <section className="settings-card">
+    <div className="settings-card-heading">
+      <h2 tabIndex={-1} data-advisor-control="settings-platform-source-list">Plataformas y cuentas de origen</h2>
+      <button type="button" className="button primary" data-advisor-control="settings-platform-create" onClick={()=>onEdit({kind:'platform'})}>Crear plataforma</button>
+    </div>
+    <p>Una plataforma identifica el origen comercial del Excel, no una transportadora ni una cuenta de caja. Cada plataforma nueva empieza con una cuenta Principal.</p>
+    {!platforms.length?<p>No hay plataformas. Crea una aquí o al importar tu primer archivo.</p>:<>
+      <div className="settings-subform">
+        <RecordChoice title="Editar plataforma" label="Plataforma para editar" button="Abrir editor de plataforma" control="settings-platform-edit" records={platforms} options={platformOptions} onOpen={row=>onEdit({kind:'platform',row})}/>
+        <RecordChoice title="Crear otra cuenta" label="Plataforma de la nueva cuenta" button="Abrir formulario de cuenta nueva" control="settings-platform-source-create" records={platforms} options={platformOptions} onOpen={platform=>onEdit({kind:'source',platformId:platform.id})}>
+          <p>Los perfiles de una misma cuenta comparten identidades externas. Crea otra cuenta solo para identidades independientes; la plataforma no se puede cambiar después.</p>
+        </RecordChoice>
+        {knownSources.length?<RecordChoice title="Editar cuenta de plataforma" label="Cuenta de origen para editar" button="Abrir editor de cuenta" control="settings-platform-source-edit" records={knownSources} options={sourceOptions} onOpen={row=>onEdit({kind:'source',row})}/>:<p>No hay cuentas de origen para editar.</p>}
+      </div>
+      {Array.from(platformGroups.values(),({platform,accounts})=>{
+        return <section className="settings-subform" key={platform.id}>
+          <div className="settings-card-heading"><h3>{platform.name} · {platform.active?'Activa':'Archivada'}</h3></div>
+          {!platform.active&&<p>No admite importaciones nuevas. Se conservan sus cuentas y perfiles.</p>}
+          {!accounts.length&&<p>No hay cuentas de origen guardadas para esta plataforma.</p>}
+          {accounts.map(source=>{
+            const sourceProfiles=profiles.filter(profile=>profile.sourceId===source.id);
+            return <div className="settings-source" key={source.id}>
+              <div className="settings-card-heading"><h4>{source.name} · {source.active?'Activa':'Archivada'}</h4></div>
+              {!source.active&&<p>La cuenta y sus perfiles se conservan. Reactívala para hacer nuevas importaciones.</p>}
+              {sourceProfiles.length?<ul className="settings-records">{sourceProfiles.map(profile=><li key={profile.id}>
+                <span>{profile.name} · versión {profile.version}</span>
+                <button type="button" className="button subtle" onClick={()=>onNavigate({section:'orders',tab:'imports',batch:'new',source:source.id,record:profile.id})}>{source.active&&platform.active?'Usar perfil y revisar columnas':'Revisar perfil guardado'}</button>
+              </li>)}</ul>:<p>No hay perfiles de columnas guardados.</p>}
+              {source.active&&platform.active&&<button type="button" className="button subtle" onClick={()=>onNavigate({section:'orders',tab:'imports',batch:'new',source:source.id})}>Importar o crear perfil de esta cuenta</button>}
+            </div>;
+          })}
+        </section>;
+      })}
+    </>}
+  </section>;
+}
+
+function PeopleSettings({people,onEdit,unavailable}) {
+  const personOption=person=>[person.id,`${person.name} · ${person.active?'Activa':'Archivada'}`];
+  const options=people.map(personOption);
+  return <section className="settings-card">
+    <div className="settings-card-heading">
+      <h2 tabIndex={-1} data-advisor-control="settings-people-list">Personas responsables y vendedores</h2>
+      <button type="button" className="button primary" data-advisor-control="settings-person-create" onClick={()=>onEdit({kind:'person'})}>Crear persona</button>
+    </div>
+    <p>No crea acceso al panel. Los convenios de sueldo y comisiones se guardan con fecha de vigencia.</p>
+    {!people.length?<p>No hay personas. Crea un responsable cuando lo necesites; no se inventa un vendedor.</p>:<>
+      <div className="settings-subform">
+        <RecordChoice title="Editar o archivar una persona" label="Persona para editar" button="Abrir editor de persona" control="settings-person-edit" records={people} options={options} onOpen={row=>onEdit({kind:'person',row})}/>
+        <RecordChoice title="Vincular o desvincular usuario de acceso" label="Persona para gestionar el vínculo" button="Abrir formulario de vínculo" control="settings-person-user-link" records={people} options={options} onOpen={row=>onEdit({kind:'person',row,showUserLink:true})}>
+          <p>Selecciona a la persona antes de elegir o retirar un usuario existente.</p>
+        </RecordChoice>
+        {PERSON_OBLIGATIONS.map(({focus,title,label,button,needsAgreement})=>{
+          const records=needsAgreement?people.filter(person=>person.salaryAgreements?.length):people;
+          return <RecordChoice key={focus} title={title} label={label} button={button} control={`${focus}-person`} records={records} options={needsAgreement?records.map(personOption):options} onOpen={row=>onEdit({kind:'person',row,focus})} disabled={unavailable||!records.length}>
+            <p>{needsAgreement&&!records.length?'No hay personas con convenios de sueldo guardados.':'Selecciona a la persona exacta antes de abrir el formulario. No se registra ningún pago.'}</p>
+          </RecordChoice>;
+        })}
+      </div>
+      <ul className="settings-records">{people.map(person=><li key={person.id}>
+        <div><strong>{person.name}</strong><p>{person.active?'Activa':'Archivada'} · {(person.salaryAgreements||[]).length} convenios · {(person.commissionOverrides||[]).length} vigencias de comisión{person.userId?' · usuario vinculado':''}</p></div>
+        <button type="button" className="button subtle" onClick={()=>onEdit({kind:'person',row:person})}>Editar persona</button>
+      </li>)}</ul>
+    </>}
+  </section>;
 }
 
 export default function BusinessSettings(props) {
@@ -160,7 +375,7 @@ export default function BusinessSettings(props) {
   if(props.view.tab==='shipping')return <ShippingIntegrationSettings {...props}/>;
   return (props.view.tab||'setup')==='setup'?<BusinessOnboarding {...props}/>:<SettingsWorkspace {...props}/>;
 }
-function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInteractionStateChange=noop,onMutation=noop,revision,assistantOpenRequest,onAssistantOpenHandled=noop}) {
+function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInteractionStateChange=noop,onMutation=noop,revision,assistantOpenRequest,onAssistantOpenHandled=noop,accountCatalogRequest}) {
   const tab=view.tab;
   const [data,setData]=useState(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[editor,setEditor]=useState(null),[accountEditor,setAccountEditor]=useState(null),[severity,setSeverity]=useState('');
   const sequence=useRef(0),errorRef=useRef(null),openingSequence=useRef(0),openingBinding=useRef(null),handledOpen=useRef(null),interaction=useRef({busy:false,dirty:false});
@@ -225,7 +440,7 @@ function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInter
         if(cancelled||current!==openingSequence.current||interaction.current.busy||interaction.current.dirty)return;
         setData(old=>({...old,tab,settings,people:people.records,accounts:accounts.records,platforms:platforms.records,sources:sources.records,users:users?.users||old?.users||[]}));
         openingBinding.current={requestId:request.requestId,target:open.target,entityId:row?.id||null,recordVersion:row?.version??(['policy','preferences'].includes(kind)?settings.version:null)};
-        if(kind==='account')setAccountEditor(row?{...row,assistantPerson:refs.person}:{assistantPerson:refs.person});
+        if(kind==='account')setAccountEditor({account:row||undefined,person:refs.person});
         else setEditor({kind,...(row?{row}:{}),...(kind==='source'?{platformId:row?.platformId||refs.platform.id}:{})});
         setError('');
       }catch(cause){if(!cancelled&&current===openingSequence.current)setError(cause.message);}
@@ -252,17 +467,47 @@ function SettingsWorkspace({api,view,onViewChange,onOpenOrder,onNavigate,onInter
   return <section ref={workspaceRef} className={`business-settings ${styles.workspace}`} aria-label="Configuración del negocio">
     {notice&&<p role="status" className="success alert">{notice}</p>}{error&&<div className="error" role="alert" tabIndex={-1} ref={errorRef}>{error}<button type="button" className="text-button" onClick={()=>load().catch(noop)}>Reintentar</button></div>}{loading&&<p role="status">{visible?'Actualizando; se muestran datos anteriores hasta completar la lectura.':'Cargando configuración…'}</p>}
     {visible&&<div aria-busy={loading}>
-    {tab==='accounts'&&<><section className="settings-card"><div className="settings-card-heading"><h2>Cuentas de caja y bancos</h2><button type="button" className="button primary" onClick={()=>setAccountEditor({})}>Crear cuenta</button></div><p>Define las cuentas donde registras recibos y pagos, su apertura y sus responsables. No son cuentas de plataforma ni usuarios del panel; crearlas no registra una venta ni un recaudo.</p>{!visible.accounts.length?<p>No hay cuentas guardadas. Crea una cuenta con su saldo de apertura explícito, incluso si es cero.</p>:<ul className="settings-records">{visible.accounts.map(account=><li key={account.id}><div><strong>{account.name}</strong><p>{account.active?'Activa':'Archivada'} · apertura {account.openingOn}</p></div><button type="button" className="button subtle" onClick={()=>setAccountEditor(account)}>Editar cuenta</button></li>)}</ul>}</section><section className="settings-card"><div className="settings-card-heading"><h2>Preferencias del negocio</h2><button type="button" className="button subtle" onClick={()=>setEditor({kind:'preferences'})}>Editar preferencias</button></div><p>Elige cuentas predeterminadas, responsable general, recordatorios e informes dentro del panel. Guardar estas preferencias no inicia el proceso automático ni envía mensajes.</p><dl className={styles.preferenceSummary}><div><dt>Cuenta para recibos</dt><dd>{visible.accounts.find(account=>account.id===setup.defaultReceiptAccountId)?.name||'Sin cuenta predeterminada'}</dd></div><div><dt>Cuenta para pagos</dt><dd>{visible.accounts.find(account=>account.id===setup.defaultPaymentAccountId)?.name||'Sin cuenta predeterminada'}</dd></div><div><dt>Responsable general</dt><dd>{visible.people.find(person=>person.id===setup.alertDefaults.responsibleId)?.name||'Sin responsable asignado'}</dd></div><div><dt>Informes del panel</dt><dd>Desde {setup.reportsStartOn} · {setup.reportGenerationTime} Bogotá · {setup.reportPeriods.map(period=>PERIODS.find(([id])=>id===period)?.[1]).join(', ')}</dd></div></dl></section><AutomationStatus automation={setup.automation}/></>}
-    {tab==='people'&&<section className="settings-card"><div className="settings-card-heading"><h2>Personas responsables y vendedores</h2><button type="button" className="button primary" onClick={()=>setEditor({kind:'person'})}>Crear persona</button></div><p>No crea acceso al panel. Los convenios de sueldo y comisiones se guardan con fecha de vigencia.</p>{!visible.people.length?<p>No hay personas. Crea un responsable cuando lo necesites; no se inventa un vendedor.</p>:<ul className="settings-records">{visible.people.map(person=><li key={person.id}><div><strong>{person.name}</strong><p>{person.active?'Activa':'Archivada'} · {(person.salaryAgreements||[]).length} convenios · {(person.commissionOverrides||[]).length} vigencias de comisión{person.userId?' · usuario vinculado':''}</p></div><button type="button" className="button subtle" onClick={()=>setEditor({kind:'person',row:person})}>Editar persona</button></li>)}</ul>}</section>}
-    {tab==='platforms'&&<section className="settings-card"><div className="settings-card-heading"><h2>Plataformas y cuentas de origen</h2><button className="button primary" type="button" onClick={()=>setEditor({kind:'platform'})}>Crear plataforma</button></div><p>La plataforma identifica de dónde viene el Excel, no la transportadora ni una cuenta de caja. Principal se crea automáticamente. Usa otra cuenta solo si sus identidades externas son independientes.</p>{!visible.platforms.length&&<p>No hay plataformas. Crea una o usa el alta inline al importar tu primer archivo.</p>}{visible.platforms.map(platform=><section className="settings-subform" key={platform.id}><div className="settings-card-heading"><h3>{platform.name} · {platform.active?'Activa':'Archivada'}</h3><button type="button" className="button subtle" onClick={()=>setEditor({kind:'platform',row:platform})}>Editar plataforma</button></div>{visible.sources.filter(source=>source.platformId===platform.id).map(source=><div className="settings-source" key={source.id}><div className="settings-card-heading"><h4>{source.name} · {source.active?'Activa':'Archivada'}</h4><button type="button" className="text-button" onClick={()=>setEditor({kind:'source',row:source})}>Editar cuenta de plataforma</button></div><ul className="settings-records">{visible.profiles.filter(profile=>profile.sourceId===source.id).map(profile=><li key={profile.id}><span>{profile.name} · versión {profile.version}</span><button type="button" className="button subtle" onClick={()=>onNavigate({section:'orders',tab:'imports',batch:'new',source:source.id,record:profile.id})}>Usar perfil y revisar columnas</button></li>)}</ul>{source.active&&platform.active&&<button type="button" className="button subtle" onClick={()=>onNavigate({section:'orders',tab:'imports',batch:'new',source:source.id})}>Importar o crear perfil de esta cuenta</button>}</div>)}<div className={styles.secondaryAction}><p>No dupliques Principal para cada perfil de columnas. Crea otra cuenta solo para identidades independientes.</p><button type="button" className="button subtle" onClick={()=>setEditor({kind:'source',platformId:platform.id})}>Crear otra cuenta</button></div></section>)}</section>}
-    {tab==='rules'&&<><section className="settings-card"><div className="settings-card-heading"><h2>Reglas financieras con vigencia</h2><button type="button" className="button primary" onClick={()=>setEditor({kind:'policy'})}>Agregar nueva vigencia</button></div><p>Los pagos no son ventas. Cada pedido conserva su versión histórica; cambiar estas reglas no reescribe el pasado.</p><PolicySummary rules={setup.rulesVersions}/><details><summary>Historial de vigencias</summary><ul className="settings-records">{setup.rulesVersions.map(rule=><li key={rule.id}><div><strong>Desde {rule.effectiveOn}</strong><p>{SALE[rule.saleRecognition]} · {rule.commission.enabled?(rule.commission.mode==='percent'?formatCommissionRate(rule.commission.rateBps)+' %':money(rule.commission.fixedMinor)):'Comisión deshabilitada'} · {EARN[rule.commission.earnWhen]}</p></div></li>)}</ul></details></section><section className="settings-card"><h2>Informes, cuentas y avisos generales</h2><p>Desde {setup.reportsStartOn} · {setup.reportGenerationTime} Bogotá · {setup.reportPeriods.map(period=>PERIODS.find(([id])=>id===period)?.[1]).join(', ')}.</p><p>Recordatorios cada {setup.alertDefaults.reminderHours} horas calendario. Solo avisos dentro del panel.</p><button type="button" className="button subtle" onClick={()=>setEditor({kind:'preferences'})}>Editar preferencias</button></section><AutomationStatus automation={setup.automation}/></>}
-    {tab==='alerts'&&<><section className="settings-card"><h2>Revisar alertas del negocio</h2><p>En atención no resuelve la condición. Las alertas resueltas permanecen consultables; no hay borrado ni resolución manual.</p><div className="settings-filters"><Select label="Estado" value={view.status||'active'} empty="Todas las activas" options={[["active","Activas (abiertas y en atención)"],["open","Abiertas"],["acknowledged","En atención"],["resolved","Resueltas"],["all","Todas"]]} onChange={status=>onViewChange({status:status||'active',page:1,record:''})}/><Select label="Tipo" value={view.issue||''} empty="Todos los tipos" options={Object.entries(TYPES)} onChange={issue=>onViewChange({issue,page:1,record:''})}/><Select label="Severidad" value={severity} empty="Todas" options={[["critical","Crítica"],["warning","Advertencia"],["info","Información"]]} onChange={value=>{setSeverity(value);onViewChange({page:1,record:''});}}/></div>
+    {tab==='accounts'&&<>
+      <AccountSettings accounts={visible.accounts} api={api} unavailable={loading||Boolean(error)} accountCatalogRequest={accountCatalogRequest} onCreate={()=>setAccountEditor({})} onOpen={setAccountEditor}/>
+      <section className="settings-card"><div className="settings-card-heading"><h2>Preferencias del negocio</h2><button type="button" className="button subtle" onClick={()=>setEditor({kind:'preferences'})}>Editar preferencias</button></div><p>Elige cuentas predeterminadas, responsable general, recordatorios e informes dentro del panel. Guardar estas preferencias no inicia el proceso automático ni envía mensajes.</p><dl className={styles.preferenceSummary}><div><dt>Cuenta para recibos</dt><dd>{visible.accounts.find(account=>account.id===setup.defaultReceiptAccountId)?.name||'Sin cuenta predeterminada'}</dd></div><div><dt>Cuenta para pagos</dt><dd>{visible.accounts.find(account=>account.id===setup.defaultPaymentAccountId)?.name||'Sin cuenta predeterminada'}</dd></div><div><dt>Responsable general</dt><dd>{visible.people.find(person=>person.id===setup.alertDefaults.responsibleId)?.name||'Sin responsable asignado'}</dd></div><div><dt>Informes del panel</dt><dd>Desde {setup.reportsStartOn} · {setup.reportGenerationTime} Bogotá · {setup.reportPeriods.map(period=>PERIODS.find(([id])=>id===period)?.[1]).join(', ')}</dd></div></dl></section><AutomationStatus automation={setup.automation}/>
+    </>}
+    {tab==='people'&&<PeopleSettings people={visible.people} onEdit={setEditor} unavailable={loading||Boolean(error)}/>}
+    {tab==='platforms'&&<CommercialSettings platforms={visible.platforms} sources={visible.sources} profiles={visible.profiles} onEdit={setEditor} onNavigate={onNavigate}/>}
+    {tab==='rules'&&<>
+      <section className="settings-card">
+        <div className="settings-card-heading"><h2>Reglas financieras con vigencia</h2><button type="button" className="button primary" data-advisor-control={!error?'settings-policy-add-version':undefined} onClick={()=>setEditor({kind:'policy'})}>Agregar nueva vigencia</button></div>
+        <p>Los pagos no son ventas. Cada pedido conserva su versión histórica; cambiar estas reglas no reescribe el pasado.</p>
+        <PolicySummary rules={setup.rulesVersions}/>
+        <details><summary data-advisor-control="settings-policy-history">Historial de vigencias</summary><ul className="settings-records">{setup.rulesVersions.map(rule=><li key={rule.id}><div><strong>Desde {rule.effectiveOn}</strong><p>{SALE[rule.saleRecognition]} · {rule.commission.enabled?(rule.commission.mode==='percent'?formatCommissionRate(rule.commission.rateBps)+' %':money(rule.commission.fixedMinor)):'Comisión deshabilitada'} · {EARN[rule.commission.earnWhen]}</p></div></li>)}</ul></details>
+      </section>
+      <section className="settings-card">
+        <h2>Informes, cuentas y avisos generales</h2><p>Desde {setup.reportsStartOn} · {setup.reportGenerationTime} Bogotá · {setup.reportPeriods.map(period=>PERIODS.find(([id])=>id===period)?.[1]).join(', ')}.</p><p>Recordatorios cada {setup.alertDefaults.reminderHours} horas calendario. Solo avisos dentro del panel.</p>
+        <button type="button" className="button subtle" data-advisor-control={!error?'settings-business-preferences':undefined} onClick={()=>setEditor({kind:'preferences'})}>Editar preferencias</button>
+      </section>
+      <AutomationStatus automation={setup.automation}/>
+    </>}
+    {tab==='alerts'&&<><section className="settings-card">
+      <h2 tabIndex={-1} data-advisor-control={!error?'business-alert-list':undefined}>Revisar alertas del negocio</h2>
+      <p>En atención no resuelve la condición. Las alertas resueltas permanecen consultables; no hay borrado ni resolución manual.</p>
+      <div className="settings-filters" role="group" aria-label="Filtros de alertas" tabIndex={-1} data-advisor-control={!error?'business-alert-filters':undefined}>
+        <Select label="Estado" value={view.status||'active'} empty="Todas las activas" options={[["active","Activas (abiertas y en atención)"],["open","Abiertas"],["acknowledged","En atención"],["resolved","Resueltas"],["all","Todas"]]} onChange={status=>onViewChange({status:status||'active',page:1,record:''})}/>
+        <Select label="Tipo" value={view.issue||''} empty="Todos los tipos" options={Object.entries(TYPES)} onChange={issue=>onViewChange({issue,page:1,record:''})}/>
+        <Select label="Severidad" value={severity} empty="Todas" options={[["critical","Crítica"],["warning","Advertencia"],["info","Información"]]} onChange={value=>{setSeverity(value);onViewChange({page:1,record:''});}}/>
+      </div>
       {visible.selected&&!visible.alerts.records.some(alert=>alert.id===visible.selected.id)&&<AlertCard alert={visible.selected} selected onClearSelection={()=>onViewChange({record:''})} onEdit={()=>setEditor({kind:'alert',row:visible.selected})} onAction={openAction}/>}
-      {!visible.alerts.records.length?<p>No hay alertas persistidas para estos filtros. Esto no confirma que todos los datos estén al día: revisa el estado del proceso.</p>:<ul className="settings-alerts">{visible.alerts.records.map(alert=><li key={alert.id}><AlertCard alert={alert} selected={alert.id===view.record} onClearSelection={()=>onViewChange({record:''})} onEdit={()=>setEditor({kind:'alert',row:alert})} onAction={openAction}/></li>)}</ul>}
-      <div className="admin-actions"><button type="button" className="button subtle" disabled={visible.alerts.page<=1||loading} onClick={()=>onViewChange({page:visible.alerts.page-1})}>Ver página anterior</button><span>Página {visible.alerts.page} · {visible.alerts.total} alertas</span><button type="button" className="button subtle" disabled={visible.alerts.page*20>=visible.alerts.total||loading} onClick={()=>onViewChange({page:visible.alerts.page+1})}>Ver página siguiente</button></div></section><section className="settings-card"><h2>Configurar reglas de avisos</h2><p>Define umbrales en horas o días calendario, o la anticipación estimada del agotamiento de existencias en días, semanas o meses, y asigna responsables. No envía correo ni WhatsApp. Habilitar una regla no inicia el proceso automático.</p><ul className="settings-records">{visible.rules.map(rule=><li key={rule.id}><div><strong>{TYPES[rule.type]}</strong><p>{rule.enabled?'Habilitada':'Deshabilitada'}{rule.thresholds.hours?' · '+rule.thresholds.hours+' horas':''}{rule.thresholds.days?' · '+rule.thresholds.days+' días':''}{rule.type==='stock_low'&&STOCK_UNITS[rule.thresholds.unit]?' · anticipación '+rule.thresholds.amount+' '+STOCK_UNITS[rule.thresholds.unit][0].toLowerCase():''} · recordatorio {rule.reminderHours} h</p></div><button type="button" className="button subtle" onClick={()=>setEditor({kind:'alert-rule',row:rule})}>Configurar aviso</button></li>)}</ul></section><AutomationStatus automation={setup.automation}/></>}
+      {!visible.alerts.records.length?<p>No hay alertas persistidas para estos filtros. Esto no confirma que todos los datos estén al día: revisa el estado del proceso.</p>:<ul className="settings-alerts">{visible.alerts.records.map(alert=><li key={alert.id}><AlertCard alert={alert} selected={alert.id===view.record} onSelect={()=>onViewChange({record:alert.id})} onClearSelection={()=>onViewChange({record:''})} onEdit={()=>setEditor({kind:'alert',row:alert})} onAction={openAction}/></li>)}</ul>}
+      <div className="admin-actions"><button type="button" className="button subtle" disabled={visible.alerts.page<=1||loading} onClick={()=>onViewChange({page:visible.alerts.page-1})}>Ver página anterior</button><span>Página {visible.alerts.page} · {visible.alerts.total} alertas</span><button type="button" className="button subtle" disabled={visible.alerts.page*20>=visible.alerts.total||loading} onClick={()=>onViewChange({page:visible.alerts.page+1})}>Ver página siguiente</button></div>
+    </section><section className="settings-card" aria-labelledby="settings-alert-rules-heading">
+      <h2 id="settings-alert-rules-heading" tabIndex={-1} data-advisor-control={!error?'alert-rules-list':undefined}>Configurar reglas de avisos</h2>
+      <p>Define umbrales en horas o días calendario, o la anticipación estimada del agotamiento de existencias en días, semanas o meses, y asigna responsables. No envía correo ni WhatsApp. Habilitar una regla no inicia el proceso automático.</p>
+      <ul className="settings-records">{visible.rules.map(rule=><li key={rule.id}>
+        <div><strong>{TYPES[rule.type]}</strong><p>{rule.enabled?'Habilitada':'Deshabilitada'}{rule.thresholds.hours?' · '+rule.thresholds.hours+' horas':''}{rule.thresholds.days?' · '+rule.thresholds.days+' días':''}{rule.type==='stock_low'&&STOCK_UNITS[rule.thresholds.unit]?' · anticipación '+rule.thresholds.amount+' '+STOCK_UNITS[rule.thresholds.unit][0].toLowerCase():''} · recordatorio {rule.reminderHours} h</p></div>
+        <button type="button" className="button subtle" data-advisor-control={!error?`alert-rule-${rule.type.replaceAll('_','-')}`:undefined} onClick={()=>setEditor({kind:'alert-rule',row:rule})}>Configurar aviso</button>
+      </li>)}</ul>
+    </section><AutomationStatus automation={setup.automation}/></>}
     </div>}
     {editor&&visible&&<SettingsEditor key={editor.kind+':'+(editor.row?.id||'new')} editor={editor} data={visible} api={api} onClose={()=>setEditor(null)} onSaved={saved} onInteractionStateChange={reportInteraction} onAssistantRegistered={assistantRegistered}/>}
-    {accountEditor&&<BusinessActionDialog action="account-save" context={{account:accountEditor.id?accountEditor:undefined,person:accountEditor.assistantPerson}} api={api} onClose={()=>setAccountEditor(null)} onSaved={saved} onInteractionStateChange={reportInteraction} onAssistantRegistered={assistantRegistered} configuration/>}
+    {tab==='accounts'&&accountEditor&&<BusinessActionDialog action="account-save" context={accountEditor} accountOperation={accountEditor.accountOperation} api={api} onClose={()=>setAccountEditor(null)} onSaved={saved} onInteractionStateChange={reportInteraction} onAssistantRegistered={assistantRegistered} configuration/>}
   </section>;
 }
 function PolicySummary({rules}) {
@@ -272,8 +517,16 @@ function PolicySummary({rules}) {
 }
 function AutomationStatus({automation}) {
   const titles={running:'Proceso automático con señal reciente',never:'Sin ejecución automática registrada',stale:'Actualización automática detenida',error:'Proceso automático con error',clock_skew:'Hora del proceso por revisar'};
-  return <section className="settings-card"><h2>Estado de actualización automática</h2><p><strong>{titles[automation?.status]||'Sin estado del proceso disponible'}</strong></p><p>Última señal: {dateTime(automation?.lastHeartbeatAt)}. {automation?.status==='running'?'Una señal reciente no garantiza que cada trabajo haya terminado.':'No se confirma que alertas e informes programados estén al día.'}</p><p className="hint">El panel no inicia ni configura un servicio externo. El proceso de trabajos debe ejecutarse en el servidor; no se promete actualización por tener esta pantalla abierta.</p></section>;
+  return <section className="settings-card"><h2 tabIndex={-1} data-advisor-control="settings-automation-status">Estado de actualización automática</h2><p><strong>{titles[automation?.status]||'Sin estado del proceso disponible'}</strong></p><p>Última señal: {dateTime(automation?.lastHeartbeatAt)}. {automation?.status==='running'?'Una señal reciente no garantiza que cada trabajo haya terminado.':'No se confirma que alertas e informes programados estén al día.'}</p><p className="hint">El panel no inicia ni configura un servicio externo. El proceso de trabajos debe ejecutarse en el servidor; no se promete actualización por tener esta pantalla abierta.</p></section>;
 }
-function AlertCard({alert,onEdit,onAction,selected=false,onClearSelection}) {
-  return <article data-alert-id={alert.id} className={`settings-alert${selected?' '+styles.selectedAlert:''}`} aria-current={selected?true:undefined}><div className="settings-card-heading"><h3 tabIndex={-1}>{alert.title}</h3><span className="pill">{{critical:'Crítica',warning:'Advertencia',info:'Información'}[alert.severity]} · {{open:'Abierta',acknowledged:'En atención',resolved:'Resuelta'}[alert.state]}</span></div>{selected&&<p className={styles.selectionLabel}>Alerta seleccionada</p>}<p>{alert.reason}</p>{alert.count!=null&&<p>Registros: {alert.count}</p>}{alert.amountMinor!=null&&<p>Importe: {money(alert.amountMinor)}</p>}<p>Responsable: {alert.responsibleName||'Sin asignar'} · Primera observación: {dateTime(alert.firstSeenAt)} · Última: {dateTime(alert.lastSeenAt)}</p><div className="admin-actions"><button type="button" className="button subtle" onClick={()=>onAction(alert.action)}>{alert.action.label}</button>{alert.state!=='resolved'&&<button type="button" className="button primary" onClick={onEdit}>{alert.state==='acknowledged'?'Reasignar atención':'En atención / asignar'}</button>}{selected&&<button type="button" className="text-button" onClick={onClearSelection}>Cerrar selección</button>}</div></article>;
+function AlertCard({alert,onEdit,onAction,selected=false,onSelect,onClearSelection}) {
+  return <article data-alert-id={alert.id} className={`settings-alert${selected?' '+styles.selectedAlert:''}`} aria-current={selected?true:undefined}>
+    <div className="settings-card-heading"><h3 tabIndex={-1} data-advisor-control={selected?'business-alert-selected-episode':undefined}>{alert.title}</h3><span className="pill">{{critical:'Crítica',warning:'Advertencia',info:'Información'}[alert.severity]} · {{open:'Abierta',acknowledged:'En atención',resolved:'Resuelta'}[alert.state]}</span></div>
+    {selected&&<p className={styles.selectionLabel}>Alerta seleccionada</p>}<p>{alert.reason}</p>{alert.count!=null&&<p>Registros: {alert.count}</p>}{alert.amountMinor!=null&&<p>Importe: {money(alert.amountMinor)}</p>}<p>Responsable: {alert.responsibleName||'Sin asignar'} · Primera observación: {dateTime(alert.firstSeenAt)} · Última: {dateTime(alert.lastSeenAt)}</p>
+    <div className="admin-actions">
+      <button type="button" className="button subtle" onClick={()=>onAction(alert.action)}>{alert.action.label}</button>
+      {alert.state!=='resolved'&&<button type="button" className="button primary" data-advisor-control={selected?'alert-attention-editor':undefined} onClick={onEdit}>{alert.state==='acknowledged'?'Reasignar atención':'En atención / asignar'}</button>}
+      {selected?<button type="button" className="text-button" onClick={onClearSelection}>Cerrar selección</button>:onSelect&&<button type="button" className="text-button" onClick={onSelect} aria-label={`Ver episodio: ${alert.title}`}>Ver episodio</button>}
+    </div>
+  </article>;
 }

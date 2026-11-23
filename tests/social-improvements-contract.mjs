@@ -129,7 +129,7 @@ const cases = [
     const second = await getSocialAnalysis(store, f.campaignId, { asOf: CUT });
     assert.equal(second.commercialStale, true); assert.equal(JSON.parse((await jobRow(store, f.campaignId)).data).generation, generation);
     const before = await commercialFingerprint(store);
-    await processSocialAnalysisTurn(store, { now: CLOCK, maxCampaigns: 1 });
+    await processSocialAnalysisTurn(store, { now: JSON.parse(queued.data).nextRunAt, maxCampaigns: 1 });
     const finished = await jobRow(store, f.campaignId), refreshed = await getSocialAnalysis(store, f.campaignId, { asOf: CUT });
     assert.equal(finished.state, 'succeeded'); assert.equal(finished.lease_token, null);
     assert.equal(refreshed.status, 'current'); assert.equal(refreshed.commercialStale, false); assert.equal(refreshed.evidenceHash, initial.evidenceHash);
@@ -140,7 +140,8 @@ const cases = [
     await recordExpense(store, { requestId: id(), category: 'operating', amountMinor: 23456, incurredOn: '2026-09-16', concept: 'Segundo gasto ajeno a esta campaña' }, f.actorId);
     assert.equal((await getSocialAnalysis(store, f.campaignId, { asOf: CUT })).commercialStale, true);
     const replayBefore = await commercialFingerprint(store);
-    await processSocialAnalysisTurn(store, { now: CLOCK, maxCampaigns: 1 });
+    const replayJob = await jobRow(store, f.campaignId);
+    await processSocialAnalysisTurn(store, { now: JSON.parse(replayJob.data).nextRunAt, maxCampaigns: 1 });
     const replayed = await getSocialAnalysis(store, f.campaignId, { asOf: CUT });
     assert.equal((await jobRow(store, f.campaignId)).state, 'succeeded');
     assert.equal(replayed.status, 'current'); assert.equal(replayed.commercialStale, false);

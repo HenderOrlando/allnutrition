@@ -11,7 +11,7 @@ import ImportHistory from './ImportHistory';
 import ImportDecisionDialog from './ImportDecisionDialog';
 import ImportedData from './ImportedData';
 import ImportReviewEffects, { InventoryOpeningControls, ReviewExpenses } from './ImportReviewEffects';
-import { useAssistantBridge, useAssistantForm, useAssistantSelection } from './AssistantBridge';
+import { useAssistantBridge, useAssistantForm, useAssistantSelection, validateAdvisorTarget } from './AssistantBridge';
 import { formatMoneyMinor } from '@/lib/business/money.mjs';
 import { readAdminView } from '@/lib/admin-view.mjs';
 import styles from './OrderExperience.module.css';
@@ -23,10 +23,21 @@ const FINAL_STATES=new Set(['completed','completed_with_errors','expired','cance
 const LINE_FIELDS=new Set(importFields.filter(field=>field.scope==='line').map(field=>field.value));
 const FIELD_DEFINITIONS=new Map(importFields.map(field=>[field.value,field]));
 const STATE_LABELS={uploaded:'Archivo recibido',previewing:'Preparando revisión',review:'Por revisar',queued:'Importación en cola',applying:'Importando',completed:'Importación completada',completed_with_errors:'Importación parcial: quedan pendientes',failed:'Requiere corrección',expired:'Archivo vencido',cancelled:'Importación cancelada'};
+const DOWNLOAD_CONTROLS={file:'import-original-download',prepared:'import-prepared-download',errors:'import-errors-download',expanded:'import-expanded-download'};
 const COMMERCIAL_FIELDS=importFields.filter(field=>field.scope==='order'&&field.effect==='commercial'&&!['sellerExternalKey','shippingCharge'].includes(field.value));
 const ASSISTANT_CELL_FIELDS=new Set(['shippingType','shipmentReference','cancellationReason','shipmentNotes','expenseConcept','expenseSupplier','expenseReference','expenseNotes','expenseCampaign','orderAdditionalField','expenseAdditionalField','additionalField']);
 const RESULT_LABELS={created:'Operaciones nuevas',updated:'Operaciones actualizadas',unchanged:'Sin cambios',conflict:'Conflictos',rejected:'Rechazados',applied:'Aplicados',new:'Nuevos',valid:'Válidos',invalid:'Con errores',omitted:'Omitidos',errors:'Con excepciones',groupsProcessed:'Grupos procesados',settlementsProcessed:'Liquidaciones procesadas',settlementsPending:'Liquidaciones pendientes de aplicación'};
 const RESOLUTION_LABELS={link_product:'Vincular producto',link_person:'Vincular vendedor',link_order:'Vincular pedido',link_shipment:'Vincular envío',link_expense:'Vincular gasto importado',duplicate:'Marcar fila duplicada',independent_record:'Confirmar operación independiente',additional_quantity:'Contar como cantidad adicional',status:'Asignar estado externo',review_policy:'Aprobar política histórica',review_authority:'Revisar autoridad o rectificación',accept_formulas:'Aceptar valores guardados de fórmulas',omit_group:'Omitir grupo completo',omit_settlement_package:'Excluir paquete Heka completo',commercial_update:'Completar o corregir datos del pedido',cell_value:'Completar o corregir celda',line_costs:'Completar costos históricos',opening_observation:'Clasificar hecho frente al conteo'};
+const LINK_ADVISOR_CONTROLS={link_product:'import-product-identity',link_person:'import-seller-identity',link_order:'import-order-identity',link_shipment:'import-shipment-identity',link_expense:'import-expense-identity'};
+const ROW_ADVISOR_CONTROLS={duplicate:'import-duplicate-resolution',independent_record:'import-independent-row',additional_quantity:'import-additional-quantity',opening_observation:'import-opening-fact',cell_value:'import-cell-correction'};
+const GROUP_ADVISOR_CONTROLS={status:'import-observed-status',review_policy:'import-historical-policy',review_authority:'import-source-authority',commercial_update:'import-order-correction',line_costs:'import-historical-line-cost',omit_group:'import-group-exclusion'};
+function resolverDecisionControl(resolver){
+ if(!resolver)return;
+ const {action,entityKey,sheet,rowNumber,bulkRows,bulkKeys,bulkObservations}=resolver;
+ if(bulkRows||bulkKeys||bulkObservations)return;
+ if(action==='accept_formulas')return sheet?'import-cached-formula-consent':undefined;
+ return sheet&&rowNumber&&ROW_ADVISOR_CONTROLS[action]||entityKey&&GROUP_ADVISOR_CONTROLS[action]||undefined;
+}
 const RESOLUTION_GROUPS=[
  {label:'Vincular registros',actions:['link_product','link_person','link_order','link_shipment','link_expense']},
  {label:'Interpretar el archivo',actions:['status','duplicate','independent_record','additional_quantity','accept_formulas']},
@@ -83,8 +94,11 @@ function serverGroups(batch){return batch?.preview?.groups||[];}
 function cutoffDate(value){if(!value)return '';if(!value.includes('T'))return value;const instant=new Date(value);return Number.isNaN(instant.getTime())?'':new Intl.DateTimeFormat('en-CA',{timeZone:'America/Bogota',year:'numeric',month:'2-digit',day:'2-digit'}).format(instant);}
 function rowExternalKey(action,row){const values=row.normalized?.values||{};if(action==='link_product')return row.normalized?.lines?.[0]?.productExternalKey||'';if(action==='link_person')return values.sellerExternalKey||'';if(action==='link_order')return values.externalOrderId||'';if(action==='link_shipment')return values.externalShipmentId||values.tracking||'';return '';}
 const resolutionIdentity=item=>json([item.action,item.action==='cell_value'?null:item.entityKey||null,item.sheet||null,item.rowNumber?Number(item.rowNumber):null,item.action==='cell_value'?null:item.externalKey||null,item.action==='cell_value'?item.columnIndex:null]);
+const advisorImportMatches=(batch,selection)=>batch?.id===selection.batchId&&batch.version===selection.version
+ &&(batch.acceptedRevision??null)===(selection.revision??null)&&(batch.preview?.previewHash??null)===(selection.previewHash??null);
+const rowHasIssue=row=>row&&!['applied','skipped'].includes(row.state)&&!row.applied&&row.errors?.length>0;
 
-export default function ImportWizard({api,view:inputView,onViewChange,onNavigate,onInteractionStateChange,onCreateProduct,onMutation,assistantOpenRequest,onAssistantOpenHandled}){
+export default function ImportWizard({api,view:inputView,onViewChange,onNavigate,onInteractionStateChange,onCreateProduct,onMutation,assistantOpenRequest,onAssistantOpenHandled,advisorTargetRequest,onAdvisorTargetHandled,importReviewRequest}){
  const view=inputView||{},isNew=view.batch==='new',savedBatchId=isNew?'':view.batch||'';
  const errorRef=useRef(null),headingRef=useRef(null),currentBatch=useRef(null),loadSequence=useRef(0),sourceSequence=useRef(0),profileSequence=useRef(0),lookupSequence=useRef(0),mounted=useRef(true),baseline=useRef(''),lastNotification=useRef('');
  const prefillContext=useRef(''),diagnosticRef=useRef(null),requestBusy=useRef(false),listSequence=useRef(0),optionsSequence=useRef(0),navigation=useRef(onViewChange);
@@ -92,6 +106,9 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  const cancellationRequested=useRef(false),pendingCreation=useRef(null),pendingOperation=useRef(null),operationAbort=useRef(null);
  const mappingRootRef=useRef(null),focusColumnProblems=useRef(false);
  const stepHeadingRef=useRef(null);
+ const wizardRef=useRef(null),advisorRowControl=useRef(null),advisorReviewControl=useRef(null),advisorPendingControl=useRef(null);
+ const advisorHandled=useRef(null),advisorLive=useRef(null),seenPhase=useRef(null),preparedAdvisorRow=useRef(null);
+ const [readyAdvisorTarget,setReadyAdvisorTarget]=useState(null);
  const fileHelpId=useId();
  const assistantBridge=useAssistantBridge(),assistantOpenNotice=useRef('');
  const [assistantOpenContext,setAssistantOpenContext]=useState(null);
@@ -109,6 +126,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  function includeSheet(name){const previous=workbookConfig.sheets.find(sheet=>sheet.sheetName===name);chooseSheetConfig({...previous||blankSheetConfig(name),enabled:true});}
  const [ownFiles,setOwnFiles]=useState(false),[fileCutoff,setFileCutoff]=useState(''),[openingDate,setOpeningDate]=useState(''),[selectedGroups,setSelectedGroups]=useState([]),[issueFilter,setIssueFilter]=useState('');
  const [pendingOnly,setPendingOnly]=useState(false),[rowQuery,setRowQuery]=useState(''),[rowLocation,setRowLocation]=useState(null),[sourceRowsOpen,setSourceRowsOpen]=useState(false);
+ const [advisorRow,setAdvisorRow]=useState(null);
  useAssistantSelection({view,enabled:Boolean(savedBatchId && batch?.id === savedBatchId),selection:{kind:'import',batchId:savedBatchId,sheet:rowLocation?.sheet || null,rowNumber:rowLocation?.rowNumber ?? null,state:rowState || null,q:rowQuery,page}});
  const [resultLimits,setResultLimits]=useState({orders:20,shipments:20,expenses:20});
  const [productRecords,setProductRecords]=useState([]);
@@ -148,10 +166,9 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
   const names=new Set(chosen.map(sheet=>sheet.sheetName));setWorkbookConfig(previous=>({...previous,sheets:previous.sheets.map(sheet=>names.has(sheet.sheetName)?{...sheet,reportAsOf:fileCutoff}:sheet)}));setIncludeValidOnly(false);setNotice('Corte confirmado para las hojas indicadas; una columna de corte nunca fue reemplazada.');
  }
  async function confirmStatusProposals(){
-  const chosen=workbookConfig.sheets.filter(sheet=>sheet.enabled&&['orders','tracking','settlements'].includes(sheet.purpose)),proposals=batch.workbook.suggestions?.sheets||[],changes=chosen.map(sheet=>({sheet,proposal:proposals.find(item=>item.sheetName===sheet.sheetName)})).filter(item=>Object.keys(item.proposal?.statusMapSuggestions||{}).length);
-  if(!changes.length)return;
-  if(!await decide({title:'Confirmar equivalencias de seguimiento',description:'Revisa el significado de cada estado original.',items:changes.flatMap(({sheet,proposal})=>Object.entries(proposal.statusMapSuggestions).map(([raw,value])=>({key:json([sheet.sheetName,raw]),label:`${sheet.sheetName} · ${raw}`,detail:`→ ${shipmentStates.find(state=>state.value===value)?.label||value}`}))),warning:'Un estado administrativo no confirma entrega ni cobro. Las equivalencias que ya editaste se conservan.',confirmLabel:'Usar estas equivalencias'}))return;
-  const mappings=new Map(changes.map(({sheet,proposal})=>[sheet.sheetName,proposal.statusMapSuggestions]));setWorkbookConfig(previous=>({...previous,sheets:previous.sheets.map(sheet=>mappings.has(sheet.sheetName)?{...sheet,statusMap:{...mappings.get(sheet.sheetName),...sheet.statusMap}}:sheet)}));setIncludeValidOnly(false);
+  if(!statusProposals.length)return;
+  if(!await decide({title:'Confirmar equivalencias de seguimiento',description:'Revisa el significado de cada estado original.',items:statusProposals.flatMap(({sheetName,statusMapSuggestions})=>Object.entries(statusMapSuggestions).map(([raw,value])=>({key:json([sheetName,raw]),label:`${sheetName} · ${raw}`,detail:`→ ${shipmentStates.find(state=>state.value===value)?.label||value}`}))),warning:'Un estado administrativo no confirma entrega ni cobro. Las equivalencias que ya editaste se conservan.',confirmLabel:'Usar estas equivalencias'}))return;
+  const mappings=new Map(statusProposals.map(({sheetName,statusMapSuggestions})=>[sheetName,statusMapSuggestions]));setWorkbookConfig(previous=>({...previous,sheets:previous.sheets.map(sheet=>mappings.has(sheet.sheetName)?{...sheet,statusMap:{...mappings.get(sheet.sheetName),...sheet.statusMap}}:sheet)}));setIncludeValidOnly(false);
  }
  async function ignorePendingSheets(selection){
   const pending=Array.isArray(selection)?selection:(batch?.workbook?.sheets||[]).map(sheet=>sheetWork(sheet)).filter(item=>item.selected?.enabled).map(item=>({sheetName:item.sheet.name,columns:item.pending})).filter(sheet=>sheet.columns.length);
@@ -174,6 +191,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  },[api,savedProductIds,resourceRetry]);
  const [groupPage,setGroupPage]=useState(1);
  const [operationError,setOperationError]=useState(null);
+ const [hekaPackage,setHekaPackage]=useState(null);
  const cancelled=batch?.state==='cancelled',cancellation=batch?.cancellation;
  const workLocked=LOCKED_STATES.has(batch?.state),previewing=batch?.state==='previewing',fileUnavailable=!!(batch?.fileExpired||batch?.fileDiscarded||['expired','cancelled'].includes(batch?.state));
  const canEditDraft=!!batch?.fileHash&&!fileUnavailable&&!workLocked&&!previewing&&batch.state!=='completed';
@@ -250,6 +268,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  });
  const assistantLocked=()=>importAssistant.assistantBusy||resolverAssistant.assistantBusy||platformNameAssistant.assistantBusy||sourceNameAssistant.assistantBusy||profileNameAssistant.assistantBusy;
  const interactionBusy=Boolean(busy)||assistantLocked();
+ advisorLive.current={id:advisorTargetRequest?.id,batch,blocked:dirty||includeValidOnly||interactionBusy||loading};
  useEffect(()=>{
   const request=assistantOpenRequest,open=request?.open,destination=readAdminView(open?.view);
   setAssistantOpenContext(null);
@@ -312,18 +331,35 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  const diagnosticKey=diagnostic?[diagnosticText(diagnostic),diagnosticLocation(diagnostic),diagnosticValue(diagnostic.code),diagnosticValue(diagnostic.phase)].join('|'):'';
  currentBatch.current=batch;
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;requestBusy.current=false;loadSequence.current++;sourceSequence.current++;profileSequence.current++;lookupSequence.current++;};},[]);
- useEffect(()=>{onInteractionStateChange?.({dirty,busy:interactionBusy});},[dirty,interactionBusy,onInteractionStateChange]);
+ useEffect(()=>{onInteractionStateChange?.({dirty:dirty||includeValidOnly,busy:interactionBusy});},[dirty,includeValidOnly,interactionBusy,onInteractionStateChange]);
  useEffect(()=>()=>onInteractionStateChange?.({dirty:false,busy:false}),[onInteractionStateChange]);
  useEffect(()=>{if(error&&!busy){if(focusColumnProblems.current){const problem=focusColumnProblems.current;focusColumnProblems.current=false;requestAnimationFrame(()=>{const target=mappingRootRef.current?.querySelector(Number.isInteger(problem.index)?`[data-import-column="${problem.index}"] [data-import-destination]`:'[data-import-column-issues]');(target||errorRef.current)?.focus();});}else errorRef.current?.focus();}},[error,busy]);
  useEffect(()=>{if(diagnosticKey)diagnosticRef.current?.focus();},[diagnosticKey]);
- useEffect(()=>{(stepHeadingRef.current||headingRef.current||document.querySelector('[data-import-history-heading]'))?.focus();},[step,batch?.id,isNew]);
- useEffect(()=>{setGroupPage(1);setSelectedGroups([]);setIssueFilter('');setRowLocation(null);setPage(1);if(batch?.id&&(page!==1||rowLocation))void loadBatch(batch.id,{state:rowState,q:rowQuery});},[batch?.id,batch?.preview?.previewHash]);
+ const catalogBatch=importReviewRequest?.view.batch,catalogStep=importReviewRequest?.importStep;
+ const catalogStepFocus=useRef(false);
+ useEffect(()=>{
+  if(!catalogBatch||batch?.id!==catalogBatch||step===catalogStep)return;
+  if(catalogStep===2&&canEditDraft&&batch.workbook||catalogStep===3&&step<3&&batch.preview?.previewHash){
+   catalogStepFocus.current=catalogStep;setStep(catalogStep);
+  }
+ },[catalogBatch,catalogStep,batch?.id,batch?.preview?.previewHash,batch?.workbook,step,canEditDraft]);
+ useEffect(()=>{
+  if(!isNew||batch||step!==1||catalogStep!==1)return;
+  if(importReviewRequest.focus==='import-create-platform')setOwnFiles(true);
+  if(importReviewRequest.focus==='import-create-source'&&platformId)setAdvancedSource(true);
+ },[batch,catalogStep,importReviewRequest,isNew,platformId,step]);
+ useEffect(()=>{
+  if(catalogStepFocus.current===step){catalogStepFocus.current=false;return;}
+  (stepHeadingRef.current||headingRef.current||document.querySelector('[data-import-history-heading]'))?.focus();
+ },[step,batch?.id,isNew]);
+ useEffect(()=>{setGroupPage(1);setSelectedGroups([]);setIssueFilter('');setAdvisorRow(null);setRowLocation(null);setPage(1);if(batch?.id&&(page!==1||rowLocation))void loadBatch(batch.id,{state:rowState,q:rowQuery});},[batch?.id,batch?.preview?.previewHash]);
  const acceptBatch=useCallback((data,{hydrate=false}={})=>{
   if(!data?.id)return;
   const previous=currentBatch.current;
   if(previous?.id===data.id&&previous.version>data.version)return;
   const phaseChanged=previous?.id!==data.id||previous?.state!==data.state||previous?.progress?.phase!==data.progress?.phase||previous?.acceptedRevision!==data.acceptedRevision||!!previous?.fileExpired!==!!data.fileExpired||!!previous?.fileDiscarded!==!!data.fileDiscarded;
   setBatch(data);
+  if(hydrate||previous?.id!==data.id||data.state==='cancelled')preparedAdvisorRow.current=null;
   if(hydrate||data.state==='cancelled'||data.workbook&&!previous?.workbook){const next=clientConfig(data.config);setWorkbookConfig(next);setActiveSheet(current=>next.sheets.some(sheet=>sheet.sheetName===current)?current:next.sheets.find(sheet=>sheet.enabled)?.sheetName||'');setInventoryOpening(data.inventoryOpening||null);setOpeningDate(data.inventoryOpening?.on||'');setFileCutoff('');setOwnFiles(false);setResolutions(data.resolutions||[]);setProfileId(data.profileId||'');baseline.current=json({config:next,resolutions:data.resolutions||[],profileId:data.profileId||'',inventoryOpening:data.inventoryOpening||null});setPlatformId(data.platformId||'');setSourceId(data.sourceId||'');}
   if(data.state==='cancelled'){setFile(null);setResolver(null);setStatusDraft('');setProfileName('');}
   currentBatch.current=data;
@@ -360,16 +396,80 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  useEffect(()=>{if(!isNew&&view.record)navigation.current?.({record:undefined});},[isNew,view.record]);
  const loadBatch=useCallback(async(id,{hydrate=false,targetPage=1,state='',q='',sheet='',rowNumber=null}={})=>{
   const sequence=++loadSequence.current;setLoading(true);
-  const filters=new URLSearchParams({page:String(targetPage)});for(const [key,value] of Object.entries({state,q,sheet,rowNumber}))if(value!==''&&value!=null)filters.set(key,String(value));
-  try{const data=await api(`/api/admin/imports/${encodeURIComponent(id)}?${filters}`);if(sequence!==loadSequence.current||!mounted.current)return;acceptBatch(data,{hydrate});setError('');return data;}
+  const path=`/api/admin/imports/${encodeURIComponent(id)}`,filters=new URLSearchParams({page:String(targetPage)});for(const [key,value] of Object.entries({state,q}))if(value!==''&&value!=null)filters.set(key,String(value));
+  try{const data=sheet?await api(path,{method:'POST',body:json({page:targetPage,state,q,sheet,rowNumber})}):await api(`${path}?${filters}`);if(sequence!==loadSequence.current||!mounted.current)return;acceptBatch(data,{hydrate});setError('');return data;}
   catch(cause){if(sequence===loadSequence.current&&mounted.current){setOperationError({operation:'read',status:cause.status});setError(`No se pudo actualizar la importación. Conservamos el trabajo local y la última lectura. ${diagnosticText(cause)}`);}}
   finally{if(sequence===loadSequence.current&&mounted.current)setLoading(false);}
  },[api,acceptBatch]);
+ useEffect(()=>{
+  const request=advisorTargetRequest,id=request?.id;
+  if(!id||advisorHandled.current===id||readyAdvisorTarget?.id===id||request?.view?.tab!=='imports'||request.view.batch!==savedBatchId||loading)return;
+  const target=validateAdvisorTarget(request);
+  const fail=message=>{advisorHandled.current=id;onAdvisorTargetHandled?.(id,message);};
+  if(!target||target.selection?.kind!=='import')return fail('La solicitud no corresponde a un lote de importación permitido.');
+  if(!batch){if(error)fail('No se pudo consultar el lote indicado.');return;}
+  if(batch.id!==savedBatchId)return;
+  if(dirty||includeValidOnly||interactionBusy)return fail('Conservamos tu borrador. Termina o descarta los cambios antes de abrir otra acción de Ali.');
+  const selection=target.selection,isRow=target.focus==='import-row';
+  const controller=new AbortController();
+  const stillClean=()=>!controller.signal.aborted&&advisorLive.current.id===id&&advisorLive.current.batch===batch&&!advisorLive.current.blocked;
+  void (async()=>{
+   try{
+    const path=`/api/admin/imports/${encodeURIComponent(selection.batchId)}`;
+    const current=await api(path,isRow?{method:'POST',signal:controller.signal,body:json({sheet:selection.sheet,rowNumber:selection.rowNumber})}:{signal:controller.signal});
+    if(!stillClean())return;
+    if(current?.id!==selection.batchId)return fail('La respuesta no corresponde al lote indicado.');
+    if(!advisorImportMatches(current,selection)||!advisorImportMatches(batch,selection)){
+     setNotice('El lote cambió. Se muestra el estado guardado más reciente; no se trasladó la selección anterior.');
+     setAdvisorRow(null);setRowLocation(null);setRowQuery('');setRowState('');setPage(1);
+     void loadBatch(current.id,{hydrate:true});
+     return fail('El lote cambió. Actualiza la tarea y revisa la versión vigente antes de elegir una fila.');
+    }
+    let nextStep;
+    if(isRow){
+     const row=current.rows?.records?.find(row=>row.sheet===selection.sheet&&row.rowNumber===selection.rowNumber);
+     if(current.state!=='review'||!selection.previewHash||current.fileExpired||current.fileDiscarded||!rowHasIssue(row))return fail('La incidencia ya no está disponible en esa revisión. Elige de nuevo desde la tarea.');
+     setRowQuery('');setRowState('');setPage(1);setSourceRowsOpen(true);setRowLocation({sheet:selection.sheet,rowNumber:selection.rowNumber});setAdvisorRow(selection);nextStep=3;
+    }else if(target.focus==='import-pending'){
+     if(!['completed_with_errors','failed'].includes(current.state)||!current.fileHash||current.fileExpired||current.fileDiscarded)return fail('El lote ya no permite generar una revisión de pendientes.');
+     nextStep=4;
+    }else if(target.focus==='import-result'){
+     if(!LOCKED_STATES.has(current.state)&&!FINAL_STATES.has(current.state)&&!current.fileExpired&&!current.fileDiscarded&&!(current.state==='failed'&&current.acceptedRevision))return fail('Este lote todavía no muestra ese resultado.');
+     nextStep=4;
+    }else if(target.focus==='import-review'){
+     nextStep=!current.fileHash?1:current.preview?.previewHash||['preview','review'].includes(current.progress?.phase)?3:2;
+    }else return fail('No hay un control permitido para esta solicitud.');
+    if(isRow)acceptBatch(current);
+    setStep(nextStep);setReadyAdvisorTarget({...target,id,step:nextStep});
+   }catch(cause){if(stillClean())fail(diagnosticText(cause)||'No se pudo verificar el lote guardado.');}
+  })();
+  return()=>controller.abort();
+ },[advisorTargetRequest,readyAdvisorTarget?.id,savedBatchId,loading,error,batch,dirty,includeValidOnly,interactionBusy,api,loadBatch,acceptBatch,onAdvisorTargetHandled]);
+ useEffect(()=>{
+  const request=readyAdvisorTarget;
+  if(!request||request.id!==advisorTargetRequest?.id||advisorHandled.current===request.id)return;
+  const frame=requestAnimationFrame(()=>{
+   const live=advisorLive.current;
+   if(live.id!==request.id)return;
+   const root=wizardRef.current;
+   const reviewControl=step===1?root?.querySelector('input[type=file]'):step===2?root?.querySelector('[data-import-sheet-form] button.primary:not(:disabled)'):advisorReviewControl.current;
+   const control=request.focus==='import-row'?advisorRowControl.current
+    :request.focus==='import-pending'?advisorPendingControl.current
+    :request.focus==='import-result'?stepHeadingRef.current
+    :diagnosticRef.current||(reviewControl?.disabled?null:reviewControl)||stepHeadingRef.current;
+   const safe=step===request.step&&!live.blocked&&advisorImportMatches(live.batch,request.selection)
+    &&(request.focus!=='import-row'||advisorRow===request.selection)&&control?.isConnected&&!control.disabled;
+   if(safe)control.focus();
+   const issue=!safe||document.activeElement!==control?'No se pudo enfocar el control de la revisión vigente. No se guardó ninguna decisión.':undefined;
+   advisorHandled.current=request.id;onAdvisorTargetHandled?.(request.id,issue);
+  });
+  return()=>cancelAnimationFrame(frame);
+ },[advisorTargetRequest?.id,readyAdvisorTarget,step,advisorRow,onAdvisorTargetHandled]);
  async function inspectRows(location){
   const exact=location?.sheet&&Number.isInteger(Number(location.rowNumber))?{sheet:location.sheet,rowNumber:Number(location.rowNumber)}:null;
-  setSourceRowsOpen(true);setRowQuery('');setRowState('');setPage(1);setRowLocation(exact);
+  setAdvisorRow(null);setSourceRowsOpen(true);setRowQuery('');setRowState('');setPage(1);setRowLocation(exact);
   const data=await loadBatch(batch.id,{...(exact||{})});
-  if(data)requestAnimationFrame(()=>document.querySelector('[data-import-source-rows]')?.focus());
+  if(data)requestAnimationFrame(()=>wizardRef.current?.querySelector('[data-import-source-rows]')?.focus());
  }
  function configureSheet(name,section='columns'){
   setIncludeValidOnly(false);setStep(2);setActiveSheet(batch?.workbook?.sheets.some(sheet=>sheet.name===name)?name:'');setSheetFocus(section);
@@ -377,7 +477,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  }
  useEffect(()=>{
   if(savedBatchId&&currentBatch.current?.id===savedBatchId)return;
-  loadSequence.current++;setError('');setOperationError(null);setResolver(null);setStatusDraft('');setProfileName('');setIncludeValidOnly(false);setPage(1);setRowState('');setRowQuery('');setRowLocation(null);setSourceRowsOpen(false);
+  loadSequence.current++;setError('');setOperationError(null);setResolver(null);setStatusDraft('');setProfileName('');setIncludeValidOnly(false);setPage(1);setRowState('');setRowQuery('');setAdvisorRow(null);setRowLocation(null);setSourceRowsOpen(false);
   if(savedBatchId){if(currentBatch.current?.id!==savedBatchId){setBatch(null);void loadBatch(savedBatchId,{hydrate:true});}}
   else{setBatch(null);setWorkbookConfig(blankConfig());setActiveSheet('');setInventoryOpening(null);setOpeningDate('');setFileCutoff('');setOwnFiles(false);setResolutions([]);setFile(null);setPlatformId('');setSourceId('');setProfileId('');setStep(1);baseline.current='';prefillContext.current='';}
  },[savedBatchId,isNew,loadBatch]);
@@ -404,7 +504,11 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  },[api,view.source,view.record,isNew,resourceRetry]);
  useEffect(()=>{if(!batch?.id||!ACTIVE_STATES.has(batch.state)||error||busy||decision)return;const id=batch.id,timer=setTimeout(()=>{void loadBatch(id,{targetPage:page,state:rowState,q:rowQuery,...rowLocation||{}});},1500);return()=>clearTimeout(timer);},[batch,page,rowState,rowQuery,rowLocation,error,busy,decision,loadBatch]);
  useEffect(()=>{
-  if(!batch?.id||!FINAL_STATES.has(batch.state))return;const key=`${batch.id}:${batch.state}:${batch.version}`;if(lastNotification.current!==key){lastNotification.current=key;onMutation?.({type:'import',batchId:batch.id,state:batch.state});}
+  const previous=seenPhase.current;seenPhase.current=batch;
+  const previewChanged=previous?.id===batch?.id&&previous?.state!==batch?.state&&(previous?.state==='previewing'||batch?.state==='previewing');
+  if(!batch?.id||!(FINAL_STATES.has(batch.state)||batch.state==='failed'||previewChanged))return;
+  const key=`${batch.id}:${batch.state}:${batch.version}`;
+  if(lastNotification.current!==key){lastNotification.current=key;onMutation?.({type:'import',batchId:batch.id,state:batch.state});}
  },[batch,onMutation]);
  useEffect(()=>{
   const sequence=++sourceSequence.current;setSources([]);if(!platformId)return;
@@ -430,8 +534,12 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
   if(cancellationRequested.current||assistantLocked())return;
   const target=currentBatch.current,creation=pendingCreation.current,active=pendingOperation.current,controller=operationAbort.current;
   if(target&&!target.canCancel)return;
+  if(!target&&!creation){
+   if(!file||!await decide({title:'Quitar archivo seleccionado',description:'El archivo no se ha subido. Puedes elegirlo otra vez desde tu dispositivo.',items:[{key:'file',label:file.name}],confirmLabel:'Quitar de esta selección'}))return;
+   setFile(null);setNotice('Archivo quitado de la selección. No se enviaron datos para importar.');
+   return;
+  }
   if(!await decide({title:target?.acceptedRevision?'Cancelar importación':'Descartar archivo',description:'Se detendrá lo pendiente cuando el servidor confirme la cancelación.',items:[{key:target?.id||'file',label:target?.filename||file?.name||'Archivo en carga',detail:target?.acceptedRevision?'Importación aceptada; sus operaciones confirmadas se conservan.':'Archivo privado de esta importación.'}],warning:'El original se descartará de forma irreversible. No se deshacen pedidos, inventario ni cobros ya confirmados. Si el servidor terminó primero, la cancelación puede rechazarse.',confirmLabel:'Descartar original y cancelar'}))return;
-  if(!target&&!creation){setFile(null);setNotice('Archivo descartado. No se enviaron datos para importar.');return;}
   cancellationRequested.current=true;loadSequence.current++;setLoading(false);setBusy('cancel');setError('');setNotice('');
   let id=target?.id,data=null,failure=null;
   try{
@@ -513,6 +621,9 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  async function saveDraft({nextConfig=workbookConfig,nextResolutions=resolutions,nextProfileId=profileId}={}){
   const target=currentBatch.current;if(!target)throw new Error('Primero guarda el archivo.');
   if(!canEditDraft)throw new Error('Esta importación no permite editar el borrador ahora.');
+  if(preparedAdvisorRow.current&&!advisorImportMatches(target,preparedAdvisorRow.current)){
+   const error=new Error('La revisión cambió después de preparar la corrección. Recarga lo guardado antes de elegir esa fila otra vez.');error.status=409;throw error;
+  }
   nextConfig={...nextConfig,sheets:nextConfig.sheets.map(sheet=>{const actual=batch?.workbook?.sheets?.find(item=>item.name===sheet.sheetName);if(!actual||!sheet.enabled)return sheet;const missing=sheetWork(actual,nextConfig).pending.filter(column=>!sheet.columns.some(item=>item.index===column.index));return {...sheet,columns:[...sheet.columns,...missing].sort((a,b)=>a.index-b.index)};})};
   const invalid=nextConfig.sheets.filter(sheet=>sheet.enabled).flatMap(sheet=>getImportColumnIssues(sheet.columns,sheet.layout,sheet.purpose).map(issue=>({...issue,sheetName:sheet.sheetName})));
   if(invalid.length){focusColumnProblems.current=true;setActiveSheet(invalid[0].sheetName);setStep(2);throw new Error(invalid[0].message);}
@@ -527,7 +638,10 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    acceptBatch(result);
   }
   const storedConfig=clientConfig(result.config||nextConfig),storedResolutions=result.resolutions||nextResolutions,storedProfile=result.profileId||nextProfileId||'';
-  acceptBatch(result);setWorkbookConfig(storedConfig);setResolutions(storedResolutions);setProfileId(storedProfile);setInventoryOpening(result.inventoryOpening||null);baseline.current=json({config:storedConfig,resolutions:storedResolutions,profileId:storedProfile,inventoryOpening:result.inventoryOpening||null});return result;
+  acceptBatch(result);setWorkbookConfig(storedConfig);setResolutions(storedResolutions);setProfileId(storedProfile);setInventoryOpening(result.inventoryOpening||null);baseline.current=json({config:storedConfig,resolutions:storedResolutions,profileId:storedProfile,inventoryOpening:result.inventoryOpening||null});
+  preparedAdvisorRow.current=null;
+  onMutation?.({type:'import',batchId:result.id,state:result.state});
+  return result;
  }
  async function saveAndPreview(event){
   event?.preventDefault();await perform('preview',async()=>{
@@ -566,9 +680,10 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  function changeColumn(index,header,patch){setConfig(old=>{const columns=[...old.columns],position=columns.findIndex(column=>column.index===index),previous={...(columns[position]||{})};if(patch.destination!==undefined&&patch.destination!==previous.destination)delete previous.fieldName;const next={destination:'ignore',group:0,...previous,index,header:normalizedHeader(header),...patch},definition=FIELD_DEFINITIONS.get(next.destination);if(definition?.type!=='additional')delete next.fieldName;if(!(definition?.scope==='line'&&old.layout==='order_rows'||definition?.scope==='expense_line'&&old.layout==='expense_columns'))next.group=0;if(position<0)columns.push(next);else columns[position]=next;return {...old,columns};});setIncludeValidOnly(false);}
  function addResolutions(items){const keys=new Set(items.map(resolutionIdentity));setResolutions(old=>[...old.filter(item=>!keys.has(resolutionIdentity(item))),...items]);setIncludeValidOnly(false);}
  function addResolution(item){addResolutions([item]);}
- async function openResolver(action,context={}){
+ async function openResolver(action,context={},advisorAnchor=null){
   if(!canEditDraft||assistantLocked())return;
   if(resolver&&!window.confirm('Hay una resolución sin guardar. ¿Descartarla?'))return;
+  if(advisorAnchor&&!advisorImportMatches(currentBatch.current,advisorAnchor)){setError('La revisión cambió. Elige la fila de nuevo desde la tarea de Ali.');return;}
   const group=groups.find(group=>groupKey(group)===(context.entityKey||groupKey(context))),items=group?.lines||[],unit=group?.units?.[0];
   let value=['review_authority','commercial_update'].includes(action)?{}:'';
   if(action==='line_costs')value={lineCosts:items.map(line=>{const cost=group.units?.flatMap(unit=>unit.lineCosts||[]).find(cost=>cost.lineId===line.lineId);return {lineId:line.lineId,selected:true,unitCostMinor:cost?.unitCostMinor??line.orderUnitCostMinor??line.unitCostMinor??null,...(line.components?.length?{components:line.components.map(component=>({productId:component.productId,unitCostMinor:cost?.components?.find(item=>item.productId===component.productId)?.unitCostMinor??component.unitCostMinor??null}))}:{})};})};
@@ -578,9 +693,9 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    const matchingLines=(context.normalized?.lines||[]).filter(line=>line.productExternalKey===next.externalKey);
    next.giftOnly=context.giftOnly===true||context.productType==='gift'||batch?.pendingProductLinks?.some(link=>link.externalKey===next.externalKey&&link.giftOnly)||matchingLines.length>0&&matchingLines.every(line=>line.giftOnly)||group?.errors?.some(issue=>issue.code==='IMPORT_GIFT_LINK'&&issue.externalKey===next.externalKey)||false;
    const saved=resolutions.find(item=>resolutionIdentity(item)===resolutionIdentity(next))||[...resolutions].reverse().find(item=>item.action===action&&item.externalKey===next.externalKey&&(!item.entityKey||item.entityKey===next.entityKey)&&(!item.sheet||item.sheet===next.sheet)&&(!item.rowNumber||Number(item.rowNumber)===Number(next.rowNumber)));
-   if(saved&&!next.internalId){next.internalId=saved.internalId;next.reason=next.reason||saved.reason||'';}
+   if(saved&&!next.internalId&&!advisorAnchor){next.internalId=saved.internalId;next.reason=next.reason||saved.reason||'';}
   }
-  setError('');setResolver(next);setLookup([]);setLookupQuery('');
+  setError('');setResolver(advisorAnchor?{...next,advisorAnchor,internalId:''}:next);setLookup([]);setLookupQuery('');
   if(action==='review_policy')await perform('rules',async()=>{const data=await api('/api/admin/business/settings');setRules(data.rulesVersions||[]);});
  }
  function closeResolver(){setResolver(null);}
@@ -597,6 +712,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  useEffect(()=>{if(!resolver?.action?.startsWith('link_'))return;const timer=setTimeout(()=>{void searchLookup(resolver.action,lookupQuery);},250);return()=>{clearTimeout(timer);lookupSequence.current++;};},[resolver?.action,lookupQuery,searchLookup]);
  async function applyResolution(event){
   event.preventDefault();if(!resolver||busy||assistantLocked())return;const {action,entityKey,sheet,rowNumber,externalKey,internalId,value,reason,columnIndex,cellType}=resolver;
+  if(!advisorResolutionIsCurrent(resolver))return;
   let resolvedValue=value;
   if(action==='review_policy')resolvedValue={ruleVersionId:value};
   if(action==='accept_formulas')resolvedValue=true;
@@ -624,20 +740,40 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    });
    return;
   }
+  if(resolver.advisorAnchor)preparedAdvisorRow.current=resolver.advisorAnchor;
   if(resolver.bulkKeys?.length){const keys=new Set(resolver.bulkKeys);addResolutions(groups.filter(group=>keys.has(groupKey(group))).map(group=>({...prepared,entityKey:groupKey(group),sheet:undefined,rowNumber:undefined})));}
   else addResolution(prepared);
   closeResolver();setNotice('Resolución preparada. Genera una revisión nueva para validar sus consecuencias.');
  }
+ function advisorResolutionIsCurrent({advisorAnchor,sheet,rowNumber}){
+  if(!advisorAnchor||advisorImportMatches(currentBatch.current,advisorAnchor)&&sheet===advisorAnchor.sheet&&Number(rowNumber)===advisorAnchor.rowNumber)return true;
+  setError('La revisión o la ubicación cambió. Cierra la resolución y elige la fila actual de nuevo; no se guardó esta decisión.');
+  return false;
+ }
  async function createProduct(kind='products',productType='product'){
+  if(!advisorResolutionIsCurrent(resolver))return;
   if(resolver.internalId){setError('Ya seleccionaste una referencia existente. Usa «Guardar vínculo»; no necesitas crear otra.');return;}
   const previousResolver={...resolver};
-  const context=await perform('create-product',async()=>{const saved=await saveDraft();if(!saved)return null;return {batchId:saved.id,sourceId:saved.sourceId,externalKey:previousResolver.externalKey,entityKey:previousResolver.entityKey,rowNumber:previousResolver.rowNumber,sheet:previousResolver.sheet,kind,productType};});
+  const context=await perform('create-product',async()=>{
+   const saved=await saveDraft();if(!saved)return null;
+   if(previousResolver.advisorAnchor)previousResolver.advisorAnchor={...previousResolver.advisorAnchor,version:saved.version,revision:saved.acceptedRevision,previewHash:saved.preview?.previewHash};
+   return {batchId:saved.id,sourceId:saved.sourceId,externalKey:previousResolver.externalKey,entityKey:previousResolver.entityKey,rowNumber:previousResolver.rowNumber,sheet:previousResolver.sheet,kind,productType};
+  });
   if(!context)return;setResolver(null);onInteractionStateChange?.({busy:false,dirty:false});
   await new Promise(resolve=>requestAnimationFrame(resolve));
   if(view?.batch!==context.batchId){onViewChange?.({batch:context.batchId,record:undefined});await new Promise(resolve=>requestAnimationFrame(resolve));}
   try{
    const created=await onCreateProduct?.(context),product=created?.record||created;
    if(!mounted.current)return;
+   const anchor=previousResolver.advisorAnchor;
+   if(anchor){
+    const saved=await api(`/api/admin/imports/${encodeURIComponent(context.batchId)}`);
+    if(!mounted.current)return;
+    if(!advisorImportMatches(saved,anchor)||!advisorImportMatches(currentBatch.current,anchor)){
+     setError(product?.id?'La referencia se guardó, pero el lote cambió. No se vinculó a la fila anterior; actualiza la tarea y elige de nuevo.':'El lote cambió mientras revisabas la referencia. Actualiza la tarea antes de volver a elegir una fila.');
+     return;
+    }
+   }
    if(!product?.id){setResolver(previousResolver);setStep(3);setNotice('Creación cancelada. Conservamos el lote y sus vínculos guardados; elige una referencia existente o crea una nueva.');return;}
    const resolution={action:'link_product',externalKey:context.externalKey,...(context.entityKey?{entityKey:context.entityKey}:{}),...(context.sheet?{sheet:context.sheet}:{}),...(context.rowNumber?{rowNumber:context.rowNumber}:{}),internalId:product.id};
    const next=[...(currentBatch.current.resolutions||[]).filter(item=>resolutionIdentity(item)!==resolutionIdentity(resolution)),resolution];
@@ -646,8 +782,10 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
   }catch(cause){if(mounted.current){setResolver(previousResolver);setStep(3);setError(cause.message);}}
  }
  const workbook=batch?.workbook,sheets=workbook?.sheets||[],inspection=workbook?.inspections?.find(sheet=>sheet.sheetName===config.sheetName&&Number(sheet.headerRow)===Number(config.headerRow))||(workbook?.sheetName===config.sheetName&&Number(workbook?.headerRow)===Number(config.headerRow)?workbook:null),samplesCurrent=!!inspection,sampleRows=inspection?.rows||[],selectedSheet=sheets.find(sheet=>sheet.name===config.sheetName),headerSample=sampleRows.find(row=>row.rowNumber===Number(config.headerRow)),headers=headerSample?.cells||[],sampleColumns=samplesCurrent?Math.min(200,Math.max(headers.length,selectedSheet?.columnCount||0,...sampleRows.map(row=>row.cells?.length||0))):0,groups=serverGroups(batch),summary=batch?.preview?.summary||batch?.summary||{},invalidGroups=groups.filter(group=>['conflict','rejected','invalid'].includes(group.state)||group.valid===false||group.errors?.length),invalidCount=Number(summary.conflict??0)+Number(summary.rejected??summary.invalid??0)||invalidGroups.length,validCount=Number(summary.valid??groups.length-invalidGroups.length),hasPreview=!!batch?.preview?.previewHash;
+ const resolverGroup=resolver?.entityKey?groups.find(group=>groupKey(group)===resolver.entityKey):null;
  const settlementsPending=Number(summary.settlementsPending||0),hasImportable=validCount>0||settlementsPending>0;
  const reviewReady=batch?.state==='review'&&hasPreview&&!diagnostic&&!draftChanged&&!fileUnavailable;
+ const statusProposals=step===2?(workbook?.suggestions?.sheets||[]).filter(proposal=>Object.keys(proposal.statusMapSuggestions||{}).length&&workbookConfig.sheets.some(sheet=>sheet.enabled&&sheet.sheetName===proposal.sheetName&&['orders','tracking','settlements'].includes(sheet.purpose))):[];
  const sheetWorkItems=sheets.map(sheet=>sheetWork(sheet)),pendingSheetDecisions=!workbookConfig.sheets.some(sheet=>sheet.enabled)||sheetWorkItems.some(item=>item.undecided)||workbookConfig.sheets.some(sheet=>sheet.enabled&&!sheets.some(item=>item.name===sheet.sheetName)),pendingSheetColumns=sheetWorkItems.some(item=>item.selected?.enabled&&(!item.samples||item.pending.length||item.issues.length||!item.selected.columns.some(column=>column.destination&&column.destination!=='ignore')));
  const columnsConfirmed=!!workbook&&!pendingSheetDecisions&&!pendingSheetColumns&&workbookConfig.sheets.some(sheet=>sheet.enabled);
  useEffect(()=>{setIncludeValidOnly(false);},[draft,batch?.preview?.previewHash,batch?.fileHash]);
@@ -710,10 +848,16 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
  const stateChanged=operationError?.status===409&&operationError.operation!=='download';
  const lookupOptions=resolver?.action==='link_product'?lookup.filter(item=>(!resolver.giftOnly||item.kind==='products'&&item.productType==='gift')&&(item.id===resolver.internalId||!lookupQuery||[item.title,item.name,item.sku,item.presentation].some(value=>String(value||'').toLocaleLowerCase('es').includes(lookupQuery.toLocaleLowerCase('es'))))):lookup;
  const selectedProduct=resolver?.action==='link_product'?productRecords.find(item=>item.id===resolver.internalId):null;
- return <section className={`admin-card ${styles.wizard}`} aria-label="Importar Excel" aria-busy={interactionBusy} inert={assistantLocked()}>
-  {showWizard&&<header className="admin-heading"><div><p className="eyebrow">Incorporar mi negocio · Excel</p><h2 ref={headingRef} tabIndex={-1}>Importar Excel</h2><p className="muted">Pedidos, envíos y gastos, sin confirmar cobros ni pagos.</p></div><div className="admin-actions">{batch&&<button type="button" className="button subtle" disabled={!!busy} onClick={startNewBatch}>Nueva importación</button>}{(batch?batch.canCancel:!!file)&&<button type="button" className="button subtle" disabled={busy==='cancel'} onClick={discardImport}>{busy==='cancel'?'Cancelando…':batch?.acceptedRevision?'Cancelar importación':'Descartar archivo'}</button>}</div></header>}
+ const resolutionControl=resolverDecisionControl(resolver);
+ const platform=platforms.find(item=>item.id===platformId), source=sources.find(item=>item.id===sourceId);
+ const activeOrigin=platform?.active&&source?.active;
+ const archiveWarning=platform?.active===false||source?.active===false;
+ const linkedSource=isNew&&activeOrigin&&sourceId===view.source;
+ const linkedProfile=isNew&&activeOrigin&&profileId===view.record&&profiles.some(item=>item.id===profileId);
+ return <section ref={wizardRef} className={`admin-card ${styles.wizard}`} aria-label="Importar Excel" aria-busy={interactionBusy||loading} inert={assistantLocked()}>
+  {showWizard&&<header className="admin-heading"><div><p className="eyebrow">Incorporar mi negocio · Excel</p><h2 ref={headingRef} tabIndex={-1} data-advisor-control={batch?.id?'import-batch-status':undefined}>Importar Excel</h2>{batch?.filename&&<p><strong>{batch.filename}</strong> · Versión {batch.version}</p>}<p className="muted">Pedidos, envíos y gastos, sin confirmar cobros ni pagos.</p></div><div className="admin-actions">{batch&&<button type="button" className="button subtle" disabled={!!busy} onClick={startNewBatch}>Nueva importación</button>}{(batch?batch.canCancel:!!file)&&<button type="button" className="button subtle" data-advisor-control={batch?'import-batch-cancellation':'import-discard-local-file'} disabled={busy==='cancel'} onClick={discardImport}>{busy==='cancel'?'Cancelando…':batch?.acceptedRevision?'Cancelar importación':'Descartar archivo'}</button>}</div></header>}
   {showWizard&&!showResult&&<><ol className={`order-progress ${styles.progress}`} aria-label="Pasos de importación">{['Archivo','Hojas y columnas','Revisar datos','Confirmar'].map((label,index)=>{const number=index+1,saved=number===1?!!batch?.fileHash:number===2?columnsConfirmed:number===3?reviewReady:false,reason=number>1&&!batch?.fileHash?'Primero guarda el archivo':number>2&&!columnsConfirmed?'Completa las hojas y columnas':number===4&&!hasPreview?'Genera una revisión actualizada':'';return <li key={label} aria-current={step===number?'step':undefined} data-saved={saved}><button type="button" className="text-button" disabled={!!busy||workLocked||!!reason} onClick={()=>goToStep(number)}><strong>{number}. {label}</strong></button><span>{step===number?'Estás aquí':saved?'Guardado':reason||'Por confirmar'}</span></li>;})}</ol>
-  <div className={styles.stepGuide}><p className={styles.sectionLabel}>Paso {step} de 4</p><h3 ref={stepHeadingRef} tabIndex={-1}>{STEP_GUIDANCE[step-1][0]}</h3><p>{STEP_GUIDANCE[step-1][1]}</p></div></>}
+  <div className={styles.stepGuide}><p className={styles.sectionLabel}>Paso {step} de 4</p><h3 ref={stepHeadingRef} tabIndex={-1} data-advisor-control={step===1&&!batch?'import-file-step':undefined}>{STEP_GUIDANCE[step-1][0]}</h3><p>{STEP_GUIDANCE[step-1][1]}</p></div></>}
   {error&&!resolver&&<div className="error" role="alert" tabIndex={-1} ref={errorRef}>{stateChanged&&<h3>El estado cambió; revisa antes de continuar</h3>}<p>{diagnosticText(error)}</p><button type="button" className="button subtle" disabled={!!busy} onClick={stateChanged&&batch?reloadSaved:refreshStatus}>{stateChanged&&batch?'Recargar lo guardado':'Actualizar estado'}</button></div>}
   {notice&&<p role="status">{notice}</p>}
   {showWizard&&batch&&<p role="status" aria-live="polite">{savedStatus}</p>}
@@ -725,13 +869,13 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    <p>Captura: {batch.shippingOrigin.capturedAt} · Hash de origen: {batch.shippingOrigin.sourceHash}</p>
    <p>El neto ya descuenta el envío total. La comisión es informativa; no se descuenta otra vez. Esta declaración no confirma recaudos, gastos ni recepción bancaria.</p>
    {batch.shippingOrigin.packages.map(packet=><article className={styles.importGroup} key={packet.id}>
-    <label className="checkbox-field"><input type="checkbox" checked={!resolutions.some(item=>item.action==='omit_settlement_package'&&item.externalKey===packet.id.trim()&&item.value===true&&!item.remove)} disabled={!!busy||!canEditDraft||previewing} onChange={event=>includeHekaPackage(packet,event.target.checked)}/><span>Incluir paquete completo {packet.id}</span></label>
+    <label className="checkbox-field"><input type="checkbox" data-advisor-control={batch.shippingOrigin.packages.length===1||hekaPackage?.batchId===batch.id&&hekaPackage.id===packet.id?'import-heka-package-choice':undefined} checked={!resolutions.some(item=>item.action==='omit_settlement_package'&&item.externalKey===packet.id.trim()&&item.value===true&&!item.remove)} disabled={!!busy||!canEditDraft||previewing} onChange={event=>includeHekaPackage(packet,event.target.checked)}/><span>Incluir paquete completo {packet.id}</span></label>
     <p>{packet.settlementDate} · {packet.rows.length} filas · Bruto {formatMoneyMinor(packet.grossMinor)} · Envío total {formatMoneyMinor(packet.shippingMinor)} · Comisión informada {formatMoneyMinor(packet.commissionMinor)} · Neto firmado {formatMoneyMinor(packet.netMinor)}</p>
-    <details><summary>IDs e importes originales por fila · {packet.id}</summary><div className={styles.resultsTable} role="region" aria-label={`Filas originales de ${packet.id}`} tabIndex={0}><table><thead><tr><th scope="col">Origen</th><th scope="col">Documento</th><th scope="col">Envío / guía</th><th scope="col">Transportadora</th><th scope="col">Recaudo</th><th scope="col">Envío total</th><th scope="col">Comisión informada</th><th scope="col">Neto firmado</th></tr></thead><tbody>{packet.rows.map(row=><tr key={`${row.sheet}:${row.rowNumber}`}><td>{row.sheet} · {row.rowNumber}</td><td>{row.documentId}</td><td>{row.externalShipmentId||'Sin ID de envío'} · {row.tracking}</td><td>{row.carrier} · {row.carrierCollection}</td><td>{formatMoneyMinor(row.grossMinor)}</td><td>{formatMoneyMinor(row.shippingMinor)}</td><td>{formatMoneyMinor(row.commissionMinor)}</td><td>{formatMoneyMinor(row.netMinor)}</td></tr>)}</tbody></table></div></details>
+    <details name="import-heka-package-readings" onToggle={event=>{const opened=event.currentTarget.open;setHekaPackage(current=>opened?{id:packet.id,batchId:batch.id}:current?.id===packet.id&&current.batchId===batch.id?null:current);}}><summary>IDs e importes originales por fila · {packet.id}</summary><div className={styles.resultsTable} role="region" aria-label={`Filas originales de ${packet.id}`} tabIndex={0}><table><thead><tr><th scope="col">Origen</th><th scope="col">Documento</th><th scope="col">Envío / guía</th><th scope="col">Transportadora</th><th scope="col">Recaudo</th><th scope="col">Envío total</th><th scope="col">Comisión informada</th><th scope="col">Neto firmado</th></tr></thead><tbody>{packet.rows.map(row=><tr key={`${row.sheet}:${row.rowNumber}`}><td>{row.sheet} · {row.rowNumber}</td><td>{row.documentId}</td><td>{row.externalShipmentId||'Sin ID de envío'} · {row.tracking}</td><td>{row.carrier} · {row.carrierCollection}</td><td>{formatMoneyMinor(row.grossMinor)}</td><td>{formatMoneyMinor(row.shippingMinor)}</td><td>{formatMoneyMinor(row.commissionMinor)}</td><td>{formatMoneyMinor(row.netMinor)}</td></tr>)}</tbody></table></div></details>
    </article>)}
   </section>}
   {diagnostic&&<ImportDiagnostic diagnostic={diagnostic} alertRef={diagnosticRef}/>}
-  {diagnostic&&batch&&<section aria-label="Acciones para recuperar la importación"><p>Actualizar estado solo consulta; no repara ni vuelve a procesar el archivo.</p><div className="admin-actions"><button type="button" className="button subtle" disabled={!!busy||loading} onClick={refreshStatus}>Actualizar estado</button>{retained&&!batch.workbook&&diagnostic.category!=='file'&&<button type="button" className="button subtle" disabled={!!busy||previewing} onClick={rereadFile}>Volver a leer el archivo</button>}{retained&&batch.workbook&&diagnostic.category!=='file'&&<><button type="button" className="button subtle" disabled={!!busy||previewing} onClick={()=>configureSheet(diagnostic.sheet,diagnostic.code==='IMPORT_CUTOFF_REQUIRED'?'cutoff':'columns')}>Corregir configuración</button><button type="button" className="button subtle" disabled={!!busy||previewing||draftChanged} onClick={generateNewPreview}>Generar revisión nueva</button></>}{(diagnostic.category==='file'||!retained)&&<button type="button" className="button subtle" onClick={startNewBatch}>Nueva importación</button>}</div>{diagnostic.category==='file'&&<p>Conserva la evidencia y prepara otro archivo. Volver a consultar no cambia un archivo defectuoso.</p>}</section>}
+  {diagnostic&&batch&&<section aria-label="Acciones para recuperar la importación"><p>Actualizar estado solo consulta; no repara ni vuelve a procesar el archivo.</p><div className="admin-actions"><button type="button" className="button subtle" disabled={!!busy||loading} onClick={refreshStatus}>Actualizar estado</button>{retained&&!batch.workbook&&diagnostic.category!=='file'&&<button type="button" className="button subtle" data-advisor-control="import-reinspect-file" disabled={!!busy||previewing} onClick={rereadFile}>Volver a leer el archivo</button>}{retained&&batch.workbook&&diagnostic.category!=='file'&&<><button type="button" className="button subtle" disabled={!!busy||previewing} onClick={()=>configureSheet(diagnostic.sheet,diagnostic.code==='IMPORT_CUTOFF_REQUIRED'?'cutoff':'columns')}>Corregir configuración</button><button type="button" className="button subtle" disabled={!!busy||previewing||draftChanged} onClick={generateNewPreview}>Generar revisión nueva</button></>}{(diagnostic.category==='file'||!retained)&&<button type="button" className="button subtle" onClick={startNewBatch}>Nueva importación</button>}</div>{diagnostic.category==='file'&&<p>Conserva la evidencia y prepara otro archivo. Volver a consultar no cambia un archivo defectuoso.</p>}</section>}
   {previewing&&<p role="status">Preparando revisión en el servidor. El archivo y la configuración están guardados. Puedes navegar o cerrar el panel y retomar este lote; la confirmación estará disponible solo cuando termine la revisión.</p>}
   {!diagnostic&&batch?.progress?.message&&<p role="status">{diagnosticText(batch.progress.message)}</p>}
   {batch?.progress?.settlementIssues?.length>0&&<section className="error" role="alert"><h3>{cancelled?'Excepciones conservadas de liquidaciones':'Liquidaciones por revisar'}</h3><p>{cancelled?'Este lote está cancelado; las excepciones se conservan como historial. Para corregirlas, crea un lote nuevo.':'Los pedidos ya aplicados no se repetirán. Corrige estos vínculos o documentos y genera una revisión nueva.'}</p><ul>{batch.progress.settlementIssues.map((issue,index)=><li key={diagnosticValue(issue.key)||index}>{diagnosticValue(issue.key)} · {messages([issue.error||issue]).join(' ')}</li>)}</ul></section>}
@@ -745,7 +889,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    {!batch&&<>
     <button type="button" className="button subtle" aria-expanded={ownFiles} disabled={!!busy} onClick={()=>setOwnFiles(value=>!value)}>Crear un origen para mis archivos</button>
     {ownFiles&&<form onSubmit={addOwnSource} className={styles.importProposal}>
-     <label className="field">Nombre del origen<input required maxLength={150} value={platformName} onChange={event=>setPlatformName(event.target.value)}/></label>
+     <label className="field">Nombre del origen<input data-advisor-control="import-create-platform" required maxLength={150} value={platformName} onChange={event=>setPlatformName(event.target.value)}/></label>
      <button type="button" className="button subtle" disabled={!!busy||platformNameAssistant.assistantBusy} onClick={()=>platformNameAssistant.openAssistant()}>Ayúdame con el nombre</button>
      <p className="small muted">Se creará una cuenta Principal para conservar las identidades de tus archivos.</p>
      <button className="button subtle" disabled={!!busy||platformNameAssistant.assistantBusy}>Crear origen</button>
@@ -753,30 +897,30 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    </>}
    <form onSubmit={upload}>
     <fieldset disabled={!!busy||!!batch?.fileHash} className={`field ${styles.importGroup}`}><legend>Origen y configuración</legend>
-     <label className="field">Origen<select required disabled={!!batch} value={platformId} onChange={event=>{setPlatformId(event.target.value);setSourceId('');setProfileId('');setAdvancedSource(false);}}><option value="">Elige un origen existente</option>{platforms.map(platform=><option key={platform.id} disabled={!platform.active&&!batch} value={platform.id}>{platform.name}{platform.active?'':' · Archivado'}</option>)}</select></label>
-     {platformId&&<p>Cuenta: <strong>{sources.find(source=>source.id===sourceId)?.name||'Cargando Principal…'}</strong></p>}
+     <label className="field">Origen<select data-advisor-control="import-origin-choice" required disabled={!!batch} value={platformId} onChange={event=>{setPlatformId(event.target.value);setSourceId('');setProfileId('');setAdvancedSource(false);}}><option value="">Elige un origen existente</option>{platforms.map(platform=><option key={platform.id} disabled={!platform.active&&!batch} value={platform.id}>{platform.name}{platform.active?'':' · Archivado'}</option>)}</select></label>
+     {platformId&&<p tabIndex={linkedSource?-1:undefined} data-advisor-control={linkedSource?'import-new-with-source':undefined}>Cuenta: <strong>{source?.name||'Cargando Principal…'}</strong></p>}
      {platformId&&<details open={advancedSource} onToggle={event=>setAdvancedSource(event.currentTarget.open)}><summary>Uso otra cuenta de este origen</summary><p>Solo si sus operaciones tienen identidades independientes de Principal.</p><label className="field">Cuenta de origen<select disabled={!!batch} value={sourceId} onChange={event=>{setSourceId(event.target.value);setProfileId('');}}><option value="">Elige una cuenta</option>{sources.map(source=><option key={source.id} disabled={!source.active&&!batch} value={source.id}>{source.name}{source.active?'':' · Archivada'}</option>)}</select></label></details>}
-     {(platforms.find(item=>item.id===platformId)?.active===false||sources.find(item=>item.id===sourceId)?.active===false)&&<p className="error">Este origen o cuenta está archivado. Conservamos su nombre; reactívalo desde Configuración antes de una nueva carga.</p>}
-     {sourceId&&<label className="field">Usar una configuración guardada (opcional)<select disabled={!!batch} value={profileId} onChange={event=>selectProfile(event.target.value)}><option value="">Configurar este archivo desde cero</option>{profiles.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>}
+     {archiveWarning&&<p className="error">Este origen o cuenta está archivado. Conservamos su nombre; reactívalo desde Configuración antes de una nueva carga.</p>}
+     {sourceId&&<label className="field">Usar una configuración guardada (opcional)<select data-advisor-control={linkedProfile?'import-new-with-profile':activeOrigin?'import-profile-choice':undefined} disabled={!!batch} value={profileId} onChange={event=>selectProfile(event.target.value)}><option value="">Configurar este archivo desde cero</option>{profiles.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>}
      <section className={styles.importProposal} aria-label="Archivo privado"><h3>Archivo Excel</h3>
-      {batch?.fileHash?<><p><strong>{batch.filename}</strong> · Guardado en el servidor.</p><p>El original no se puede sustituir. Para otros datos, inicia una nueva importación.</p></>:<><label className="field">{file?'Cambiar archivo':'Seleccionar archivo Excel'}<input type="file" aria-label="Archivo Excel" accept=".xlsx,.xls,.xlsb,.xlsm" onChange={chooseFile} required={!file}/></label><p>.xlsx, .xls, .xlsb o .xlsm · máximo 10 MiB</p>{file&&<p><strong>{file.name}</strong> · {(file.size/1024/1024).toLocaleString('es-CO',{maximumFractionDigits:2})} MiB · listo para guardar</p>}</>}
+      {batch?.fileHash?<><p><strong>{batch.filename}</strong> · Guardado en el servidor.</p><p>El original no se puede sustituir. Para otros datos, inicia una nueva importación.</p></>:<><label className="field">{file?'Cambiar archivo':'Seleccionar archivo Excel'}<input type="file" data-advisor-control="import-file-picker" aria-label="Archivo Excel" accept=".xlsx,.xls,.xlsb,.xlsm" onChange={chooseFile} required={!file}/></label><p>.xlsx, .xls, .xlsb o .xlsm · máximo 10 MiB</p>{file&&<p><strong>{file.name}</strong> · {(file.size/1024/1024).toLocaleString('es-CO',{maximumFractionDigits:2})} MiB · listo para guardar</p>}</>}
       <details><summary>Requisitos del archivo</summary><p>Hasta 50 hojas, 200 columnas y 10.000 filas por hoja; 50.000 filas seleccionadas por libro. No ejecutamos fórmulas, macros ni enlaces externos. Usar valores guardados de fórmulas requiere tu confirmación; una fórmula sin valor guardado debe corregirse.</p></details>
      </section>
     </fieldset>
     <div className={`admin-actions ${styles.importActions}`}>
-     {batch?.fileHash?<button type="button" className="button primary" onClick={()=>goToStep(2)}>Continuar a hojas y columnas</button>:<button className="button primary" aria-describedby={fileHelpId} disabled={!!busy||!sourceId||!file||platforms.find(item=>item.id===platformId)?.active===false||sources.find(item=>item.id===sourceId)?.active===false}>{busy==='upload'?'Guardando archivo…':'Guardar archivo y continuar'}</button>}
+     {batch?.fileHash?<button type="button" className="button primary" onClick={()=>goToStep(2)}>Continuar a hojas y columnas</button>:<button className="button primary" data-advisor-control="import-file-upload" aria-describedby={fileHelpId} disabled={!!busy||!sourceId||!file||archiveWarning}>{busy==='upload'?'Guardando archivo…':'Guardar archivo y continuar'}</button>}
      <button type="button" className="button subtle" disabled={!!busy} onClick={returnToHistory}>Volver a importaciones</button>
      <p id={fileHelpId}>{busy==='upload'?`Guardando ${file?.name||'el archivo'}; espera la respuesta del servidor.`:!sourceId?'Elige un origen y su cuenta para continuar.':!file&&!batch?.fileHash?'Selecciona un archivo para continuar.':'Todavía no incorpora pedidos ni gastos.'}</p>
     </div>
    </form>
-   <button type="button" className="button subtle" disabled={!!busy} onClick={()=>download('template')}>Descargar plantilla</button>
+   <button type="button" className="button subtle" data-advisor-control="import-template-download" disabled={!!busy} onClick={()=>download('template')}>Descargar plantilla</button>
    {!batch&&!ownFiles&&<details onToggle={event=>setPlatformCreatorOpen(event.currentTarget.open)}><summary>Crear origen de una plataforma</summary><form onSubmit={addPlatform}>
     <label className="field">Nombre de la plataforma<input required maxLength={150} value={platformName} onChange={event=>setPlatformName(event.target.value)}/></label>
     <button type="button" className="button subtle" disabled={!!busy||platformNameAssistant.assistantBusy} onClick={()=>platformNameAssistant.openAssistant()}>Ayúdame con el nombre</button>
     <button className="button subtle" disabled={!!busy||platformNameAssistant.assistantBusy}>Crear plataforma y cuenta Principal</button>
    </form></details>}
    {!batch&&platformId&&advancedSource&&<form onSubmit={addSource}>
-    <label className="field">Nombre de la otra cuenta<input required maxLength={150} value={sourceName} onChange={event=>setSourceName(event.target.value)}/></label>
+    <label className="field">Nombre de la otra cuenta<input data-advisor-control="import-create-source" required maxLength={150} value={sourceName} onChange={event=>setSourceName(event.target.value)}/></label>
     <button type="button" className="button subtle" disabled={!!busy||sourceNameAssistant.assistantBusy} onClick={()=>sourceNameAssistant.openAssistant()}>Ayúdame con el nombre</button>
     <button className="button subtle" disabled={!!busy||sourceNameAssistant.assistantBusy}>Crear cuenta independiente</button>
    </form>}
@@ -787,7 +931,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
    {!workbook?<p role="status">{diagnostic?'No se pudo completar la lectura de las hojas. Consulta el diagnóstico de este lote; el original guardado sigue disponible.':'El servidor está leyendo las hojas. Puedes salir y retomar este lote después.'}</p>:<>
     {sourceId&&<label className="field">Usar una configuración guardada (opcional)<select disabled={!!busy||!canEditDraft} value={profileId} onChange={event=>selectProfile(event.target.value)}><option value="">Configurar este archivo desde cero</option>{profiles.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>}
     <ImportSheetCards sheets={sheets} inspections={workbook.inspections||(workbook.sheetName?[workbook]:[])} config={workbookConfig} suggestions={workbook.suggestions} preview={batch.preview} activeSheet={activeSheet} disabled={!!busy||!canEditDraft} onChoose={selectSheet} onProposal={useSheetProposal} onExclude={excludeSheet} onEnable={includeSheet} onApplySimilar={applySimilarSheets} onApplyPreset={applyWorkbookProposal} onExcludeMissing={excludeMissingSheets}/>
-    <fieldset disabled={!!busy||!canEditDraft||previewing} className={styles.importGroup}><legend>Corte de este archivo, no del perfil anterior</legend><label className="field">Este archivo está actualizado hasta…<input type="date" value={fileCutoff} onChange={event=>setFileCutoff(event.target.value)}/></label><p>Confirma una sola vez las hojas elegidas sin columna de corte. No reemplaza fechas mapeadas, ni se copia la fecha de otro mes.</p><button type="button" className="button subtle" onClick={confirmFileCutoff}>Confirmar corte para hojas elegidas</button><button type="button" className="button subtle" onClick={confirmStatusProposals}>Revisar equivalencias de estados propuestas</button></fieldset>
+    <fieldset disabled={!!busy||!canEditDraft||previewing} className={styles.importGroup}><legend>Corte de este archivo, no del perfil anterior</legend><label className="field">Este archivo está actualizado hasta…<input type="date" data-advisor-control="import-file-cutoff" value={fileCutoff} onChange={event=>setFileCutoff(event.target.value)}/></label><p>Confirma una sola vez las hojas elegidas sin columna de corte. No reemplaza fechas mapeadas, ni se copia la fecha de otro mes.</p><button type="button" className="button subtle" onClick={confirmFileCutoff}>Confirmar corte para hojas elegidas</button><button type="button" className="button subtle" data-advisor-control="import-status-mapping" disabled={!statusProposals.length} onClick={confirmStatusProposals}>Revisar equivalencias de estados propuestas</button></fieldset>
     <button type="button" className="button subtle" disabled={!!busy||!canEditDraft||previewing} onClick={ignorePendingSheets}>Revisar columnas pendientes de las hojas elegidas</button>
     <button type="button" className="button subtle" disabled={!!busy} onClick={focusNextSheet}>Siguiente hoja pendiente</button>
     <form onSubmit={event=>{event.preventDefault();if(pendingSheetDecisions)focusNextSheet();else if(pendingSheetColumns)focusPendingColumns();else void saveAndPreview();}} data-import-sheet-form>
@@ -796,7 +940,7 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
      {activeSheet&&!workbookConfig.sheets.some(sheet=>sheet.sheetName===activeSheet)&&<section className={styles.importProposal}><p>Visitar esta hoja no la incluye. Consulta sus muestras en el catálogo y decide.</p><button type="button" className="button subtle" disabled={!!busy||!canEditDraft} onClick={()=>includeSheet(activeSheet)}>Incluir esta hoja</button><button type="button" className="button subtle" disabled={!!busy||!canEditDraft} onClick={()=>excludeSheet(activeSheet)}>No importar esta hoja</button></section>}
      {activeSheet&&workbookConfig.sheets.some(sheet=>sheet.sheetName===activeSheet&&!sheet.enabled)&&<p>Hoja excluida. Su configuración se conserva; puedes volver a incluirla desde el catálogo.</p>}
      <fieldset disabled={!!busy||!canEditDraft} className={`field ${styles.importGroup}`}>
-      <legend>Contenido y estructura</legend>
+      <legend tabIndex={-1} data-advisor-control={activeSheet&&canEditDraft?'import-sheet-structure':undefined}>Contenido y estructura</legend>
       {activeSheet&&workbookConfig.sheets.some(sheet=>sheet.sheetName===activeSheet&&sheet.enabled)&&<><div className="form-grid">
       {select('purpose','Qué contiene esta hoja',[['orders','Pedidos y sus envíos'],['tracking','Solo seguimiento (no exige productos)'],['settlements','Liquidaciones declaradas (no ingresa dinero a caja)'],['expenses','Gastos de publicidad u operación'],['allocations','Información que acompaña: reparto entre envíos'],['component_costs','Información que acompaña: costos de componentes'],['observations','Información que acompaña: datos informativos']])}
       {['orders','tracking','settlements'].includes(config.purpose)&&<p className="small muted">Usa Solo seguimiento únicamente si esa es la intención del archivo. Un pedido nuevo necesita datos comerciales completos; no se rebajará a seguimiento ni se inventarán productos.</p>}
@@ -804,23 +948,24 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
       </div>
       <details><summary>Encabezado y muestras de esta hoja</summary><label className="field">Fila de encabezados<input type="number" min={1} max={10000} required value={config.headerRow} onChange={event=>updateConfig('headerRow',Number(event.target.value))}/></label>{samplesCurrent?<dl>{headers.map((cell,index)=><div key={index}><dt>Columna {index+1}</dt><dd>{cellText(cell)||'(sin encabezado)'}</dd></div>)}</dl>:<p>Lee las muestras del encabezado elegido antes de asignar columnas.</p>}</details>
       {!samplesCurrent&&<p role="status">La hoja o el encabezado cambió. Lee sus muestras antes de asignar columnas.</p>}
-      <button data-import-config="samples" type="button" className="button subtle" disabled={!!busy||!canEditDraft||samplesCurrent} onClick={()=>perform('samples',async()=>{await saveDraft();setNotice('Lectura de muestras solicitada al servidor.');})}>Leer muestras de esta hoja y encabezado</button>
+      <button data-import-config="samples" data-advisor-control={!samplesCurrent&&canEditDraft?'import-sheet-samples':undefined} type="button" className="button subtle" disabled={!!busy||!canEditDraft||samplesCurrent} onClick={()=>perform('samples',async()=>{await saveDraft();setNotice('Lectura de muestras solicitada al servidor.');})}>Leer muestras de esta hoja y encabezado</button>
       <details open={readingOpen} onToggle={event=>setReadingOpen(event.currentTarget.open)}><summary>Cómo leer fechas y números · {config.dateFormat} · decimal «{config.decimalSeparator}» · miles «{config.groupSeparator||'sin separador'}» · corte {cutoffDate(config.reportAsOf)||'sin confirmar'}</summary><div className="form-grid" data-import-config="cutoff" tabIndex={-1}>
       {select('dateFormat','Orden explícito de las fechas',[['DMY','Día / mes / año'],['MDY','Mes / día / año'],['ISO','Año-mes-día (ISO)']])}
       {select('decimalSeparator','Separador decimal',[ [',','Coma (1234,50)'],['.','Punto (1234.50)'] ])}
       {select('groupSeparator','Separador de miles',[['.','Punto'],[',','Coma'],[' ','Espacio'],['','Sin separador']])}
       <label className="field">Fecha de corte del reporte, si no existe columna<input type="date" value={cutoffDate(config.reportAsOf)} onChange={event=>updateConfig('reportAsOf',event.target.value)}/><small className="muted">Corte al final de este día en Bogotá. Obligatorio para observar estados o costos sin fecha propia; no se usa la fecha de subida.</small></label>
       </div></details>
-     {config.purpose==='orders'&&<label className="checkbox-field"><input type="checkbox" checked={!!config.oneOrderPerGuide} onChange={event=>updateConfig('oneOrderPerGuide',event.target.checked)}/><span>Cada guía corresponde a un pedido: usar la guía como identidad solo con datos comerciales completos.</span></label>}
-     {(config.purpose==='expenses'||config.purpose==='orders'&&config.layout==='order_rows')&&<label className="checkbox-field"><input type="checkbox" checked={config.identityMode==='generated'} onChange={event=>updateConfig('identityMode',event.target.checked?'generated':'provided')}/><span>{config.purpose==='orders'?'Confirmo que cada fila representa un pedido y un envío. Generar identidades técnicas si no hay IDs; la guía real permanece vacía.':'Generar identidad técnica para cada gasto sin ID. Conservaré estos IDs en el archivo preparado para las próximas cargas.'}</span></label>}
+     {config.purpose==='orders'&&config.layout==='order_rows'&&<p tabIndex={-1} data-advisor-control="import-sheet-identity">Elige la identidad según lo que representa cada fila. Activar una opción no inventa una guía.</p>}
+     {config.purpose==='orders'&&<label className="checkbox-field"><input type="checkbox" data-advisor-control={config.layout!=='order_rows'?'import-sheet-identity':undefined} checked={!!config.oneOrderPerGuide} onChange={event=>updateConfig('oneOrderPerGuide',event.target.checked)}/><span>Cada guía corresponde a un pedido: usar la guía como identidad solo con datos comerciales completos.</span></label>}
+     {(config.purpose==='expenses'||config.purpose==='orders'&&config.layout==='order_rows')&&<label className="checkbox-field"><input type="checkbox" data-advisor-control={config.purpose==='expenses'?'import-sheet-identity':undefined} checked={config.identityMode==='generated'} onChange={event=>updateConfig('identityMode',event.target.checked?'generated':'provided')}/><span>{config.purpose==='orders'?'Confirmo que cada fila representa un pedido y un envío. Generar identidades técnicas si no hay IDs; la guía real permanece vacía.':'Generar identidad técnica para cada gasto sin ID. Conservaré estos IDs en el archivo preparado para las próximas cargas.'}</span></label>}
      <div ref={mappingRootRef} data-import-config="columns" tabIndex={-1}><ImportColumnMapping config={config} headers={headers} sampleRows={sampleRows} columnCount={sampleColumns} disabled={!!busy||loading||importAssistant.assistantBusy||!canEditDraft} onChangeColumn={changeColumn} onIgnoreUnassigned={columns=>ignorePendingSheets([{sheetName:activeSheet,columns}])} onNextSheet={focusNextSheet} onInteractionStateChange={reportMappingInteraction}/></div>
      <button type="button" className="button subtle" disabled={!!busy||loading||importAssistant.assistantBusy||!canEditDraft||!activeSheet||!samplesCurrent} onClick={()=>importAssistant.openAssistant()}>Ayúdame con este mapeo</button>
      {['orders','tracking','settlements'].includes(config.purpose)&&<StatusMapping config={config} headers={headers} sampleRows={sampleRows} disabled={!!busy||loading||importAssistant.assistantBusy||!canEditDraft||previewing||batch.fileExpired} onChange={value=>updateConfig('statusMap',value)} statusDraft={statusDraft} setStatusDraft={setStatusDraft}/>}
-     <div data-import-config="defaults" tabIndex={-1}><SheetFixedValues config={config} onChange={value=>updateConfig('defaults',value)}/></div>
+     <div data-import-config="defaults" tabIndex={-1}><SheetFixedValues config={config} onChange={value=>updateConfig('defaults',value)} advisorAvailable={canEditDraft&&!busy&&!previewing}/></div>
      {config.purpose==='expenses'&&config.layout==='expense_columns'&&<fieldset className="order-line"><legend>Nombres de las campañas</legend><p>Cantidad y unitario comparten grupo; cada campaña debe tener un nombre distinto.</p>{[...new Set(config.columns.filter(column=>FIELD_DEFINITIONS.get(column.destination)?.scope==='expense_line').map(column=>column.group||0))].sort((a,b)=>a-b).map(group=><label className="field" key={group}>Grupo de campaña {group+1}<input required maxLength={200} value={config.expenseGroupNames?.[group]||''} onChange={event=>updateConfig('expenseGroupNames',{...config.expenseGroupNames,[group]:event.target.value})}/></label>)}</fieldset>}
      {config.purpose==='expenses'&&<ExpenseCategoryMapping config={config} sampleRows={sampleRows} onChange={value=>updateConfig('expenseCategoryMap',value)}/>}
      </>}
-     </fieldset><div className={`admin-actions ${styles.importActions}`}><button className="button primary" disabled={!!busy||!canEditDraft}>{busy==='preview'?'Solicitando revisión…':previewing?'Preparando revisión…':pendingSheetDecisions?'Completar hojas pendientes':pendingSheetColumns?'Resolver columnas pendientes':'Guardar columnas y revisar'}</button><button type="button" className="button subtle" disabled={!!busy} onClick={()=>goToStep(1)}>Atrás</button><button type="button" className="button subtle" disabled={!!busy||!canEditDraft} onClick={()=>perform('save',async()=>{await saveDraft();setNotice('Configuración guardada; falta revisar.');})}>Guardar borrador</button><button type="button" className="button subtle" disabled={!!busy} onClick={returnToHistory}>Volver a importaciones</button>{hasPreview&&!previewing&&<button type="button" className="button subtle" onClick={()=>goToStep(3)}>Volver a la revisión</button>}</div>
+     </fieldset><div className={`admin-actions ${styles.importActions}`}><button className="button primary" data-advisor-control={!pendingSheetDecisions&&!pendingSheetColumns&&!previewing?'import-preview-request':undefined} disabled={!!busy||!canEditDraft}>{busy==='preview'?'Solicitando revisión…':previewing?'Preparando revisión…':pendingSheetDecisions?'Completar hojas pendientes':pendingSheetColumns?'Resolver columnas pendientes':'Guardar columnas y revisar'}</button><button type="button" className="button subtle" disabled={!!busy} onClick={()=>goToStep(1)}>Atrás</button><button type="button" className="button subtle" data-advisor-control="import-draft-save" disabled={!!busy||!canEditDraft} onClick={()=>perform('save',async()=>{await saveDraft();setNotice('Configuración guardada; falta revisar.');})}>Guardar borrador</button><button type="button" className="button subtle" disabled={!!busy} onClick={returnToHistory}>Volver a importaciones</button>{hasPreview&&!previewing&&<button type="button" className="button subtle" onClick={()=>goToStep(3)}>Volver a la revisión</button>}</div>
     </form>
    </>}
   </>}
@@ -830,13 +975,26 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
     <h3>Qué falta por resolver</h3><p>Una operación es un pedido con sus envíos, o una fila completa de gastos. Se aplica completa, nunca a medias.</p>
     <dl className={`form-grid ${styles.summaryMetrics}`}><div><dt>Listas</dt><dd>{validCount}</dd></div><div><dt>Por corregir</dt><dd>{invalidCount}</dd></div><div><dt>Ya incorporadas</dt><dd>{Number(summary.applied||0)}</dd></div><div><dt>Excluidas</dt><dd>{Number(summary.skipped||0)}</dd></div></dl>
     {workbookConfig.sheets.some(sheet=>sheet.enabled&&sheet.purpose==='orders')&&<InventoryOpeningControls date={openingDate} opening={inventoryOpening} disabled={!!busy||!canEditDraft} onDate={date=>{setOpeningDate(date);setInventoryOpening(null);}} onConfirm={confirmed=>{setInventoryOpening(confirmed?{on:openingDate,confirmed:true}:null);setIncludeValidOnly(false);}}/>}
-    <section aria-label="Problemas por resolver"><h4>Bloqueos de esta revisión</h4><div className="admin-actions"><button type="button" className="button subtle" aria-pressed={pendingOnly&&!issueFilter} onClick={()=>changeReviewFilter('',true)}>Pendientes · {invalidCount}</button><button type="button" className="button subtle" aria-pressed={!pendingOnly&&!issueFilter} onClick={()=>changeReviewFilter('')}>Todas las operaciones</button>{Array.from(issueCounts,([code,count])=><button key={code} type="button" className="button subtle" aria-pressed={issueFilter===code} onClick={()=>changeReviewFilter(code)}>{problemLabel(code)} · {count}</button>)}</div>{!invalidCount&&<p>No hay bloqueos. Los avisos y tareas informativas no impiden confirmar.</p>}</section>
+    <section aria-label="Problemas por resolver">
+     <h4>Bloqueos de esta revisión</h4>
+     <div className="admin-actions">
+      <button type="button" className="button subtle" data-advisor-control="import-issue-filters" aria-pressed={pendingOnly&&!issueFilter} onClick={()=>changeReviewFilter('',true)}>Pendientes · {invalidCount}</button>
+      <button type="button" className="button subtle" aria-pressed={!pendingOnly&&!issueFilter} onClick={()=>changeReviewFilter('')}>Todas las operaciones</button>
+      {Array.from(issueCounts,([code,count])=><button key={code} type="button" className="button subtle" aria-pressed={issueFilter===code} onClick={()=>changeReviewFilter(code)}>{problemLabel(code)} · {count}</button>)}
+     </div>
+     {!invalidCount&&<p>No hay bloqueos. Los avisos y tareas informativas no impiden confirmar.</p>}
+    </section>
     <div className="admin-actions"><button type="button" className="button subtle" disabled={!!busy||!canEditDraft} onClick={()=>setSelectedGroups(old=>[...new Set([...old,...shownGroups.filter(group=>!['applied','skipped'].includes(group.state)).map(groupKey)])])}>Seleccionar las {shownGroups.filter(group=>!['applied','skipped'].includes(group.state)).length} visibles</button><button type="button" className="button subtle" disabled={!!busy||!canEditDraft||!filteredGroups.length} onClick={()=>setSelectedGroups(filteredGroups.filter(group=>!['applied','skipped'].includes(group.state)).map(groupKey))}>Seleccionar todas las {filteredGroups.filter(group=>!['applied','skipped'].includes(group.state)).length} filtradas</button></div>
     {!!selectedGroups.length&&<section aria-label="Acciones para seleccionadas"><h4>Acciones para {selectedGroups.length} seleccionadas</h4><div className="admin-actions"><button type="button" className="button subtle" onClick={()=>setSelectedGroups([])}>Limpiar selección</button><button type="button" className="button subtle" disabled={!!busy||!canEditDraft||selectedOperations.some(group=>group.kind==='expenses')} onClick={()=>openResolver('review_policy',{allRows:true,bulkKeys:[...selectedGroups]})}>Aplicar regla histórica a seleccionados</button><button type="button" className="button subtle" disabled={!!busy||!newIdentityRows.length} onClick={()=>openResolver('independent_record',{allRows:true,bulkRows:[...newIdentityRows]})}>Confirmar como nuevas {newIdentityRows.length} filas seleccionadas</button><button type="button" className="button subtle" disabled={!!busy||!openingObservations.length} onClick={()=>openResolver('opening_observation',{allRows:true,bulkObservations:[...openingObservations]})}>Clasificar {openingObservations.length} hechos ambiguos seleccionados</button><button type="button" className="button subtle" disabled={!!busy||!yearDates.length} onClick={keepSelectedOriginalDates}>Conservar fechas originales de seleccionadas ({yearDates.length})</button></div><p>La selección se conserva entre páginas de este filtro; cambiar de filtro o revisión la limpia.</p></section>}
     {workbook?.warnings?.length>0&&<details><summary>Advertencias del archivo</summary><ul>{messages(workbook.warnings).map((message,index)=><li key={index}>{message}</li>)}</ul></details>}
     {batch.preview?.warnings?.length>0&&<section aria-label="Avisos de la revisión"><h4>Avisos, no bloqueos</h4><ul>{messages(batch.preview.warnings).map((message,index)=><li key={index}>{message}</li>)}</ul></section>}
     {!groups.length&&<p>{settlementsPending>0?`Los pedidos ya están aplicados; quedan ${settlementsPending} liquidaciones para esta revisión.`:hasPreview?'La revisión no contiene grupos importables. Revisa la hoja y sus columnas.':'Todavía no hay una revisión. Configura las columnas y solicita revisarla.'}</p>}
-    <div>{shownGroups.map((group,index)=><article data-import-operation tabIndex={-1} className="order-line" key={groupKey(group)||index}><h4>{group.label || groupCaption(group)}</h4><p><strong>{RESULT_LABELS[group.state]||group.state||'Por revisar'}</strong>{group.orderNumber?` · AN-${group.orderNumber}`:''}{group.tracking?` · Guía ${group.tracking}`:''}</p>{group.rowRefs?.length>0&&<p className="small muted">Ubicación: {group.rowRefs.map(ref=>`${ref.sheet} · fila ${ref.rowNumber}`).join('; ')}</p>}{messages(group.errors).map((message,i)=><p className="error" key={i}>{message}</p>)}{messages(group.warnings).map((message,i)=><p key={i}>Aviso: {message}</p>)}{group.reason&&<p>{group.reason}</p>}
+    <div>{shownGroups.map((group,index)=><article data-import-operation tabIndex={-1} className="order-line" key={groupKey(group)||index}>
+     <h4>{group.label || groupCaption(group)}</h4>
+     <p><strong>{RESULT_LABELS[group.state]||group.state||'Por revisar'}</strong>{group.orderNumber?` · AN-${group.orderNumber}`:''}{group.tracking?` · Guía ${group.tracking}`:''}</p>
+     {!!group.rowRefs?.length&&<p className="small muted">Ubicación: {group.rowRefs.map(ref=>`${ref.sheet} · fila ${ref.rowNumber}`).join('; ')}</p>}
+     {group.rowRefs?.length===1&&<button type="button" className="button subtle" disabled={!!busy||loading} onClick={()=>inspectRows(group.rowRefs[0])}>Ver fila original</button>}
+     {messages(group.errors).map((message,i)=><p className="error" key={i}>{message}</p>)}{messages(group.warnings).map((message,i)=><p key={i}>Aviso: {message}</p>)}{group.reason&&<p>{group.reason}</p>}
      {!['applied','skipped'].includes(group.state)&&<label className="checkbox-field"><input type="checkbox" aria-label={`Seleccionar operación ${groupKey(group)}`} disabled={!!busy||!canEditDraft} checked={selectedGroups.includes(groupKey(group))} onChange={event=>setSelectedGroups(old=>event.target.checked?[...new Set([...old,groupKey(group)])]:old.filter(key=>key!==groupKey(group)))}/><span>Seleccionar operación; los datos personales y costos no se rellenan en masa.</span></label>}
      {canEditDraft&&!['applied','skipped'].includes(group.state)&&<GroupIssueActions group={group} disabled={!!busy} onResolve={openResolver} onConfigureSheet={configureSheet} onInspectRows={inspectRows} onEditProduct={editInventoryProduct} onKeepDate={issue=>{addResolution({action:'cell_value',sheet:issue.sheet,rowNumber:issue.rowNumber,columnIndex:issue.columnIndex,value:issue.originalValue,reason:'Conservar la fecha original del archivo tras revisar el año discrepante'});setNotice('Fecha original confirmada. Guarda y revisa de nuevo.');}}/>}
      {group.tasks?.length>0&&<ul aria-label="Tareas informativas">{messages(group.tasks).map((task,i)=><li key={i}>{task}</li>)}</ul>}
@@ -847,17 +1005,17 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
      <ReviewExpenses group={group}/>
      {(group.orderId||group.shipmentIds?.length>0)&&<details><summary>Destino identificado</summary>{group.orderId&&<p>Pedido: {group.orderId}</p>}{group.shipmentIds?.map(id=><p key={id}>Envío: {id}</p>)}</details>}
      </details>
-     {canEditDraft&&!['applied','skipped'].includes(group.state)&&<details data-import-other-options><summary>Otras opciones de corrección</summary><p className="small muted">Los vínculos se guardan para este origen. Las demás correcciones se preparan hasta guardar y revisar.</p><ResolutionActions actions={GROUP_RESOLUTIONS.filter(action=>group.kind==='expenses'?!['link_product','link_person','link_order','link_shipment','line_costs','commercial_update','additional_quantity','status','review_policy'].includes(action):action!=='link_expense')} disabled={!!busy} onResolve={action=>openResolver(action,{entityKey:groupKey(group),rowRefs:group.rowRefs,externalKey:group.externalKey||''})}/></details>}
+     {canEditDraft&&!['applied','skipped'].includes(group.state)&&<details data-import-other-options><summary>Otras opciones de corrección</summary><p className="small muted">Los vínculos se guardan para este origen. Las demás correcciones se preparan hasta guardar y revisar.</p><ResolutionActions actions={GROUP_RESOLUTIONS.filter(action=>group.kind==='expenses'?!['link_product','link_person','link_order','link_shipment','line_costs','commercial_update','additional_quantity','status','review_policy'].includes(action):action!=='link_expense')} disabled={!!busy} onResolve={action=>openResolver(action,{entityKey:groupKey(group),rowRefs:group.rowRefs,externalKey:action==='link_order'?group.externalKey||'':''})}/></details>}
     </article>)}</div>
     {filteredGroups.length>20&&<div className="admin-actions"><button type="button" className="button subtle" disabled={groupPage<=1} onClick={()=>setGroupPage(value=>value-1)}>Grupos anteriores</button><span>Grupos · página {groupPage} de {groupPages}</span><button type="button" className="button subtle" disabled={groupPage>=groupPages} onClick={()=>setGroupPage(value=>value+1)}>Más grupos</button></div>}
     {resolutions.length>0&&<details><summary>Resoluciones preparadas ({resolutions.length}){dirty?' · pendientes de validar':''}</summary><ul>{resolutions.map((resolution,index)=><li key={index}>{RESOLUTION_LABELS[resolution.action]||resolution.action} · {resolution.externalKey||resolution.entityKey||'Todo el lote'}{resolution.rowNumber?` · fila ${resolution.rowNumber}`:''}{resolution.reason?` · ${resolution.reason}`:''}</li>)}</ul></details>}
     <ImportReviewEffects preview={batch.preview} opening={batch.inventoryOpening} disabled={!!busy||!canEditDraft} onEditProduct={editInventoryProduct}/>
     <details><summary>Otras opciones de corrección del archivo</summary><ResolutionActions actions={FILE_RESOLUTIONS} disabled={!!busy||!canEditDraft} onResolve={()=>openResolver('accept_formulas')}/></details>
    </>}
-   <div className={`admin-actions ${styles.importActions}`}><button type="button" className="button primary" disabled={!!busy||previewing||!canEditDraft||!hasImportable&&hasPreview&&!dirty&&!invalidCount} onClick={dirty||!hasPreview?saveAndPreview:invalidCount?resolveFirstPending:()=>goToStep(4)}>{dirty||!hasPreview?'Guardar cambios y revisar':invalidCount?'Resolver primer pendiente':'Continuar a confirmación'}</button>{hasPreview&&invalidCount>0&&hasImportable&&!dirty&&<button type="button" className="button subtle" onClick={()=>goToStep(4)}>Revisar importación parcial</button>}<button type="button" className="button subtle" disabled={!!busy} onClick={()=>goToStep(2)}>Atrás</button><button type="button" className="button subtle" disabled={!!busy||!canEditDraft} onClick={()=>perform('save',()=>saveDraft())}>Guardar borrador</button><button type="button" className="button subtle" disabled={!!busy} onClick={returnToHistory}>Volver a importaciones</button></div>
+   <div className={`admin-actions ${styles.importActions}`}><button ref={advisorReviewControl} type="button" className="button primary" data-advisor-control={dirty||!hasPreview?'import-preview-request':!invalidCount&&hasImportable?'import-acceptance-review':undefined} disabled={!!busy||previewing||!canEditDraft||!hasImportable&&hasPreview&&!dirty&&!invalidCount} onClick={dirty||!hasPreview?saveAndPreview:invalidCount?resolveFirstPending:()=>goToStep(4)}>{dirty||!hasPreview?'Guardar cambios y revisar':invalidCount?'Resolver primer pendiente':'Continuar a confirmación'}</button>{hasPreview&&invalidCount>0&&hasImportable&&!dirty&&<button type="button" className="button subtle" data-advisor-control="import-acceptance-review" onClick={()=>goToStep(4)}>Revisar importación parcial</button>}<button type="button" className="button subtle" disabled={!!busy} onClick={()=>goToStep(2)}>Atrás</button><button type="button" className="button subtle" disabled={!!busy||!canEditDraft} onClick={()=>perform('save',()=>saveDraft())}>Guardar borrador</button><button type="button" className="button subtle" disabled={!!busy} onClick={returnToHistory}>Volver a importaciones</button></div>
   </>}
   {batch&&step===4&&<>
-   <h3 ref={showResult?stepHeadingRef:undefined} tabIndex={-1}>{showResult?'Resultado y progreso':'Confirmar importación'}</h3>
+   <h3 ref={stepHeadingRef} tabIndex={-1} data-advisor-control={showResult?'import-applied-results':'import-acceptance-review'}>{showResult?'Resultado y progreso':'Confirmar importación'}</h3>
    {!showResult&&<section aria-label="Resumen antes de importar"><h4>{batch.filename}</h4><p>{platforms.find(item=>item.id===platformId)?.name||'Origen no disponible'} · {sources.find(item=>item.id===sourceId)?.name||'Cuenta no disponible'}</p><p>Hojas incluidas: {workbookConfig.sheets.filter(sheet=>sheet.enabled).map(sheet=>sheet.sheetName).join(' · ')||'Ninguna'}</p><p>Hojas excluidas: {workbookConfig.sheets.filter(sheet=>!sheet.enabled).map(sheet=>sheet.sheetName).join(' · ')||'Ninguna'}</p><dl className={`form-grid ${styles.summaryMetrics}`}>{['new','updated','unchanged'].map(key=><div key={key}><dt>{key==='new'?'Operaciones nuevas':key==='updated'?'Por actualizar':'Sin cambios'}</dt><dd>{Number(summary[key]||0)}</dd></div>)}</dl><p><strong>Se aplican operaciones completas por separado.</strong> Cancelar después no revierte las ya confirmadas. No se confirma dinero recibido ni pagado.</p>{settlementsPending>0&&<p>{settlementsPending} liquidaciones pendientes de esta revisión; la recepción de dinero se confirma por separado en Caja.</p>}</section>}
    {!showResult&&batch.preview?.sheets&&<section aria-label="Selección final por hoja"><h4>Hojas que se aplicarán</h4><p>Una operación puede aparecer en ventas y seguimiento; no se suman dos ventas por estar en dos hojas.</p><div className={styles.resultsTable} role="region" aria-label="Revisión por hoja" tabIndex={0}><table><caption>Revisión por hoja; no son totales deduplicados del libro</caption><thead><tr><th scope="col">Hoja</th><th scope="col">Válidas</th><th scope="col">Pendientes</th><th scope="col">Omitidas</th></tr></thead><tbody>{batch.preview.sheets.filter(sheet=>sheet.enabled).map(sheet=><tr key={sheet.sheetName}><th scope="row">{sheet.sheetName}</th><td>{sheet.groups.filter(group=>['new','updated','unchanged','valid'].includes(group.state)).length}</td><td>{sheet.groups.filter(group=>['rejected','conflict','invalid'].includes(group.state)).length}</td><td>{sheet.groups.filter(group=>['skipped','omitted','applied'].includes(group.state)).length}</td></tr>)}</tbody></table></div></section>}
    {workLocked&&<section aria-label="Progreso guardado"><p role="status">{STATE_LABELS[batch.state]}. Puedes cerrar el panel; el trabajo sigue guardado en el servidor.</p><progress aria-label="Operaciones procesadas" {...(Number(batch.progress?.total)>0?{max:Number(batch.progress.total),value:Number(batch.progress.processed??batch.progress.applied)||0}:{})} style={{width:'100%'}}/><p>{batch.progress?.phase==='settlements'?'Vinculando liquidaciones':'Aplicando operaciones completas'} · {Number(batch.progress?.processed??batch.progress?.applied)||0}{Number(batch.progress?.total)>0?` de ${batch.progress.total}`:' · total aún no informado'}</p></section>}
@@ -868,25 +1026,60 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
     <p>Este lote no se reanudará; para otro archivo, crea un lote nuevo.</p>
    </div>:batch.state==='completed_with_errors'?<section className={styles.importResult} data-result="partial" role="status"><h4>Importación parcial: quedan pendientes</h4><p>Se incorporaron las operaciones válidas. Las demás no se incorporaron a medias; revisa los pendientes antes de una nueva confirmación.</p></section>:batch.state==='completed'?<section className={styles.importResult} data-result="complete" role="status"><h4>Importación completada</h4><p>El progreso muestra lo aplicado en esta aceptación. Los hechos incorporados se conservan.</p></section>:fileUnavailable?<section className={styles.importResult} role="status"><h4>Archivo no disponible</h4><p>{batch.fileDiscarded?'El original fue descartado.':'Venció la retención del original.'} La historia aplicada se conserva; no se garantiza conservar todas las filas fuente. Para continuar necesitas una nueva importación explícita.</p><button type="button" className="button subtle" onClick={startNewBatch}>Nueva importación</button></section>:null}
    {showResult&&hasAppliedProgress&&<dl className={`form-grid ${styles.summaryMetrics}`} aria-label="Hechos de esta aceptación">{summaryItems(batch.progress||batch.result||{}).map(([key,value])=><div key={key}><dt>{RESULT_LABELS[key]}</dt><dd>{value}</dd></div>)}</dl>}
-   {batch.preview&&(showResult?<details><summary>{hasAppliedProgress?'Proyección anterior de la revisión aceptada; no es el resultado aplicado':'Última revisión guardada; no es una aceptación nueva ni un resultado aplicado'}</summary>{fileUnavailable&&!hasAppliedProgress&&<p>El original ya no está disponible. Esta revisión conservada no puede confirmarse ni volver a generarse en esta importación.</p>}<ImportReviewEffects preview={batch.preview} opening={batch.inventoryOpening} accepted={hasAppliedProgress} disabled/></details>:<ImportReviewEffects preview={batch.preview} opening={batch.inventoryOpening} disabled/>)}
+   {batch.preview&&(showResult?<details data-advisor-disclosure><summary>{hasAppliedProgress?'Proyección anterior de la revisión aceptada; no es el resultado aplicado':'Última revisión guardada; no es una aceptación nueva ni un resultado aplicado'}</summary>{fileUnavailable&&!hasAppliedProgress&&<p>El original ya no está disponible. Esta revisión conservada no puede confirmarse ni volver a generarse en esta importación.</p>}<ImportReviewEffects preview={batch.preview} opening={batch.inventoryOpening} accepted={hasAppliedProgress} disabled/></details>:<ImportReviewEffects preview={batch.preview} opening={batch.inventoryOpening} disabled/>)}
    {!!batch.progress?.sheets?.length&&showResult&&hasAppliedProgress&&<section aria-label="Resultado por hoja y tipo"><h4>Operaciones completas por hoja</h4><p>No sumes estas cifras como total del libro: una operación puede aparecer en varias hojas. Registros asociados: {batch.progress.orderIds?.length||0} pedidos · {batch.progress.shipmentIds?.length||0} envíos · {batch.progress.expenseIds?.length||0} gastos, incluidos los que ya existían sin cambios.</p><div className={styles.resultsTable} role="region" aria-label="Resultados por hoja" tabIndex={0}><table><caption>Hechos aplicados de esta aceptación por hoja y tipo</caption><thead><tr>{['Hoja','Tipo de operación','Nuevas','Actualizadas','Sin cambios','Omitidas','Pendientes'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{batch.progress.sheets.flatMap(sheet=>['commercial','expenses'].map(type=><tr key={`${sheet.sheetName}:${type}`}><th scope="row">{sheet.sheetName}</th><td>{type==='expenses'?'Filas completas de gastos':'Operaciones comerciales'}</td>{['created','updated','unchanged','omitted','pending'].map(state=><td key={state}>{sheet[type]?.[state]||0}</td>)}</tr>))}</tbody></table></div></section>}
    {FINAL_STATES.has(batch.state)&&hasAppliedProgress&&!cancelled&&<details><summary>Abrir registros asociados a esta importación</summary>{[['orders','Pedidos','orderIds'],['shipments','Envíos','shipmentIds'],['expenses','Gastos','expenseIds']].map(([type,label,key])=>{const ids=batch.progress?.[key]||[];return <section key={type}><h4>{label} · {ids.length}</h4><div className="admin-actions">{ids.slice(0,resultLimits[type]).map(id=><button key={id} type="button" className="button subtle" onClick={()=>type==='expenses'?onNavigate?.({section:'cash',tab:'expenses',record:id}):onViewChange?.({tab:type==='orders'?'list':'shipments',record:id,batch:undefined})}>Abrir {type==='orders'?'pedido':type==='shipments'?'envío':'gasto'} · {id.slice(0,8)}</button>)}{ids.length>resultLimits[type]&&<button type="button" className="button subtle" onClick={()=>setResultLimits(previous=>({...previous,[type]:previous[type]+20}))}>Mostrar más {label.toLocaleLowerCase('es')}</button>}</div></section>;})}</details>}
    {(FINAL_STATES.has(batch.state)||fileUnavailable)&&!cancelled&&<><p>La incorporación no confirma cobros ni pagos. Los costos desconocidos y las excepciones siguen visibles.</p><div className="admin-actions"><button type="button" className="button subtle" onClick={()=>onViewChange?.({tab:'list',batch:undefined,record:undefined})}>Ver pedidos</button><button type="button" className="button subtle" onClick={()=>onViewChange?.({tab:'shipments',batch:undefined,record:undefined})}>Ver envíos</button><button type="button" className="button subtle" onClick={()=>onNavigate?.({section:'cash',tab:'expenses'})}>Ver gastos</button><button type="button" className="button subtle" onClick={()=>onNavigate?.({section:'reports'})}>Ver informes</button></div></>}
-   {(batch.state==='failed'&&batch.acceptedRevision||batch.state==='completed_with_errors')&&<section aria-label="Continuar pendientes">{retained?<><p>Generaremos una revisión nueva antes de corregir. No se reutiliza la revisión congelada ni se repiten las operaciones incorporadas.</p><button type="button" className="button primary" disabled={!!busy||previewing} onClick={generateNewPreview}>Revisar pendientes</button></>:<><p>El original ya no está disponible. Descarga los pendientes conservados como evidencia y prepara una nueva importación.</p><button type="button" className="button primary" onClick={startNewBatch}>Nueva importación</button></>}</section>}
-   {!showResult&&<>{invalidCount>0&&<section aria-label="Decisión de importación parcial"><h4>{invalidCount} operaciones siguen pendientes</h4><p>Revisa los pendientes por hoja. Ninguna operación se incorpora a medias y las válidas no corrigen las demás.</p><label className="checkbox-field"><input type="checkbox" checked={includeValidOnly} onChange={event=>setIncludeValidOnly(event.target.checked)} disabled={!!busy||dirty||!reviewReady}/><span>Importar {validCount} operaciones válidas y dejar {invalidCount} pendientes</span></label></section>}<p>Se aplicará únicamente la revisión guardada. El archivo, las correcciones y las versiones de destino quedan congelados al confirmar.</p><details><summary>Detalles técnicos de esta revisión</summary><p>Hash de revisión: {batch.preview?.previewHash||'Sin revisión'} · Versión: {batch.version}</p></details><div className={`admin-actions ${styles.importActions}`}><button type="button" className="button primary" aria-describedby={`${fileHelpId}-commit`} disabled={!!busy||!!commitBlockedReason} onClick={commit}>{busy==='commit'?'Aceptando importación…':'Confirmar e importar'}</button><button type="button" className="button subtle" disabled={!!busy} onClick={()=>goToStep(3)}>Atrás</button><button type="button" className="button subtle" disabled={!!busy} onClick={returnToHistory}>Volver a importaciones</button><p id={`${fileHelpId}-commit`}>{busy==='commit'?'Esperando la aceptación del servidor.':commitBlockedReason||'La revisión está actualizada. Confirma solo después de revisar sus efectos.'}</p></div></>}
+   {(batch.state==='failed'&&batch.acceptedRevision||batch.state==='completed_with_errors')&&<section aria-label="Continuar pendientes">{retained?<><p>Generaremos una revisión nueva antes de corregir. No se reutiliza la revisión congelada ni se repiten las operaciones incorporadas.</p><button ref={advisorPendingControl} type="button" className="button primary" data-advisor-control="import-preview-request" disabled={!!busy||previewing} onClick={generateNewPreview}>Revisar pendientes</button></>:<><p>El original ya no está disponible. Descarga los pendientes conservados como evidencia y prepara una nueva importación.</p><button type="button" className="button primary" onClick={startNewBatch}>Nueva importación</button></>}</section>}
+   {!showResult&&<>{invalidCount>0&&<section aria-label="Decisión de importación parcial"><h4>{invalidCount} operaciones siguen pendientes</h4><p>Revisa los pendientes por hoja. Ninguna operación se incorpora a medias y las válidas no corrigen las demás.</p><label className="checkbox-field"><input type="checkbox" data-advisor-control={!includeValidOnly?'import-native-commit':undefined} checked={includeValidOnly} onChange={event=>setIncludeValidOnly(event.target.checked)} disabled={!!busy||dirty||!reviewReady}/><span>Importar {validCount} operaciones válidas y dejar {invalidCount} pendientes</span></label></section>}
+    <p>Se aplicará únicamente la revisión guardada. El archivo, las correcciones y las versiones de destino quedan congelados al confirmar.</p>
+    <details><summary>Detalles técnicos de esta revisión</summary><p>Hash de revisión: {batch.preview?.previewHash||'Sin revisión'} · Versión: {batch.version}</p></details>
+    <div className={`admin-actions ${styles.importActions}`}>
+     <p id={`${fileHelpId}-commit`}>{busy==='commit'?'Esperando la aceptación del servidor.':commitBlockedReason||(includeValidOnly&&invalidCount>0
+      ?<><strong>Importación parcial:</strong> {validCount} para incorporar y {invalidCount} sin importar.</>
+      :'La revisión está actualizada. Confirma solo después de revisar sus efectos.')}</p>
+     <button type="button" className="button primary" data-import-commit-control data-advisor-control={!commitBlockedReason?'import-native-commit':undefined} aria-describedby={`${fileHelpId}-commit`} disabled={!!busy||!!commitBlockedReason} onClick={commit}>{busy==='commit'?'Aceptando importación…':'Confirmar e importar'}</button>
+     <button type="button" className="button subtle" disabled={!!busy} onClick={()=>goToStep(3)}>Atrás</button><button type="button" className="button subtle" disabled={!!busy} onClick={returnToHistory}>Volver a importaciones</button>
+    </div></>}
   </>}
-  {batch&&[3,4].includes(step)&&<SourceRows batch={batch} page={page} rowState={rowState} query={rowQuery} location={rowLocation} open={sourceRowsOpen} onToggle={setSourceRowsOpen} busy={!!busy||loading} onClearLocation={()=>{setRowLocation(null);setPage(1);void loadBatch(batch.id,{state:rowState,q:rowQuery});}} onFilter={state=>{setRowLocation(null);setRowState(state);setPage(1);void loadBatch(batch.id,{state,q:rowQuery});}} onSearch={q=>{setRowLocation(null);setRowQuery(q);setPage(1);void loadBatch(batch.id,{state:rowState,q});}} onPage={next=>{setPage(next);void loadBatch(batch.id,{targetPage:next,state:rowState,q:rowQuery,...rowLocation||{}});}} onResolve={step===3&&canEditDraft?(action,row)=>openResolver(action,{entityKey:row.entityKey||row.groupKey,sheet:row.sheet,rowNumber:row.rowNumber,columnIndex:row.columnIndex,original:row.original,externalKey:rowExternalKey(action,row)}):undefined}/>}
+  {batch&&[3,4].includes(step)&&<SourceRows batch={batch} page={page} rowState={rowState} query={rowQuery} location={rowLocation} open={sourceRowsOpen} onToggle={setSourceRowsOpen} busy={!!busy||loading}
+   advisorControl={step===3&&canEditDraft&&advisorRow&&advisorImportMatches(batch,advisorRow)?advisorRowControl:null}
+   advisorActions={row=>{
+    const group=groups.find(group=>groupKey(group)===(row.entityKey||row.groupKey));
+    if(!group)return null;
+    const refs=[{sheet:row.sheet,rowNumber:row.rowNumber}];
+    const issues=(group.errors||[]).filter(issue=>(!issue.sheet||issue.sheet===row.sheet)&&(!issue.rowNumber||issue.rowNumber===row.rowNumber)
+     &&(!issue.rowRefs?.length||issue.rowRefs.some(ref=>ref.sheet===row.sheet&&ref.rowNumber===row.rowNumber)))
+     .map(issue=>({...issue,...refs[0],rowRefs:refs}));
+    return <GroupIssueActions group={{...group,rowRefs:refs,errors:issues}} disabled={!!busy||loading} includeOther={false}
+     onResolve={(action,context)=>openResolver(action,{...context,...refs[0],normalized:row.normalized},advisorRow)}
+     onKeepDate={issue=>{if(!advisorResolutionIsCurrent({...refs[0],advisorAnchor:advisorRow}))return;preparedAdvisorRow.current=advisorRow;addResolution({action:'cell_value',...refs[0],columnIndex:issue.columnIndex,value:issue.originalValue,reason:'Conservar la fecha original tras revisar el año discrepante'});setNotice('Fecha original confirmada. Guarda y revisa de nuevo.');}}
+     onConfigureSheet={configureSheet} onInspectRows={()=>{
+      const original=advisorRowControl.current?.closest('article')?.querySelector('[data-import-source-values]');
+      if(original){original.open=true;original.querySelector('summary')?.focus();}
+     }} onEditProduct={editInventoryProduct}/>;
+   }}
+   onClearLocation={()=>{setAdvisorRow(null);setRowLocation(null);setPage(1);void loadBatch(batch.id,{state:rowState,q:rowQuery});}}
+   onFilter={state=>{setAdvisorRow(null);setRowLocation(null);setRowState(state);setPage(1);void loadBatch(batch.id,{state,q:rowQuery});}}
+   onSearch={q=>{setAdvisorRow(null);setRowLocation(null);setRowQuery(q);setPage(1);void loadBatch(batch.id,{state:rowState,q});}}
+   onPage={next=>{setPage(next);void loadBatch(batch.id,{targetPage:next,state:rowState,q:rowQuery,...rowLocation||{}});}}
+   onResolve={step===3&&canEditDraft?(action,row)=>openResolver(action,{entityKey:row.entityKey||row.groupKey,sheet:row.sheet,rowNumber:row.rowNumber,columnIndex:row.columnIndex,original:row.original,externalKey:advisorRow?'':rowExternalKey(action,row)},advisorRow):undefined}/>}
   {decision&&<ImportDecisionDialog {...decision} onConfirm={()=>finishDecision(true)} onClose={()=>finishDecision(false)}/>}
   {resolver&&canEditDraft&&<ResolutionDialog title={RESOLUTION_LABELS[resolver.action]} submitLabel={resolver.action==='link_product'?'Guardar vínculo':'Preparar corrección'} busy={!!busy||resolverAssistant.assistantBusy} onClose={closeResolver} onSubmit={applyResolution}>
    {error&&<div className="error" role="alert" tabIndex={-1} ref={errorRef}>{stateChanged&&<h3>El estado cambió; revisa antes de continuar</h3>}<p>{diagnosticText(error)}</p><button type="button" className="button subtle" disabled={!!busy} onClick={stateChanged?reloadSaved:refreshStatus}>{stateChanged?'Recargar lo guardado':'Actualizar estado'}</button></div>}
    <button type="button" className="button subtle" disabled={!!busy||resolverAssistant.assistantBusy} onClick={()=>resolverAssistant.openAssistant()}>Ayúdame con esta resolución</button>
    <fieldset className="field" disabled={!!busy||resolverAssistant.assistantBusy}>
-    {resolver.entityKey&&<p>{groupCaption(groups.find(group=>groupKey(group)===resolver.entityKey)||{})}</p>}
+    {resolverGroup&&<p>{resolverGroup.label||groupCaption(resolverGroup)}</p>}
     {(resolver.sheet||resolver.rowNumber||resolver.externalKey)&&<p>Ubicación conocida: {resolver.sheet||'Hoja por elegir'}{resolver.rowNumber?` · fila ${resolver.rowNumber}`:''}{resolver.externalKey?` · Referencia ${resolver.externalKey}`:''}</p>}
+    {resolver.action==='omit_group'&&!resolver.bulkKeys&&<section aria-label="Alcance de la exclusión"><p>Se excluirá la operación completa de la próxima revisión. No se modifica el Excel original ni se revierten operaciones ya aplicadas.</p>{resolver.rowRefs?.length>1&&<details><summary>Filas incluidas ({resolver.rowRefs.length})</summary><ul>{resolver.rowRefs.map(ref=><li key={json([ref.sheet,ref.rowNumber])}>{ref.sheet} · fila {ref.rowNumber}</li>)}</ul></details>}</section>}
     {(resolver.bulkRows||resolver.bulkObservations||resolver.bulkKeys)&&<section><h3>Aplica solo a la selección mostrada</h3><ul>{resolver.bulkRows?.map(ref=><li key={json([ref.sheet,ref.rowNumber])}>{ref.sheet} · fila {ref.rowNumber} · una identidad técnica distinta por fila; no es una corrección ni una copia</li>)}{resolver.bulkObservations?.map(ref=><li key={ref.externalKey}>{ref.sheet} · fila {ref.rowNumber} · {ref.label} · observación {ref.externalKey}</li>)}{resolver.bulkKeys?.map(key=><li key={key}>{groupCaption(groups.find(group=>groupKey(group)===key)||{key})}</li>)}</ul><label className="checkbox-field"><input type="checkbox" required/><span>Revisé todos los elementos de esta selección y confirmo que comparten esta decisión.</span></label></section>}
-    {!resolver.bulkRows&&!resolver.bulkObservations&&!resolver.bulkKeys&&<details open={!!error||['cell_value','independent_record','opening_observation','link_expense','duplicate','additional_quantity'].includes(resolver.action)&&(!resolver.sheet||!resolver.rowNumber)||['link_product','link_person','status'].includes(resolver.action)&&!resolver.externalKey}><summary>Cambiar ubicación o identificación</summary><div className="form-grid">{!['cell_value','accept_formulas'].includes(resolver.action)&&<label className="field">Hoja de origen<select value={resolver.sheet||''} onChange={event=>setResolverField('sheet',event.target.value)}><option value="">Elige una hoja si aplica</option>{sheets.map(sheet=><option key={sheet.name} value={sheet.name}>{sheet.name}</option>)}</select></label>}<label className="field">Fila de origen (si aplica)<input type="number" min={1} max={10001} value={resolver.rowNumber||''} onChange={event=>setResolverField('rowNumber',event.target.value)}/></label>{['link_product','link_person','link_order','link_shipment','status'].includes(resolver.action)&&<label className="field">Identificador exacto del archivo<input required={['link_product','link_person','status'].includes(resolver.action)} maxLength={300} value={resolver.externalKey} onChange={event=>setResolverField('externalKey',event.target.value)}/><small className="muted">Respeta mayúsculas y ceros iniciales. Para estado, escribe el texto exacto de la celda.</small></label>}</div></details>}
+    {!resolver.bulkRows&&!resolver.bulkObservations&&!resolver.bulkKeys&&<details open={!!error||['cell_value','independent_record','opening_observation','link_expense','duplicate','additional_quantity'].includes(resolver.action)&&(!resolver.sheet||!resolver.rowNumber)||['link_product','link_person','status'].includes(resolver.action)&&!resolver.externalKey}><summary>Cambiar ubicación o identificación</summary><div className="form-grid">
+      {!['cell_value','accept_formulas'].includes(resolver.action)&&<label className="field">Hoja de origen<select value={resolver.sheet||''} onChange={event=>setResolverField('sheet',event.target.value)}><option value="">Elige una hoja si aplica</option>{sheets.map(sheet=><option key={sheet.name} value={sheet.name}>{sheet.name}</option>)}</select></label>}
+      <label className="field">Fila de origen (si aplica)<input type="number" min={1} max={10001} value={resolver.rowNumber||''} onChange={event=>setResolverField('rowNumber',event.target.value)}/></label>
+      {['link_product','link_person','link_order','link_shipment','status'].includes(resolver.action)&&<div className="field"><label htmlFor={`${fileHelpId}-external-value`}>{resolver.action==='status'?'Texto exacto del estado en el archivo':'Identificador exacto del archivo'}</label><input id={`${fileHelpId}-external-value`} aria-describedby={`${fileHelpId}-external-value-help`} required={['link_product','link_person','status'].includes(resolver.action)} maxLength={300} value={resolver.externalKey} onChange={event=>setResolverField('externalKey',event.target.value)}/><small className="muted" id={`${fileHelpId}-external-value-help`}>Respeta mayúsculas y ceros iniciales.</small></div>}
+    </div></details>}
     {resolver.action.startsWith('link_')&&<>
-     <label className="field">Buscar registro real<input value={lookupQuery} maxLength={100} onChange={event=>setLookupQuery(event.target.value)} placeholder={resolver.action==='link_order'?'Número AN o búsqueda del listado':'Nombre o referencia'}/></label>
+     <label className="field">Buscar registro real<input data-advisor-control={(resolver.entityKey||resolver.sheet&&resolver.rowNumber||resolver.externalKey)&&!resolver.bulkRows?LINK_ADVISOR_CONTROLS[resolver.action]:undefined} value={lookupQuery} maxLength={100} onChange={event=>setLookupQuery(event.target.value)} placeholder={resolver.action==='link_order'?'Número AN o búsqueda del listado':'Nombre o referencia'}/></label>
      {lookupLoading&&<p role="status">Buscando…</p>}
      <label className="field">Registro que se vinculará<select required value={resolver.internalId} onChange={event=>setResolverField('internalId',event.target.value)}><option value="">Selecciona un registro existente</option>{resolver.internalId&&!lookupOptions.some(item=>item.id===resolver.internalId)&&<option value={resolver.internalId} disabled={resolver.giftOnly&&!(selectedProduct?.kind==='products'&&selectedProduct.productType==='gift')}>{selectedProduct?.title||resolver.internalId}{selectedProduct?` · ${catalogType(selectedProduct)}`:''} · Seleccionado</option>}{lookupOptions.map(item=><option key={item.id} value={item.id}>{item.number?`AN-${String(item.number).padStart(6,'0')} · `:''}{item.title||item.name||item.concept||item.tracking||item.id}{resolver.action==='link_product'?` · ${catalogType(item)}`:''}{item.presentation?` · ${item.presentation}`:''}{resolver.action==='link_expense'?` · ${item.incurredOn} · ${item.campaign||''} · ${formatMoneyMinor(item.amountMinor)}`:''}</option>)}</select></label>
      {!lookupLoading&&!lookupOptions.length&&<p>No se encontraron registros. Cambia la búsqueda{resolver.action==='link_product'?' o crea una referencia nueva si aún no existe.':'.'}</p>}
@@ -895,11 +1088,11 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
       {resolver.giftOnly&&<p>Esta columna contiene un obsequio: vincula o crea un Obsequio, no un producto normal ni un combo.</p>}
       <p>Las nuevas referencias empiezan como borradores privados, habilitados para pedidos pero fuera de la vitrina. Vincular una existente no cambia su publicación.</p>
       <p>Elige el tipo real; no se deduce por el nombre. En combos y obsequios debes seleccionar sus productos y cantidades explícitamente. Sus costos y existencias dependen de esos componentes; un obsequio importado lleva precio de venta cero, no costo cero.</p>
-      {onCreateProduct&&<div className="admin-actions"><button type="button" className="button subtle" disabled={!!busy||!resolver.externalKey.trim()||!!resolver.internalId||resolver.giftOnly} onClick={()=>createProduct('products','product')}>Guardar lote y crear producto</button><button type="button" className="button subtle" disabled={!!busy||!resolver.externalKey.trim()||!!resolver.internalId||resolver.giftOnly} onClick={()=>createProduct('combos')}>Guardar lote y crear combo</button><button type="button" className="button subtle" disabled={!!busy||!resolver.externalKey.trim()||!!resolver.internalId} onClick={()=>createProduct('products','gift')}>Guardar lote y crear obsequio</button></div>}
+      {onCreateProduct&&<div className="admin-actions" role="group" aria-label="Elegir tipo de ficha nueva" tabIndex={-1} data-advisor-control={resolver.externalKey.trim()&&!resolver.internalId?'import-create-linked-item':undefined}><button type="button" className="button subtle" disabled={!!busy||!resolver.externalKey.trim()||!!resolver.internalId||resolver.giftOnly} onClick={()=>createProduct('products','product')}>Guardar lote y crear producto</button><button type="button" className="button subtle" disabled={!!busy||!resolver.externalKey.trim()||!!resolver.internalId||resolver.giftOnly} onClick={()=>createProduct('combos')}>Guardar lote y crear combo</button><button type="button" className="button subtle" disabled={!!busy||!resolver.externalKey.trim()||!!resolver.internalId} onClick={()=>createProduct('products','gift')}>Guardar lote y crear obsequio</button></div>}
      </>}
     </>}
     {resolver.action==='link_expense'&&workbookConfig.sheets.find(sheet=>sheet.sheetName===resolver.sheet)?.layout==='expense_columns'&&<label className="field">Campaña de esta fila<select required value={resolver.externalKey} onChange={event=>setResolverField('externalKey',event.target.value)}><option value="">Selecciona el subgasto de campaña</option>{Object.values(workbookConfig.sheets.find(sheet=>sheet.sheetName===resolver.sheet).expenseGroupNames||{}).map(name=><option key={normalizedHeader(name)} value={normalizedHeader(name)}>{name}</option>)}</select></label>}
-    {resolver.action==='status'&&<label className="field">Estado en All Nutrition<select required value={resolver.value} onChange={event=>setResolverField('value',event.target.value)}><option value="">Selecciona el significado confirmado</option>{shipmentStates.map(({value,label})=><option key={value} value={value}>{label}</option>)}</select><small className="muted">Estado sin identificar conserva la observación sin cambiar las finanzas.</small></label>}
+    {resolver.action==='status'&&<div className="field"><label htmlFor={`${fileHelpId}-status-choice`}>Estado en All Nutrition</label><select id={`${fileHelpId}-status-choice`} aria-describedby={`${fileHelpId}-status-choice-help`} required value={resolver.value} onChange={event=>setResolverField('value',event.target.value)}><option value="">Selecciona el significado confirmado</option>{shipmentStates.map(({value,label})=><option key={value} value={value}>{label}</option>)}</select><small className="muted" id={`${fileHelpId}-status-choice-help`}>Estado sin identificar conserva la observación sin cambiar las finanzas.</small></div>}
     {resolver.action==='review_policy'&&<><p>Usa una regla histórica explícita. No se toma la fecha de carga ni se cambia la configuración general.</p><label className="field">Versión de regla aprobada<select required value={resolver.value} onChange={event=>setResolverField('value',event.target.value)}><option value="">Selecciona una regla existente</option>{rules.map(rule=><option key={rule.id} value={rule.id}>{rule.effectiveOn} · {rule.saleRecognition} · {rule.id}</option>)}</select></label>{!rules.length&&<p>No hay reglas disponibles. Configura una regla real en Configuración y retoma este lote.</p>}</>}
     {resolver.action==='review_authority'&&<><p>Autorizar una corrección de fuente o importe exige motivo y nueva revisión de consecuencias. No se borran movimientos existentes.</p><label className="field">ID del evento original que se rectifica (si aplica)<input maxLength={100} value={resolver.value.correctionOf||''} onChange={event=>setResolverField('value',event.target.value?{...resolver.value,correctionOf:event.target.value}:Object.fromEntries(Object.entries(resolver.value).filter(([key])=>key!=='correctionOf')))}/></label><label className="checkbox-field"><input type="checkbox" checked={!!resolver.value.allowCredit} onChange={event=>setResolverField('value',event.target.checked?{...resolver.value,allowCredit:true}:Object.fromEntries(Object.entries(resolver.value).filter(([key])=>key!=='allowCredit')))}/><span>Autorizar explícitamente saldo a favor del cliente si el importe confirmado excede su deuda.</span></label></>}
     {resolver.action==='commercial_update'&&<CommercialResolution api={api} value={resolver.value} group={groups.find(group=>groupKey(group)===resolver.entityKey)} onChange={value=>setResolverField('value',value)}/>}
@@ -909,17 +1102,17 @@ export default function ImportWizard({api,view:inputView,onViewChange,onNavigate
     {resolver.action==='independent_record'&&<p>Confirmo que esta fila es una operación distinta, aunque coincida con otra. Se guardará una identidad técnica nueva, no un número de pedido ni una guía comercial inventada.</p>}
     {resolver.action==='accept_formulas'&&<><div className="form-grid"><label className="field">Hoja con fórmulas<select required value={resolver.sheet} onChange={event=>{setResolverField('sheet',event.target.value);setResolverField('externalKey','');}}><option value="">Selecciona una hoja</option>{workbookConfig.sheets.filter(sheet=>sheet.enabled).map(sheet=><option key={sheet.sheetName} value={sheet.sheetName}>{sheet.sheetName}</option>)}</select></label><label className="field">Campos cuyos valores guardados acepto<select value={resolver.externalKey} onChange={event=>setResolverField('externalKey',event.target.value)}><option value="">Todos los campos asignados de esta hoja</option>{[...new Set((workbookConfig.sheets.find(sheet=>sheet.sheetName===resolver.sheet)?.columns||[]).map(column=>column.destination).filter(destination=>destination&&destination!=='ignore'))].map(destination=><option key={destination} value={destination}>{FIELD_DEFINITIONS.get(destination)?.label||destination}</option>)}</select></label></div><label className="checkbox-field"><input required type="checkbox" checked={resolver.value===true} onChange={event=>setResolverField('value',event.target.checked)}/><span>He revisado estas fórmulas y acepto sus valores guardados, solo en la hoja y los campos indicados. No se ejecutan ni recalculan; una fórmula usada sin caché válido sigue bloqueada.</span></label></>}
     {['duplicate','additional_quantity'].includes(resolver.action)&&<p>{resolver.action==='duplicate'?'Se excluirá esta repetición de fila; no se descontará un producto distinto.':'Se contará esta fila como unidades adicionales reales; revisa la cantidad agrupada antes de confirmar.'}</p>}
-    <label className="field">Motivo de la resolución<input required={['review_policy','review_authority','commercial_update','omit_group','duplicate','independent_record','cell_value','line_costs','opening_observation','link_expense','additional_quantity'].includes(resolver.action)} maxLength={2000} value={resolver.reason} onChange={event=>setResolverField('reason',event.target.value)}/></label>
+    <label className="field">Motivo de la resolución<input data-advisor-control={resolutionControl} required={['review_policy','review_authority','commercial_update','omit_group','duplicate','independent_record','cell_value','line_costs','opening_observation','link_expense','additional_quantity'].includes(resolver.action)} maxLength={2000} value={resolver.reason} onChange={event=>setResolverField('reason',event.target.value)}/></label>
    </fieldset>
   </ResolutionDialog>}
-  {batch?.fileHash&&<section aria-label="Guardar configuración reutilizable"><details open={profileNameOpen} onToggle={event=>setProfileNameOpen(event.currentTarget.open)}><summary>Guardar una configuración para próximas importaciones</summary><form onSubmit={saveProfile}>
+  {batch?.fileHash&&<section aria-label="Guardar configuración reutilizable"><details open={profileNameOpen} onToggle={event=>setProfileNameOpen(event.currentTarget.open)}><summary data-advisor-control={!busy&&!workLocked&&!previewing&&!profileNameAssistant.assistantBusy?'import-profile-save':undefined}>Guardar una configuración para próximas importaciones</summary><form onSubmit={saveProfile}>
    <label className="field">Nombre de la configuración<input required maxLength={150} value={profileName} onChange={event=>setProfileName(event.target.value)}/></label>
    <button type="button" className="button subtle" disabled={!!busy||workLocked||previewing||profileNameAssistant.assistantBusy} onClick={()=>profileNameAssistant.openAssistant()}>Ayúdame con el nombre</button>
    {profileId&&<p>Se actualizará la configuración seleccionada. Las revisiones aceptadas no se modifican.</p>}
    <button className="button subtle" disabled={!!busy||workLocked||previewing||profileNameAssistant.assistantBusy}>Guardar configuración</button>
    {profileId&&<button type="button" className="button subtle" disabled={!!busy||workLocked||previewing||profileNameAssistant.assistantBusy} onClick={()=>setProfileId('')}>Guardar como configuración nueva</button>}
   </form></details></section>}
-  {batch?.fileHash&&<section aria-label="Archivos y descargas" className={styles.importDownloads}><h3>Archivos y descargas</h3>{downloadItems.map(item=><article key={item.kind}><h4>{item.label}</h4><p>{item.description}</p><p>{item.available?'Disponible':`No disponible · ${item.reason}`}</p><button type="button" className="button subtle" disabled={!!busy||!item.available} onClick={()=>download(item.kind)}>Descargar {item.label.toLocaleLowerCase('es')}</button></article>)}<p className="small muted">Original privado: 7 días si abandonas la importación, 90 días después de finalizar. No convertimos XLS, XLSB ni archivos con macros.</p></section>}
+  {batch?.fileHash&&<section aria-label="Archivos y descargas" className={styles.importDownloads}><h3>Archivos y descargas</h3>{downloadItems.map(item=><article key={item.kind}><h4>{item.label}</h4><p>{item.description}</p><p>{item.available?'Disponible':`No disponible · ${item.reason}`}</p><button type="button" className="button subtle" data-advisor-control={DOWNLOAD_CONTROLS[item.kind]} disabled={!!busy||!item.available} onClick={()=>download(item.kind)}>Descargar {item.label.toLocaleLowerCase('es')}</button></article>)}<p className="small muted">Original privado: 7 días si abandonas la importación, 90 días después de finalizar. No convertimos XLS, XLSB ni archivos con macros.</p></section>}
  </section>;
 }
 
@@ -982,24 +1175,30 @@ function ReviewShipment({shipment}){
   {otherFields.length>0&&<details><summary>Otros datos importados y campos adicionales</summary><dl>{otherFields.map(field=><div key={`${field.sourceId}:${field.key}`}><dt>{field.label}</dt><dd>{field.value}<small className="muted"> · Columna {field.columnIndex+1} · {field.header||'Sin encabezado'} · Filas {field.rowNumbers.join(', ')}</small></dd></div>)}</dl></details>}
  </section>;
 }
-function SourceRows({batch,page,rowState,query,location,open,busy,onFilter,onSearch,onClearLocation,onPage,onToggle,onResolve}){
+function SourceRows({batch,page,rowState,query,location,open,busy,advisorControl,advisorActions,onFilter,onSearch,onClearLocation,onPage,onToggle,onResolve}){
  const rows=batch?.rows;if(!rows)return null;const list=records(rows).filter(row=>!location||row.sheet===location.sheet&&row.rowNumber===location.rowNumber),maxPage=Math.max(1,Math.ceil((rows.total||0)/(rows.pageSize||20)));
  return <details open={open} onToggle={event=>onToggle(event.currentTarget.open)}>
-  <summary data-import-source-rows tabIndex={-1}>Filas originales y motivos ({rows.total||0})</summary>
+  <summary data-import-source-rows data-advisor-control="import-source-rows" tabIndex={-1}>Filas originales y motivos ({rows.total||0})</summary>
   {location&&<p><strong>Hoja {location.sheet} · fila {location.rowNumber}</strong> <button type="button" className="button subtle" disabled={busy} onClick={onClearLocation}>Ver todas las filas</button></p>}
   <form key={query} onSubmit={event=>{event.preventDefault();onSearch(String(new FormData(event.currentTarget).get('q')||'').trim());}}><label className="field">Buscar en las filas de este archivo<input type="search" name="q" maxLength={100} defaultValue={query} disabled={busy}/></label><div className="admin-actions"><button className="button subtle" disabled={busy}>Buscar filas</button><button type="reset" className="button subtle" disabled={busy} onClick={()=>onSearch('')}>Limpiar búsqueda</button></div><p className="small muted">Busca solo en las filas de esta importación. La búsqueda no se guarda en la dirección.</p></form>
   <label className="field">Filtrar filas<select value={rowState} disabled={busy} onChange={event=>onFilter(event.target.value)}><option value="">Todas</option>{['pending','new','updated','unchanged','conflict','rejected','ready','skipped','applied'].map(state=><option key={state} value={state}>{({pending:'Pendientes de procesar',new:'Nuevas',updated:'Por actualizar',unchanged:'Sin cambios',conflict:'En conflicto',rejected:'Con errores',ready:'Preparadas',skipped:'Omitidas',applied:'Aplicadas'})[state]}</option>)}</select></label>
   {!list.length?<p>{busy?'Consultando filas…':location?'Esta fila no está disponible en la revisión actual':'No hay filas para este filtro.'}</p>:list.map(row=>{
    const cells=Array.isArray(row.source)?row.source:row.cells||row.source?.cells||[],tasks=row.task||row.tasks||[];
+   const atAdvisorRow=advisorControl&&onResolve&&rowHasIssue(row)&&row.sheet===location?.sheet&&row.rowNumber===location?.rowNumber;
+   const diagnosticColumns=atAdvisorRow?new Set(row.errors.map(error=>error.columnIndex??error.column-1).filter(column=>Number.isInteger(column)&&column>=0&&column<200)):null;
    return <article className="order-line" key={json([row.sheet,row.rowNumber])}>
     <h4>{row.sheet} · fila {row.rowNumber}</h4><p>{RESULT_LABELS[row.state]||row.state} · {row.entityKey||row.groupKey}</p>
     {messages(row.errors).map((message,i)=><p className="error" key={i}>{message}</p>)}
     {messages(tasks).map((message,i)=><p key={i}>{message}</p>)}
     {row.reason&&<p>{row.reason}</p>}
-    {cells.length>0&&<details><summary>Valores originales por posición</summary><dl>{cells.map((cell,i)=><div key={i}><dt>Columna {i+1}</dt><dd style={{marginLeft:0,overflowWrap:'anywhere',whiteSpace:'pre-wrap'}}>{cellText(cell)||'(vacío)'}</dd>{onResolve&&row.state!=='applied'&&!row.applied&&<button type="button" className="text-button" disabled={busy} onClick={()=>onResolve('cell_value',{...row,columnIndex:i,original:cell})}>Completar o corregir columna {i+1}</button>}</div>)}</dl></details>}
+    {cells.length>0&&<details data-import-source-values><summary>Valores originales por posición</summary><dl>{cells.map((cell,i)=><div key={i}><dt>Columna {i+1}</dt><dd style={{marginLeft:0,overflowWrap:'anywhere',whiteSpace:'pre-wrap'}}>{cellText(cell)||'(vacío)'}</dd>{onResolve&&row.state!=='applied'&&!row.applied&&<button type="button" className="text-button" disabled={busy} onClick={()=>onResolve('cell_value',{...row,columnIndex:i,original:cell})}>Completar o corregir columna {i+1}</button>}</div>)}</dl></details>}
     {row.normalized?.values?.additionalFields?.length>0&&<details><summary>Campos adicionales normalizados</summary><dl>{row.normalized.values.additionalFields.map(field=><div key={`${field.key}:${field.columnIndex}`}><dt>{field.label} · columna {field.columnIndex+1} · {field.header||'Sin encabezado'}</dt><dd style={{marginLeft:0,overflowWrap:'anywhere'}}>{field.value}</dd></div>)}</dl></details>}
     {row.normalized?.lines?.length>0&&<details><summary>Productos normalizados de esta fila</summary><ul>{row.normalized.lines.map((line,i)=><li key={i}>{line.productExternalKey||line.itemId||'Sin vínculo'} · cantidad {line.quantity??'sin dato'} · {line.unitPriceMinor==null?'precio sin dato':`${(line.unitPriceMinor/100).toLocaleString('es-CO')} COP`}</li>)}</ul></details>}
-    {onResolve&&row.state!=='applied'&&!row.applied&&<ResolutionActions actions={ROW_RESOLUTIONS} disabled={busy} onResolve={action=>onResolve(action,row)}/>}
+    {atAdvisorRow?<details open><summary ref={advisorControl}>Opciones de resolución de esta fila</summary>
+     {advisorActions(row)}
+     {[...diagnosticColumns].map(columnIndex=><button key={columnIndex} type="button" className="button subtle" disabled={busy} onClick={()=>onResolve('cell_value',{...row,columnIndex,original:cells[columnIndex]})}>Corregir columna {columnIndex+1} de esta fila</button>)}
+     <ResolutionActions actions={ROW_RESOLUTIONS} disabled={busy} onResolve={action=>onResolve(action,row)}/>
+    </details>:onResolve&&row.state!=='applied'&&!row.applied&&<ResolutionActions actions={ROW_RESOLUTIONS} disabled={busy} onResolve={action=>onResolve(action,row)}/>}
    </article>;
   })}
   <div className="admin-actions"><button type="button" className="button subtle" disabled={busy||page<=1} onClick={()=>onPage(page-1)}>Anterior</button><span>Página {page} de {maxPage}</span><button type="button" className="button subtle" disabled={busy||page>=maxPage} onClick={()=>onPage(page+1)}>Siguiente</button></div>
@@ -1073,11 +1272,11 @@ function ShipmentAssignmentsResolution({group,value=[],onChange}){
  </div>;
 }
 
-function SheetFixedValues({config,onChange}){
+function SheetFixedValues({config,onChange,advisorAvailable}){
  const hasGifts=config.purpose==='orders'&&config.columns.some(column=>column.destination==='giftProductExternalKey');
  const fields=config.purpose==='expenses'?['expenseCategory','expenseConcept','expenseSupplier','expenseCampaign']:['orders','tracking','settlements'].includes(config.purpose)?['deliveryMethod','carrier',...(hasGifts?['giftQuantity']:[])]:[];
  if(!fields.length)return null;
- return <><details open={hasGifts}><summary>Valores comunes de esta hoja{hasGifts?' y cantidad de obsequios':''}</summary><p>Solo completan destinos sin columna asignada. Una celda vacía de una columna asignada sigue pendiente.</p><div className="form-grid">{fields.map(key=>{
+ return <><details open={hasGifts}><summary data-advisor-control={advisorAvailable?'import-fixed-values':undefined}>Valores comunes de esta hoja{hasGifts?' y cantidad de obsequios':''}</summary><p>Solo completan destinos sin columna asignada. Una celda vacía de una columna asignada sigue pendiente.</p><div className="form-grid">{fields.map(key=>{
   const definition=FIELD_DEFINITIONS.get(key),assigned=key==='giftQuantity'?config.columns.filter(column=>column.destination==='giftProductExternalKey').every(gift=>config.columns.some(column=>column.destination==='giftQuantity'&&(column.group||0)===(gift.group||0))):config.columns.some(column=>column.destination===key);
   const change=value=>onChange(value===''?Object.fromEntries(Object.entries(config.defaults||{}).filter(([field])=>field!==key)):{...config.defaults,[key]:value});
   const giftQuantity=key==='giftQuantity';
@@ -1092,18 +1291,18 @@ function ExpenseCategoryMapping({config,sampleRows,onChange}){
  return <details><summary>Categorías de los gastos</summary><p>Confirma los rótulos del archivo. Solo se admiten Publicidad, Operación u Otros gastos; sueldos y comisiones conservan su módulo.</p>{names.map(name=><label key={name} className="field">{name}<select value={config.expenseCategoryMap?.[name]||''} onChange={event=>onChange(event.target.value?{...config.expenseCategoryMap,[name]:event.target.value}:Object.fromEntries(Object.entries(config.expenseCategoryMap||{}).filter(([key])=>key!==name)))}><option value="">Por confirmar</option><option value="advertising">Publicidad</option><option value="operating">Operación</option><option value="other">Otros gastos</option></select></label>)}</details>;
 }
 
-function GroupIssueActions({group,disabled,onResolve,onKeepDate,onConfigureSheet,onInspectRows,onEditProduct}){
+function GroupIssueActions({group,disabled,onResolve,onKeepDate,onConfigureSheet,onInspectRows,onEditProduct,includeOther=true}){
  const issues=group.errors||[];
  return <div className="admin-actions">{issues.map((issue,index)=>{
   const refs=issue.rowRefs?.length?issue.rowRefs:(group.rowRefs||[]).filter(ref=>(!issue.sheet||ref.sheet===issue.sheet)&&(!issue.rowNumber||ref.rowNumber===issue.rowNumber)),single=refs.length===1?refs[0]:{},sheet=issue.sheet||single.sheet,number=issue.rowNumber||single.rowNumber,context={entityKey:groupKey(group),sheet,rowNumber:number,externalKey:issue.externalKey||'',columnIndex:issue.columnIndex,original:issue.originalValue,rowRefs:refs};
   const action=(label,run)=><button key={index} type="button" className="button subtle" disabled={disabled} onClick={run}>{label}</button>;
   if(['IMPORT_PRODUCT_LINK','IMPORT_GIFT_LINK'].includes(issue.code))return context.externalKey?action(`${issue.code==='IMPORT_GIFT_LINK'?'Vincular obsequio real':'Vincular producto'} ${context.externalKey}`,()=>onResolve('link_product',{...context,giftOnly:issue.code==='IMPORT_GIFT_LINK'})):action('Ver filas para identificar la referencia',()=>onInspectRows(sheet&&number?{sheet,rowNumber:number}:null));
-  if(issue.code==='IMPORT_YEAR_CONFIRMATION')return <div key={index}><strong>{issue.normalizedDate} · {sheet} · fila {number}</strong><button type="button" className="button subtle" disabled={disabled||!sheet||!number} onClick={()=>onKeepDate({...issue,sheet,rowNumber:number})}>Conservar fecha del archivo</button><button type="button" className="button subtle" disabled={disabled} onClick={()=>onResolve('cell_value',context)}>Corregir esta fecha</button></div>;
+  if(issue.code==='IMPORT_YEAR_CONFIRMATION')return <div key={index}><strong>{issue.normalizedDate} · {sheet} · fila {number}</strong><button type="button" className="button subtle" data-advisor-control={sheet&&number?'import-original-date-consent':undefined} disabled={disabled||!sheet||!number} onClick={()=>onKeepDate({...issue,sheet,rowNumber:number})}>Conservar fecha del archivo</button><button type="button" className="button subtle" disabled={disabled} onClick={()=>onResolve('cell_value',context)}>Corregir esta fecha</button></div>;
   if(issue.code==='IMPORT_OPENING_CLASSIFICATION')return action('Clasificar hecho frente al conteo',()=>onResolve('opening_observation',context));
   if(['IMPORT_ORDER_INCOMPLETE','IMPORT_COMMERCIAL_AUTHORITY'].includes(issue.code))return action('Completar o revisar datos de este pedido',()=>onResolve('commercial_update',context));
   if(issue.code==='IMPORT_POLICY_REQUIRED')return action('Revisar regla histórica de esta operación',()=>onResolve('review_policy',context));
   if(issue.code==='IMPORT_FORMULA_ACCEPTANCE')return sheet&&issue.field?action('Revisar valor guardado de esta fórmula',()=>onResolve('accept_formulas',{...context,externalKey:issue.field})):action('Ver origen de la fórmula',()=>onInspectRows(sheet&&number?{sheet,rowNumber:number}:null));
-  if(issue.code==='IMPORT_COMPONENT_COSTS')return group.lines?.length?action('Completar costos históricos de componentes',()=>onResolve('line_costs',context)):action('Ver datos pendientes de las líneas',event=>{const details=event.currentTarget.closest('[data-import-operation]')?.querySelector('[data-import-operation-effects]');if(details){details.open=true;details.querySelector('summary')?.focus();}});
+  if(issue.code==='IMPORT_COMPONENT_COSTS')return group.lines?.length?action('Completar costos históricos de componentes',()=>onResolve('line_costs',context)):includeOther?action('Ver datos pendientes de las líneas',event=>{const details=event.currentTarget.closest('[data-import-operation]')?.querySelector('[data-import-operation-effects]');if(details){details.open=true;details.querySelector('summary')?.focus();}}):null;
   if(issue.code==='IMPORT_EXPENSE_AUTHORITY')return action('Revisar autoridad de este gasto',()=>onResolve('review_authority',context));
   if(['IMPORT_CUTOFF_REQUIRED','IMPORT_GIFT_QUANTITY','IMPORT_GIFT_REQUIRED'].includes(issue.code))return action(issue.code==='IMPORT_CUTOFF_REQUIRED'?'Confirmar corte de esta hoja':'Revisar columnas y valores de obsequios',()=>onConfigureSheet(sheet,issue.code==='IMPORT_CUTOFF_REQUIRED'?'cutoff':issue.code==='IMPORT_GIFT_QUANTITY'?'defaults':'columns'));
   if(issue.code==='IMPORT_INVENTORY'&&issue.productId)return action('Revisar conteo físico del producto',()=>onEditProduct(issue.productId));
@@ -1111,6 +1310,6 @@ function GroupIssueActions({group,disabled,onResolve,onKeepDate,onConfigureSheet
    const locations=refs.length?refs:sheet&&number?[{sheet,rowNumber:number}]:[];
    return <details key={index}><summary>Ubicaciones de las posibles repeticiones</summary>{locations.length?locations.map(ref=><div key={json([ref.sheet,ref.rowNumber])}><p>{ref.sheet} · fila {ref.rowNumber}</p><button type="button" className="button subtle" disabled={disabled} onClick={()=>onInspectRows(ref)}>Ver fila original</button><button type="button" className="button subtle" disabled={disabled} onClick={()=>onResolve('duplicate',{...context,...ref,reason:''})}>Omitir esta repetición</button><button type="button" className="button subtle" disabled={disabled} onClick={()=>onResolve(issue.code==='IMPORT_DUPLICATE_ROW'?'additional_quantity':'independent_record',{...context,...ref,reason:''})}>{issue.code==='IMPORT_DUPLICATE_ROW'?'Contar como cantidad adicional':'Es una operación independiente'}</button></div>):<button type="button" className="button subtle" onClick={()=>onInspectRows(null)}>Ver filas originales</button>}</details>;
   }
-  return action('Otras opciones de corrección',event=>{const details=event.currentTarget.closest('[data-import-operation]')?.querySelector('[data-import-other-options]');if(details){details.open=true;details.querySelector('summary')?.focus();}});
+  return null;
  })}</div>;
 }

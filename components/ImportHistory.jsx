@@ -40,14 +40,14 @@ export default function ImportHistory({resource, options, view, onFilter, onPage
 
   return <section aria-label="Importaciones" aria-busy={loading}>
     <header className={styles.taskHeading}>
-      <div><h2 data-import-history-heading tabIndex={-1}>Importaciones</h2><p>Continúa una importación guardada o consulta su progreso y resultado.</p></div>
+      <div><h2 data-import-history-heading data-advisor-control={data&&!loading&&!error?'import-history':undefined} tabIndex={-1}>Importaciones</h2><p>Continúa una importación guardada o consulta su progreso y resultado.</p></div>
       <div className="admin-actions">
         <button type="button" className="button primary" onClick={onNew}>Nueva importación</button>
         <button type="button" className="button subtle" onClick={onManageSources}>Administrar orígenes y configuraciones</button>
       </div>
     </header>
     <div className="form-grid" role="group" aria-label="Filtros de importaciones">
-      <label className="field">Origen<select value={source} onChange={event => onFilter({source: event.target.value, status})}>
+      <label className="field">Origen<select data-advisor-control="import-history-filters" value={source} onChange={event => onFilter({source: event.target.value, status})}>
         <option value="">Todos</option>
         {source && !sources.some(item => item.id === source) && <option value={source}>Origen no disponible</option>}
         {sources.map(item => <option key={item.id} value={item.id}>{platforms.find(platform => platform.id === item.platformId)?.name || 'Plataforma no disponible'} · {item.name}{item.active === false ? ' · Archivado' : ''}</option>)}
