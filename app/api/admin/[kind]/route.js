@@ -1,4 +1,5 @@
 import { authorize, db, json, jsonBody, errorResponse } from '@/lib/server.mjs';
+import { isStorefrontContentKind } from '@/lib/store.mjs';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export async function GET(request, { params }) { try {
@@ -11,5 +12,6 @@ export async function GET(request, { params }) { try {
 } catch (error) { return errorResponse(error); } }
 export async function POST(request, { params }) { try {
   const user = await authorize(request, { write: true }), { kind } = await params, data = await jsonBody(request), store = await db();
+  if (isStorefrontContentKind(kind)) return json(await store.writeStorefrontContent(kind, 'create', data, user.user.id), 201);
   return json(await (kind === 'orders' ? store.saveOrder(data, user.user.id) : store.save(kind, data, null, null, user.user.id)), 201);
 } catch (error) { return errorResponse(error); } }
