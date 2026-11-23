@@ -231,14 +231,19 @@ export function verifyImageArchive(path, images) {
   }
 }
 
+function verifiedImagePresent(ref) {
+  const tagged = image(ref.imageTag, true);
+  if (!tagged) return false;
+  requireThat(tagged.id === ref.imageId, 'Colisión de tag inmutable.');
+  const pinned = image(ref.imageId, true);
+  return [tagged, pinned].every(value => value?.id === ref.imageId && value.descriptor === ref.imageId);
+}
+
 function loadImages(path, images) {
   verifyImageArchive(path, images);
   for (const ref of Object.values(images)) requireThat((image(ref.imageTag, true)?.id ?? ref.imageId) === ref.imageId, 'Colisión de tag inmutable.');
   docker(['load', '--input', path], { timeout: 1_200_000 });
-  for (const ref of Object.values(images)) {
-    const tagged = image(ref.imageTag), pinned = image(ref.imageId);
-    requireThat([tagged, pinned].every(value => value.id === ref.imageId && value.descriptor === ref.imageId), 'Descriptor OCI cargado distinto al ID aprobado.');
-  }
+  for (const ref of Object.values(images)) requireThat(verifiedImagePresent(ref), 'Descriptor OCI cargado distinto al ID aprobado.');
 }
 function up(services, options) {
   for (const service of serviceOrder.filter(s => services.includes(s) && s !== 'db')) {
@@ -522,6 +527,11 @@ async function host(operation, input) {
       requireThat(readJSON(join(directory, 'rehearsal.json')).sha256 === input.sha256, 'Hash de ensayo distinto.');
       rmSync(join(directory, 'rehearsal.tar'));
       return { retired: true };
+    }
+    case 'check-loaded-images': {
+      const refs = Object.values(input.images ?? {});
+      requireThat(refs.length > 0 && refs.every(ref => imageId.test(ref.imageId) && /^allnutrition(?:-social-browser)?:release-[a-f0-9]{12}$/.test(ref.imageTag)), 'Referencias OCI inválidas.');
+      return { loaded: refs.map(verifiedImagePresent).every(Boolean) };
     }
     case 'receive-image': {
       const directory = recoveryDirectory(input.token);

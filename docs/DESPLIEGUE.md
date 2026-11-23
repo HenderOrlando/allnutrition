@@ -461,6 +461,8 @@ El mismo comando conserva las procedencias por servicio, no recrea PostgreSQL ni
 
 El PostgreSQL del clon de recuperación usa un volumen temporal dedicado (`tmpfs`, 4 GiB, sin swap), no el disco compartido del constructor. Requiere un kernel Linux con soporte de `tmpfs,noswap` y al menos 8 GiB de memoria disponible al crear el volumen. La base restaurada debe caber en ese volumen; si no cabe, el ensayo falla antes del corte. No se desactiva `fsync`, no cambia el respaldo cifrado y el volumen se elimina al terminar el ensayo. PostgreSQL de producción conserva su almacenamiento persistente.
 
+Si un corte se revierte y el descriptor OCI aprobado ya está instalado, el siguiente intento comprueba en la VM el tag y el ID inmutables (`linux/amd64`) y no vuelve a enviar ni cargar el mismo paquete. La aceptación del artefacto, los latidos y las demás compuertas del corte siguen siendo obligatorios.
+
 Después del primer corte, instalar las dos unidades de `deploy/systemd/` **solo** en el constructor Linux amd64. Instalar el auditor y los módulos operativos/de impacto sellados en `/opt/allnutrition-audit/scripts/`, propiedad de `root`. Preparar `/etc/allnutrition-audit/production.env` (`0600`) con el destino SSH hacia la VM, la ruta preexistente de una identidad privada exclusiva del recolector root en `/etc/allnutrition-audit/`, `ALLNUTRITION_AUDIT_DOCKER_HOST` (socket Unix local, propietario UID 1000, de un daemon rootless dedicado sin permisos sobre credenciales del host) y `ALLNUTRITION_AUDIT_BUILDER` (prefijo exclusivo para sus instancias Buildx). No reutilizar el socket privilegiado del bastión. No instalar el timer en el portátil ni en la VM.
 
 ```sh

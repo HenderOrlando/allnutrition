@@ -87,6 +87,8 @@ export async function cachePut(path, key, digest) {
 }
 export async function loadFromBuilder(key, { token, sha256: digest, bytes, images }) {
   requireThat(safeCacheKey(key) && hash.test(digest), 'Artefacto de imágenes inválido.');
+  // The accepted archive and its OCI index were already verified locally by verifyBundle.
+  if (host('check-loaded-images', { images }, { timeout: 60_000 }).loaded === true) return;
   const recv = shell(['ssh', ...target('VM'), hostCommand('receive-image', { token, sha256: digest, bytes, images })]);
   const remote = runner({ args: builderArgs(`set -euo pipefail; cat ${quote(join(releaseCache(), 'cache', key))} | ${recv}`), options: { timeout: 1_800_000, stdio: ['ignore', 'pipe', 'pipe'] } });
   requireThat(remote.status === 0 && JSON.parse(remote.stdout).loaded === true, `Carga de imágenes en VM falló: ${remote.stderr?.trim() || remote.error?.code || remote.status}.`);
