@@ -457,6 +457,8 @@ npm run deploy:production -- --dry-run "$SHA"
 npm run deploy:production -- "$SHA"         # SHA completo del HEAD remoto de main
 ```
 
+La aceptación por impacto incluye las suites Playwright de Ali cuando el plan selecciona su dominio o detecta cambios en esas pruebas. Cada suite seleccionada debe pasar en escritorio y móvil para sellar el candidato.
+
 El mismo comando conserva las procedencias por servicio, no recrea PostgreSQL ni el Nginx compartido, y no hace `git pull` en la VM. La VM guarda el recibo y diario de corte en `~/.local/state/allnutrition-deploy/`; solo el manifiesto público llega a GitHub Deployments. Si se interrumpe el corte revisar `--status` y `--recover <id del diario>`. Este último no repite DDL: restaura las imágenes previas si se acredita que no se migró, o retoma hacia adelante únicamente con el esquema objetivo comprobado. Un esquema parcial/incierto deja las escrituras detenidas: conservar copia y diario, no restaurar sobre datos posteriores ni volver a ejecutar el migrador a ciegas.
 
 El PostgreSQL del clon de recuperación usa un volumen temporal dedicado (`tmpfs`, 4 GiB, sin swap), no el disco compartido del constructor. Requiere un kernel Linux con soporte de `tmpfs,noswap` y al menos 8 GiB de memoria disponible al crear el volumen. La base restaurada debe caber en ese volumen; si no cabe, el ensayo falla antes del corte. No se desactiva `fsync`, no cambia el respaldo cifrado y el volumen se elimina al terminar el ensayo. PostgreSQL de producción conserva su almacenamiento persistente.

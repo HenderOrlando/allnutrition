@@ -4,7 +4,20 @@ export const pgGroups = ['core', 'business', 'imports', 'backup', 'heka', 'socia
 export const browserDomains = ['privacy', 'storefront', 'orders', 'cash', 'reports', 'imports', 'business', 'media', 'security', 'heka', 'social', 'assistant'];
 export const gateNames = ['harness', 'runtime', 'https', 'postgres', 'migration', 'restore', 'scheduler', 'runner', 'audit', 'compose', 'infra', 'desktop'];
 export const configFiles = ['compose.yaml', 'compose.nginx.yaml', 'compose.production.yaml', 'compose.staging.yaml', 'deploy/Caddyfile.production', 'deploy/Caddyfile.staging', 'deploy/nginx/allnutrition-acme.conf', 'deploy/nginx/allnutrition.wintimeapp.co.conf', 'deploy/pg_hba.conf', 'deploy/postgres-entrypoint.sh', 'deploy/social-browser-seccomp.json'];
-export const browserSpecs = ['advertising', 'app', 'assistant', 'integrations', 'security', 'workbook'];
+const advisorSpecs = [
+  'advisor-account-learning-controls',
+  'advisor-audience-controls',
+  'advisor-campaign-form-controls',
+  'advisor-creative-input-controls',
+  'advisor-google-oauth-controls',
+  'advisor-library-controls',
+  'advisor-measurement-controls',
+  'advisor-meta-connection-controls',
+  'advisor-meta-inventory-controls',
+  'advisor-onboarding-controls',
+  'advisor-result-recommendations',
+];
+export const browserSpecs = ['advertising', 'app', 'assistant', 'integrations', 'security', 'workbook', ...advisorSpecs];
 export const manualNode = ['tests/heka-browser.mjs'];
 export const roots = {
   scheduler: ['scripts/business-jobs.mjs', 'scripts/migrate.mjs'],
@@ -59,5 +72,5 @@ export const postgresByDomain = {
 // Domain-qualified browser tests are narrow; the verifier owns their fixed argv.
 export const domainSpecs = {
   privacy: ['privacy'], storefront: ['app:storefront'], orders: ['app:orders'], cash: ['app:cash'], reports: ['app:reports'], imports: ['workbook'], business: ['app:business'], media: ['app:media', 'security:media'], security: browserSpecs,
-  heka: ['integrations:heka'], social: ['integrations:social', 'advertising'], assistant: ['assistant'],
+  heka: ['integrations:heka'], social: ['integrations:social', 'advertising'], assistant: ['assistant', ...advisorSpecs],
 };
