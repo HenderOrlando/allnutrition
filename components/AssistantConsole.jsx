@@ -665,6 +665,7 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
       </div>
       {backgroundCount>0&&<p className={styles.contextLine} role="status">{backgroundCount===1?'1 consulta en otra conversación':`${backgroundCount} consultas en otras conversaciones`}</p>}
       {settingsError&&<p className={styles.contextLine} role="alert">{settingsError}</p>}
+      <div className={styles.messages} ref={listRef} aria-live="off">
       {historyOpen&&<section id="ali-history" className={styles.history} aria-label="Conversaciones anteriores">
         <div className={styles.historyHead}>
           <h3 ref={historyHeading} tabIndex={-1}>Conversaciones</h3>
@@ -692,7 +693,6 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
         })}
         {historyHasMore&&<button type="button" className={styles.moreThreads} disabled={historyLoading} onClick={()=>void loadThreads(historyPage+1)}>Ver conversaciones anteriores</button>}
       </section>}
-      <div className={styles.messages} ref={listRef} aria-live="off">
       {loading&&!thread&&<p className={styles.contextLine} role="status">Cargando conversación…</p>}
       {thread&&<div className={styles.threadTools}>
         <strong>{threadTitle(thread)}{archived&&<small> · Archivada</small>}</strong>
