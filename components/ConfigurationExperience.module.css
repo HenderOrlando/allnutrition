@@ -156,37 +156,6 @@
   margin-bottom: 24px;
 }
 
-.homeGuide {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 24px;
-  border: 1px solid var(--admin-accent);
-  border-radius: 16px;
-  background: var(--admin-lilac);
-  margin-bottom: 24px;
-}
-
-.homeGuide > div {
-  flex: 1 1 16rem;
-  min-width: 0;
-}
-
-.homeGuide h2 {
-  margin: 0 0 8px;
-}
-
-.homeGuide p {
-  margin: 0;
-}
-
-.homeGuide button {
-  max-width: 100%;
-  white-space: normal;
-}
-
 .navigation {
   display: flex;
   flex-wrap: wrap;
@@ -301,8 +270,7 @@
     grid-row: auto;
   }
 
-  .group,
-  .homeGuide {
+  .group {
     padding: 16px;
   }
 

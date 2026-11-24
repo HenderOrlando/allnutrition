@@ -260,6 +260,7 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
         <ImageByUrl src="/brand/logo.jpg" alt="" width={44} height={44} />
         <span>ALL NUTRITION<small>Mesa de trabajo</small></span>
       </button>
+      <p className="sidebar-caption" aria-hidden="true">Espacio de trabajo</p>
       <GroupedNavigation view={view} onNavigate={navigate} interactionLocked={interactionLocked} />
       <Account user={user} onSignOut={onSignOut} interactionLocked={interactionLocked} />
     </aside>
@@ -267,13 +268,14 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
       <button type="button" className="admin-brand" disabled={interactionLocked}
         aria-label="All Nutrition, ir al Inicio" onClick={() => navigate({ section: 'home' })}>
         <ImageByUrl src="/brand/logo.jpg" alt="" width={44} height={44} />
+        <span>All Nutrition<small>Administración</small></span>
       </button>
       <p className="topbar-location"><span>Administración</span><Icon name="chevron" size={14} /><strong>{view.section === 'business' && (!view.tab || view.tab === 'setup') ? 'Configuración' : adminLocationLabel(view)}</strong></p>
       <div className="topbar-actions">
         <button type="button" className="button subtle launcher-trigger" data-advisor-control="admin-navigation-launcher" disabled={interactionLocked}
           aria-haspopup="dialog" aria-expanded={dialog === 'launcher'} aria-keyshortcuts={shortcut === '⌘ K' ? 'Meta+K' : 'Control+K'}
           onClick={() => openDialog('launcher')}>
-          <Icon name="search" size={18} /><span>Ir a…</span><kbd className="launcher-shortcut">{shortcut}</kbd>
+          <Icon name="search" size={18} /><span>Ir a…</span><kbd className="launcher-shortcut" aria-hidden="true">{shortcut}</kbd>
         </button>
         <button type="button" className="button subtle advisor-nav-trigger" aria-haspopup="dialog" aria-describedby={advisorUnread > 0 ? advisorStatus : undefined} onClick={onOpenAssistant}>
           <Icon name="chat" size={18} /><span>Ali</span>{advisorUnread > 0 && <span className="advisor-nav-count" aria-hidden="true">{advisorUnread > 99 ? '99+' : advisorUnread}</span>}

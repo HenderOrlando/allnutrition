@@ -294,8 +294,8 @@ export default function AdvisorTasks({ api, ready, request, onRequestHandled, on
 
   return <>
     <div className={styles.actions}>
-      {['ship-order', 'close-cash'].map(kind => <button key={kind} type="button" className="secondary" disabled={!canGuide || busy} onClick={() => showStart(kind)}>{STARTS[kind].title}</button>)}
-      <button type="button" className="secondary" disabled={busy} onClick={() => showHistory({ resetPage: true })}>Mis tareas</button>
+      {['ship-order', 'close-cash'].map(kind => <button key={kind} type="button" className="button subtle" disabled={!canGuide || busy} onClick={() => showStart(kind)}>{STARTS[kind].title}</button>)}
+      <button type="button" className="button subtle" disabled={busy} onClick={() => showHistory({ resetPage: true })}>Mis tareas</button>
     </div>
     {open && <dialog ref={dialog} className={styles.dialog} aria-labelledby={titleId}>
       <header className={styles.header}>

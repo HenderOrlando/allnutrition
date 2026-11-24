@@ -1,5 +1,11 @@
 # Cambios — administración v3 y antecedentes
 
+## Administración · rediseño visual adaptable
+
+- Inicio da prioridad a Nuevo pedido, Importar Excel, el directorio de tareas y las cifras del negocio. La asistencia de Ali y la guía de inicio conservan sus acciones.
+- Navegación lateral de escritorio, barra inferior móvil e interfaz de ingreso renovadas. Las pantallas internas comparten encabezados, pestañas y controles; en móvil, los filtros de las listas dejan de ocupar espacio fijo al desplazarse.
+- Comprobado en Chromium con la compilación local por HTTPS y una sesión de administrador de prueba: 113 comprobaciones sin fallos a 390 y 1440 px. Sin cambios de permisos, lógica de negocio ni vitrina pública. No desplegado.
+
 ## Publicidad · conexiones guiadas, inventario de Meta y ficha económica
 
 - **Redes sociales** abre el listado de conexiones, el alta guiada o la ficha enlazada por UUID. La ficha muestra el histórico guardado de esa cuenta, la cobertura y el estado real de la conexión. **Consultar anuncios por fecha** no guarda sus resultados.
