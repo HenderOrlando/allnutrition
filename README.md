@@ -364,6 +364,10 @@ Informes diarios, semanales, mensuales, trimestrales, semestrales y anuales en `
 
 Abre **Ali** desde el panel. **Ideas para empezar** también está disponible dentro de una conversación: elegir una idea copia un texto editable, sin enviarlo. Abrir una acción del directorio para consultar a Ali devuelve el foco a la caja de mensaje y conserva lo escrito; pulsa **Enviar** cuando esté listo.
 
+**Conversaciones** permite buscar por título, por lo que escribiste o por el texto público de una respuesta de Ali. Archivar quita el hilo de **Activas** sin borrar el historial ni detener un análisis. Para retomarlo, entra en **Archivadas** y pulsa **Restaurar**. **Borrar** requiere confirmación y no deshace cambios ya guardados en el negocio.
+
+Usa **Solicitar una intención** para buscar en el directorio y preparar una consulta editable. Mientras Ali trabaja, puedes abrir **Nueva conversación** y pedir otra acción independiente. Si una operación necesita datos que otra está cambiando, Ali explica el conflicto; puedes reintentar cuando termine. Si no está claro qué registro se afectaría, Ali pide precisarlo. Vuelve al hilo para ver la etapa actual, las lecturas completadas y el resultado; en **Etapas registradas** puedes consultar las fases que recorrió el turno.
+
 **Fuentes** muestra de dónde viene una afirmación; **Ver registros consultados** recupera lo que se leyó en ese turno, no ejecuta otro análisis. Si hay varias respuestas con evidencia, elige la respuesta exacta antes de abrir su fuente.
 
 En **Inicio → Hoy con Ali** ves avisos y recordatorios privados sin abrir el chat. Abre la fuente para revisar el registro original; leer, posponer o retomar un aviso no modifica ni resuelve esa fuente. **Toda la atención pendiente** conserva la vista general del negocio. Los recordatorios usan hora de Bogotá y aparecen al volver al panel, no envían notificaciones con el navegador cerrado.

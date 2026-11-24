@@ -9,11 +9,14 @@ import { createIntegrationKeyring } from '../lib/integrations/keyring.mjs';
 import { getAssistantSettings, saveAssistantSettings } from '../lib/assistant/settings.mjs';
 import { completeAssistantCycle, scriptedAssistantProvider } from './assistant-cycle-helper.mjs';
 import { startAssistantTurn, advanceAssistantTurn, getAssistantTurnStatus, stopAssistantTurn } from '../lib/assistant/engine.mjs';
+import { executeAssistantProposal } from '../lib/assistant/actions.mjs';
 import { getAssistantThread, listAssistantThreads, deleteAssistantThread } from '../lib/assistant/conversations.mjs';
 import { readAssistantBusiness } from '../lib/assistant/readers.mjs';
 import { getAssistantGuide } from '../lib/assistant/guide.mjs';
 import { saveResource } from '../lib/business/settings.mjs';
 import { accountBalance, saveAccount } from '../lib/business/cash.mjs';
+import { saveShipment } from '../lib/business/shipments.mjs';
+import { businessOrderInput } from './business-fixtures.mjs';
 import { pageAssistantWorkRead } from '../lib/assistant/repository.mjs';
 import { insertRow } from '../lib/business/commands.mjs';
 import { buildBusinessReport } from '../lib/business/reports.mjs';
@@ -304,6 +307,127 @@ export async function runAssistantEngineContracts(t, store) {
       const completed = await pending;
       assert.equal(completed.threadId, first.threadId);
       assert.equal((await getAssistantThread(store, session, first.threadId)).turns.filter(turn => turn.state === 'completed').length, 2);
+    });
+
+    await t.test('turn admission permits live read/read and disjoint work, but stops overlapping writes and asks about unclear scope', async () => {
+      const neighbor = await store.save('products', {
+        ...emptyRecord('products'), title: `Otro producto Ali ${unique}`, slug: `otro-ali-engine-${unique}`,
+        description: 'Descripción independiente', status: 'draft', price: 10000, presentation: 'Unidad',
+      }, null, null, session.user.id);
+      const target = 'record:products';
+      const change = (record, description = 'Descripción propuesta') => call('prepare_change', {
+        target, entityId:record?.id??null, patch:JSON.stringify({description}), intent:'save', sourceRefs:[],
+      });
+      const requestFor = record => input({
+        message:`Actualiza la descripción de ${record.title}.`,
+        context:{view:{section:'products',record:record.id},form:{formId:randomUUID(),target,entityId:record.id,recordVersion:record.version,generation:1,values:{},dirty:false,busy:false}},
+      });
+      const step = (status, providerFactory = () => assert.fail('this step does not call the provider')) =>
+        advanceAssistantTurn(store,session,status.turnId,{requestId:randomUUID(),version:status.revision},{providerFactory});
+      const permit = ({results}) => finish({topic:'catalog',blocks:[{type:'fact',evidenceIds:[results[0].result.evidence.find(item=>item.field==='title').id]}]});
+      const proposalFinish = ({results}) => finish({topic:'catalog',proposalId:results[0].result.proposalId});
+      const prepare = record => completeAssistantCycle(store,session,requestFor(record),{providerFactory:scripted(()=>change(record),proposalFinish).factory});
+      const noEffects = async result => {
+        assert.equal(result.proposal,null);
+        assert.equal(result.receipt,null);
+        assert.equal(await store.db.get(`SELECT id FROM ${store.t('assistant_proposals')} WHERE turn_id=?`,[result.turnId]),null);
+      };
+      const waiting = result => assert.match(result.blocks.at(-1).text,/otra conversación.*espera a que termine/iu);
+
+      const prior = await prepare(product);
+      assert.equal(prior.proposal.execution,'confirm');
+      const started = await startAssistantTurn(store,session,requestFor(product));
+      const active = await step(started,scripted(()=>change(product)).factory);
+      assert.equal(active.phase,'reading','reserve the write before the preparation tool runs');
+      const versionBefore = (await store.get('products',product.id)).version;
+      await assert.rejects(() => executeAssistantProposal(store,session,{
+        proposalId:prior.proposal.id,version:prior.proposal.version,requestId:prior.proposal.id,
+        confirmation:{proposalId:prior.proposal.id,payloadHash:prior.proposal.payloadHash},
+      }), error => error.code==='ASSISTANT_ACTION_BUSY');
+      assert.equal((await store.get('products',product.id)).version,versionBefore);
+
+      const reader = scripted(()=>readProduct(neighbor),permit);
+      const firstRead = await step(await startAssistantTurn(store,session,input()),reader.factory);
+      assert.equal(firstRead.phase,'reading');
+      const sameRead = await completeAssistantCycle(store,session,input(),{providerFactory:scripted(()=>readProduct(neighbor),permit).factory});
+      assert.equal(sameRead.evidence.find(item=>item.field==='title').value,neighbor.title);
+      const heldRead = await step(firstRead);
+      const clear = await step(heldRead,reader.factory);
+      assert.equal(clear.result.evidence.find(item=>item.field==='title').value,neighbor.title);
+      assert.equal((await prepare(neighbor)).proposal.entityId,neighbor.id,'another record can be prepared independently');
+
+      const blockedRead = await completeAssistantCycle(store,other.session,input(),{providerFactory:scripted(()=>readProduct(product)).factory});
+      waiting(blockedRead);
+      assert.deepEqual(blockedRead.evidence,[]);
+      assert.equal(blockedRead.question,null);
+      await noEffects(blockedRead);
+
+      const unclear = await completeAssistantCycle(store,session,input({message:'Cámbiale la descripción.'}),{
+        providerFactory:scripted(()=>call('describe_form',{target}),()=>change(null)).factory,
+      });
+      assert.match(unclear.question.prompt,/alcance exacto/iu);
+      assert.deepEqual(unclear.evidence,[]);
+      await noEffects(unclear);
+
+      const replanned = await completeAssistantCycle(store,session,requestFor(product),{
+        providerFactory:scripted(()=>readProduct(neighbor),()=>change(product)).factory,
+      });
+      waiting(replanned);
+      assert.ok(replanned.evidence.some(item=>item.entityId===neighbor.id),'retain the disjoint evidence already consulted');
+      assert.ok(replanned.evidence.every(item=>item.entityId!==product.id));
+      await noEffects(replanned);
+
+      await stopAssistantTurn(store,session,active.turnId,{requestId:randomUUID()});
+      const saved = await executeAssistantProposal(store,session,{
+        proposalId:prior.proposal.id,version:prior.proposal.version,requestId:prior.proposal.id,
+        confirmation:{proposalId:prior.proposal.id,payloadHash:prior.proposal.payloadHash},
+      });
+      assert.equal(saved.receipt.entityId,product.id,'retrying the same confirmation is allowed when the blocking turn ends');
+      product = await store.get('products',product.id);
+      const answered = await completeAssistantCycle(store,session,continueInput(unclear,{
+        message:product.id,answer:{questionId:unclear.question.id,text:product.id},
+      }),{providerFactory:scripted(({context})=>{
+        assert.equal(context.answer.value,product.id);
+        return readProduct(product);
+      },permit).factory});
+      assert.equal(answered.evidence.find(item=>item.field==='title').value,product.title);
+
+      const contenders = await Promise.all([startAssistantTurn(store,session,requestFor(product)),startAssistantTurn(store,session,requestFor(product))]);
+      const competingPlans = await Promise.all(contenders.map(status=>step(status,scripted(()=>change(product)).factory)));
+      assert.equal(competingPlans.filter(status=>status.state==='running').length,1,'the database admits only one intersecting write plan');
+      const rejected = competingPlans.find(status=>status.state!=='running');
+      waiting(rejected.result);
+      await noEffects(rejected.result);
+      await stopAssistantTurn(store,session,competingPlans.find(status=>status.state==='running').turnId,{requestId:randomUUID()});
+    });
+
+    await t.test('shipment event plans reserve the linked inventory, but not unrelated products', async () => {
+      const stocked = await store.save('products', {
+        ...emptyRecord('products'),title:`Inventario Ali ${unique}`,slug:`inventario-ali-${unique}`,status:'published',
+        image:'/brand/creatina-vital-force.jpg',presentation:'Unidad',price:10000,stockQuantity:8,
+      },null,null,session.user.id);
+      const order = await store.saveOrder(businessOrderInput(stocked),session.user.id);
+      const shipment = await saveShipment(store,{requestId:randomUUID(),orderId:order.id,carrier:'Transportadora sintética',tracking:`ALI-${unique}`},session.user.id);
+      const target='shipment-event',context={
+        view:{section:'orders',tab:'shipments',record:shipment.id},
+        form:{formId:randomUUID(),target,entityId:shipment.id,recordVersion:shipment.version,generation:1,values:{},dirty:false,busy:false},
+      };
+      const started=await startAssistantTurn(store,session,input({message:'Revisa la devolución de este envío.',context}));
+      const provider=scripted(()=>call('prepare_change',{target,entityId:shipment.id,patch:JSON.stringify({detail:'Retorno por revisar'}),sourceRefs:[],intent:'save'}));
+      const planned=await advanceAssistantTurn(store,session,started.turnId,{requestId:randomUUID(),version:started.revision},{providerFactory:provider.factory});
+      assert.equal(planned.phase,'reading');
+      try {
+        const holding=await completeAssistantCycle(store,session,input(),{providerFactory:scripted(()=>readProduct(stocked)).factory});
+        assert.match(holding.blocks.at(-1).text,/otra conversación.*espera a que termine/iu);
+        assert.deepEqual(holding.evidence,[]);
+        const unlinked=await completeAssistantCycle(store,session,input(),{providerFactory:scripted(()=>readProduct(product),({results})=>finish({
+          topic:'catalog',blocks:[{type:'fact',evidenceIds:[results[0].result.evidence.find(item=>item.field==='title').id]}],
+        })).factory});
+        assert.equal(unlinked.evidence.find(item=>item.field==='title').entityId,product.id);
+        assert.equal((await store.get('products',stocked.id)).stockQuantity,stocked.stockQuantity);
+      } finally {
+        await stopAssistantTurn(store,session,planned.turnId,{requestId:randomUUID()});
+      }
     });
 
     await t.test('autonomous descriptive and financial preparation never mutate business data or manufacture receipts', async () => {

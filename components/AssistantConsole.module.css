@@ -29,19 +29,30 @@
 .header p { margin: 0; color: #59635b; font-size: 13px; }
 .eyebrow { color: #286a3c; font-size: 12px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .close { align-self: flex-start; border: 0; background: transparent; color: #334136; cursor: pointer; font-size: 28px; line-height: 1; padding: 0 4px; }
-.history { max-height: 190px; overflow: auto; padding: 12px 18px; border-bottom: 1px solid #e4e9e4; }
+.history { max-height: min(310px, 38dvh); overflow: auto; overscroll-behavior: contain; padding: 12px 18px; border-bottom: 1px solid #e4e9e4; background: #fbfcfb; }
 .historyHead,.threadTools { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.historyHead { flex-wrap: wrap; }
 .historyHead h3 { margin: 0; font-size: 14px; }
-.history button,.threadTools button,.error button { border: 1px solid #cbd6cc; border-radius: 7px; background: #fff; color: #245a34; cursor: pointer; padding: 6px 9px; font: inherit; }
+.history button,.threadTools button,.error button,.intentions button { border: 1px solid #cbd6cc; border-radius: 7px; background: #fff; color: #245a34; cursor: pointer; padding: 6px 9px; font: inherit; }
+.historySearch { box-sizing: border-box; width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid #bac7bb; border-radius: 7px; background: #fff; color: #202820; font: inherit; }
+.historyFilters { display: flex; flex-wrap: wrap; gap: 6px; }
+.historyFilters button[aria-pressed=true] { background: #e8f3eb; border-color: #286b3c; font-weight: 650; }
+.moreThreads { display: block; margin: 10px auto 2px; }
 .threadRow { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid #edf0ed; margin-top: 8px; padding-top: 8px; }
-.threadRow>button:first-child { display: flex; flex: 1; flex-direction: column; align-items: flex-start; border: 0; padding: 3px; text-align: left; }
+.threadRow>button:first-child { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; border: 0; padding: 4px 6px; text-align: left; overflow-wrap: anywhere; }
+.threadRow>button[aria-current=true] { background: #e8f3eb; font-weight: 650; }
+.threadRow>button:first-child span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .threadRow small { color: #68736a; }
-.threadTools { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; padding: 9px 18px; border-bottom: 1px solid #e4e9e4; }
+.threadTools { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; padding: 9px 18px; border-bottom: 1px solid #e4e9e4; }
+.conversationTools { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .advisorTools { grid-template-columns: repeat(auto-fit, minmax(min(100%, 132px), 1fr)); }
 .threadTools strong { min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; font-size: 13px; }
 .contextLine { margin: 0; padding: 7px 20px; color: #59635b; font-size: 12px; }
 .messages { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .messageBody { padding: 18px 20px; }
+.intentions { padding: 10px 18px; border-bottom: 1px solid #e4e9e4; background: #fbfcfb; }
+.intentions h3,.intentions p { margin: 4px 0; }
+.intentionRow { display: grid; justify-items: start; gap: 6px; margin: 10px 0; padding-bottom: 10px; border-bottom: 1px solid #dce4dc; }
 .empty { max-width: 400px; margin: 20px auto; padding: 18px; border-radius: 12px; background: #f5f8f5; color: #4b584d; }
 .empty h3 { margin: 0 0 8px; color: #25372a; font-size: 16px; }
 .workPlan { flex-shrink: 0; max-height: 32dvh; overflow-y: auto; padding: 8px 18px; border-bottom: 1px solid #e4e9e4; background: #fbfcfb; }
@@ -61,6 +72,10 @@
 .userMessage { margin-left: auto; background: #eaf3eb; }
 .assistantMessage { margin-right: auto; background: #f5f6f5; }
 .speaker { display: block; color: #4d6251; font-size: 11px; font-weight: 700; }
+.turnMeta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: #4d6251; font-size: 12px; }
+.phaseHistory { margin-top: 4px; color: #4d6251; font-size: 12px; }
+.phaseHistory summary { cursor: pointer; }
+.phaseHistory ol { margin: 4px 0; padding-left: 18px; }
 .result p { margin: 5px 0; }
 .block { margin: 0 0 11px; }
 .block ul,.block ol,.evidence ul { padding-left: 20px; }
@@ -123,6 +138,8 @@
 .analysisScope p,.progress p,.readPage p { margin: 5px 0; }
 .analysisScope button,.progress button,.readPage button { margin: 4px; max-width: 100%; border: 1px solid #286b3c; border-radius: 7px; padding: 7px 9px; color: #245a34; background: #fff; cursor: pointer; font: inherit; }
 .progress ol { display: flex; flex-wrap: wrap; gap: 7px 20px; padding-left: 20px; font-size: 12px; }
+.progress [data-visited=true]:not([aria-current=step]) { color: #245a34; }
+.progress [data-visited=true]:not([aria-current=step])::after { content: ' ✓' / ''; }
 .progress [aria-current=step] { font-weight: 750; color: #245a34; }
 .evidenceReference { display: inline; padding: 0 2px; border: 0; background: transparent; color: #216333; text-decoration: underline; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
 .readPage ul { padding-left: 20px; }

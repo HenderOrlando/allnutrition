@@ -81,7 +81,8 @@ test('APIs operativas exactas conservan sesión, origen, CSRF y lecturas privada
     ['POST','/api/admin/imports'],['PUT','/api/admin/imports/unknown'],['PUT','/api/admin/imports/unknown/file'],
     ['POST','/api/admin/imports/unknown/preview'],['POST','/api/admin/imports/unknown/commit'],
     ...['collection','refund','expense','expense-recovery','pay-expense','settlement-save','settlement-confirm','transfer','cash-close','cash-reopen','cash-reverse','document-reverse','resolve-legacy-payment','return','payroll-prepare','payroll-confirm','payroll-pay','advance','income','complete-costs','link-shipment'].map(action=>['POST','/api/admin/business/actions/'+action]),
-    ['PUT','/api/admin/assistant/settings'],['POST','/api/admin/assistant/turns'],['DELETE','/api/admin/assistant/threads/unknown'],['POST','/api/admin/assistant/proposals/unknown'],
+    ['PUT','/api/admin/assistant/settings'],['POST','/api/admin/assistant/turns'],['PATCH','/api/admin/assistant/threads/unknown'],
+    ['DELETE','/api/admin/assistant/threads/unknown'],['POST','/api/admin/assistant/proposals/unknown'],
   ];
   for(const path of reads)expect((await context.request.get(path)).status(),path).toBe(401);
   for(const [method,path] of writes)expect((await context.request.fetch(path,{method,data:{}})).status(),method+' '+path).toBe(401);

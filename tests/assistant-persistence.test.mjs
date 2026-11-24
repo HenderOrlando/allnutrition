@@ -12,6 +12,7 @@ import {
 } from '../lib/assistant/repository.mjs';
 import * as conversations from '../lib/assistant/conversations.mjs';
 import { assertAssistantSession } from '../lib/assistant/settings.mjs';
+import { validateTurnResult } from '../lib/assistant/contracts.mjs';
 
 const password = 'assistant-persistence-only-2026';
 const sessionHash = token => createHash('sha256').update(token).digest('hex');
@@ -162,6 +163,142 @@ export async function runAssistantPersistenceContracts(t, factory, { openPeer = 
     const otherTurn = await reserve(store, other);
     await assert.rejects(() => getAssistantThread(store, { userId, threadId: created.id, before: otherTurn.turn.id }), error => error.status === 404);
   });
+  await t.test('thread search matches owned titles and messages before paginating the archive view', async t => {
+    const auth = await fixture(t, factory), { store, session, userId } = auth;
+    const other = await authenticate(store, 'assistant-history-other@example.test');
+    const list = options => conversations.listAssistantThreads(store, session, options);
+    const ids = result => result.threads.map(thread => thread.id);
+    const title = await locked(store, tx => createAssistantThread(tx, { userId, data: { title: 'Plan 50%_oferta', internal: 'secret-marker' } }));
+    const at = Date.now();
+    const firstMessage = `Revisar 50%_OFERTA ${'abc '.repeat(30)}`;
+    const message = await reserve(store, auth, { data: { message: firstMessage }, at });
+    await locked(store, tx => finishAssistantTurn(tx, { userId, turnId: message.turn.id, data: {} }));
+    assert.equal((await conversations.getAssistantThread(store, session, message.threadId)).data.title, firstMessage.slice(0, 100));
+    await reserve(store, auth, { threadId: message.threadId, threadVersion: message.threadVersion, data: { message: 'Otra 50%_oferta' }, at: at + 1 });
+    const foreign = await reserve(store, other, { data: { message: '50%_oferta foreign-marker' } });
+    assert.deepEqual(ids(await list({ q: 'foreign-marker' })), []);
+    const archive = (id, version, archived = true, actor = session) =>
+      conversations.setAssistantThreadArchived(store, actor, id, { version, archived });
+    await archive(foreign.threadId, foreign.threadVersion, true, other.session);
+    await locked(store, tx => createAssistantThread(tx, { userId, data: { title: '50XAoferta' } }));
+
+    const active = await list({ q: '  50%_OFERTA  ' });
+    assert.deepEqual(new Set(ids(active)), new Set([title.id, message.threadId]));
+    assert.equal(active.threads.length, 2);
+    assert.equal(active.threads.find(thread => thread.id === message.threadId).data.title, firstMessage.slice(0, 100));
+    assert.deepEqual(ids(await list({ q: 'secret-marker' })), []);
+    assert.deepEqual(ids(await list({ q: 'foreign-marker', archived: true })), []);
+    assert.deepEqual(ids(await list({ q: '50%_oferta', archived: true })), []);
+
+    const archivedAt = Date.now();
+    const archived = await locked(store, async tx => {
+      const threads = [];
+      for (let index = 0; index < 22; index++) {
+        threads.push(await createAssistantThread(tx, { userId, data: { title: index === 0 ? 'No coincide' : 'Filtro archivado' }, at: archivedAt + index }));
+      }
+      return threads;
+    });
+    for (const thread of archived) await archive(thread.id, thread.version);
+    await locked(store, tx => createAssistantThread(tx, { userId, data: { title: 'Filtro archivado activo' } }));
+    const first = await list({ q: 'filtro archivado', archived: true });
+    const second = await list({ q: 'filtro archivado', archived: true, page: 2 });
+    assert.equal(first.threads.length, 20);
+    assert.equal(first.hasMore, true);
+    assert.equal(second.threads.length, 1);
+    assert.equal(second.hasMore, false);
+    assert.ok([...first.threads, ...second.threads].every(thread => thread.archived === true));
+    assert.deepEqual(new Set([...ids(first), ...ids(second)]), new Set(archived.slice(1).map(thread => thread.id)));
+  });
+  await t.test('thread search includes displayed Ali responses but not private fields, hidden IDs or links', async t => {
+    const auth = await fixture(t, factory), { store, session, userId } = auth;
+    const other = await authenticate(store, 'assistant-response-search-other@example.test');
+    const reservation = await reserve(store, auth);
+    const foreign = await reserve(store, other);
+    const evidence = {
+      id: 'evidence-id-marker', domain: 'catalog', entityId: 'entity-id-marker', recordVersion: 2,
+      field: 'field-id-marker', label: 'Etiqueta pública exclusiva', value: 'raw-value-marker',
+      unit: null, formattedValue: 'Valor visible exclusivo', asOf: null, asOfPrecision: 'unknown',
+      coverage: { state: 'complete', knownCount: 1, eligibleCount: 1, excludedCount: 0, reasons: [] },
+      href: '/admin?section=products',
+    };
+    const result = validateTurnResult({
+      ...turnResult(reservation),
+      evidence: [evidence, { ...evidence, id: 'extra-fact-id-marker', label: 'Total observado', value: 783215, formattedValue: null }],
+      blocks: [
+        { type: 'text', text: 'Respuesta pública exclusiva' },
+        { type: 'analysis', kind: 'explanation', evidenceIds: [evidence.id], segments: [
+          { type: 'text', text: 'Segmento de análisis exclusivo' },
+          { type: 'evidence', evidenceId: evidence.id, display: 'label' },
+        ] },
+        { type: 'guide', taskId: 'guide-id-marker', title: 'Guía pública exclusiva', href: '/admin?section=products',
+          steps: [{ id: 'step-id-marker', text: 'Paso visible exclusivo' }] },
+        { type: 'recommendation', id: 'recommendation-id-marker', title: 'Sugerencia de Ali', reason: 'Motivo público exclusivo',
+          actionLabel: 'Consultar registros', href: '/admin?section=products', evidenceIds: [evidence.id] },
+      ],
+    });
+    await locked(store, async tx => {
+      await finishAssistantTurn(tx, { userId, turnId: reservation.turn.id, data: {
+        publicResult: result,
+        providerTrace: 'provider-private-marker',
+        preview: { blocks: [{ type: 'text', text: 'preview-private-marker' }] },
+      } });
+      await finishAssistantTurn(tx, { userId: other.userId, turnId: foreign.turn.id, data: {
+        publicResult: { ...turnResult(foreign), blocks: [{ type: 'text', text: 'foreign-answer-marker' }] },
+      } });
+    });
+    const ids = async (q, archived = false) =>
+      (await conversations.listAssistantThreads(store, session, { q, archived })).threads.map(thread => thread.id);
+    for (const query of ['RESPUESTA', 'segmento de análisis', 'paso visible', 'guía pública', 'motivo público', 'etiqueta pública', 'valor visible', '783215']) {
+      assert.deepEqual(await ids(query), [reservation.threadId], query);
+    }
+    for (const query of ['provider-private-marker', 'preview-private-marker', 'foreign-answer-marker', 'raw-value-marker',
+      'evidence-id-marker', 'entity-id-marker', 'field-id-marker', 'guide-id-marker', 'step-id-marker',
+      'recommendation-id-marker', 'section=products']) {
+      assert.deepEqual(await ids(query), [], query);
+    }
+    await conversations.setAssistantThreadArchived(store, session, reservation.threadId, { version: reservation.threadVersion, archived: true });
+    assert.deepEqual(await ids('segmento de análisis'), []);
+    assert.deepEqual(await ids('segmento de análisis', true), [reservation.threadId]);
+  });
+  await t.test('archiving and restoring a thread version-checks ownership and preserves running work and history', async t => {
+    const auth = await fixture(t, factory), { store, session, userId } = auth;
+    const other = await authenticate(store, 'assistant-archive-other@example.test');
+    const created = await locked(store, tx => createAssistantThread(tx, { userId, data: { title: 'Archivo reversible', topic: 'catalog' } }));
+    const { reservation, proposal } = await reserveWithProposal(store, auth, { threadId: created.id, threadVersion: created.version });
+    const { threadId, threadVersion, turn } = reservation;
+    const archive = (version, archived, actor = session) =>
+      conversations.setAssistantThreadArchived(store, actor, threadId, { version, archived });
+
+    await assert.rejects(() => archive(threadVersion, true, other.session), error => error.status === 404);
+    await assert.rejects(() => archive(created.version, true), error => error.status === 409);
+    await assert.rejects(() => archive(threadVersion, 'true'), error => error.status === 400);
+    const result = await archive(threadVersion, true);
+    assert.deepEqual(result, { id: threadId, version: threadVersion + 1, archived: true, updatedAt: result.updatedAt });
+    assert.ok(Number.isFinite(Date.parse(result.updatedAt)));
+    await assert.rejects(() => archive(threadVersion, false), error => error.status === 409);
+    const raw = await getAssistantThread(store, { userId, threadId });
+    assert.equal(raw.turns[0].state, 'running');
+    assert.equal(raw.proposals[0].state, 'prepared');
+    assert.deepEqual((await conversations.listAssistantThreads(store, session)).threads, []);
+    const listed = await conversations.listAssistantThreads(store, session, { archived: true, q: 'mensaje persistido' });
+    assert.deepEqual(listed.threads.map(row => [row.id, row.version, row.archived]), [[threadId, result.version, true]]);
+
+    await locked(store, tx => finishAssistantTurn(tx, { userId, turnId: turn.id, data: { publicResult: turnResult(reservation, proposalDTO(proposal)) } }));
+    const archived = await conversations.getAssistantThread(store, session, threadId);
+    assert.equal(archived.archived, true);
+    assert.equal(archived.data.title, created.data.title);
+    assert.equal(archived.turns[0].message, turn.data.message);
+    assert.equal(archived.turns[0].result.proposal.id, proposal.id);
+    const restored = await archive(archived.version, false);
+    assert.equal(restored.version, archived.version + 1);
+    assert.equal(restored.archived, false);
+    const reopened = await conversations.getAssistantThread(store, session, threadId);
+    assert.equal(reopened.archived, false);
+    assert.deepEqual(reopened.turns, archived.turns);
+    assert.deepEqual(reopened.data, archived.data);
+    assert.deepEqual((await conversations.listAssistantThreads(store, session, { archived: true })).threads, []);
+    assert.deepEqual((await conversations.listAssistantThreads(store, session, { q: 'reversible' })).threads.map(row => row.id), [threadId]);
+  });
   await t.test('one simultaneous turn wins and deletion cancels pending work before cascading', async t => {
     const auth = await fixture(t, factory), { store, userId } = auth;
     const thread = await locked(store, tx => createAssistantThread(tx, { userId }));
@@ -210,6 +347,7 @@ export async function runAssistantPersistenceContracts(t, factory, { openPeer = 
     await assert.rejects(() => conversations.getAssistantThread(store, auth.session, reservation.threadId), error => error.status === 401);
     await assert.rejects(() => conversations.listAssistantThreads(store, auth.session), error => error.status === 401);
     await assert.rejects(() => conversations.deleteAssistantThread(store, auth.session, reservation.threadId, reservation.threadVersion), error => error.status === 401);
+    await assert.rejects(() => conversations.setAssistantThreadArchived(store, auth.session, reservation.threadId, { version: reservation.threadVersion, archived: true }), error => error.status === 401);
     await assert.rejects(() => reserve(store, auth), error => error.status === 401);
     assert.equal((await getAssistantThread(store, { userId, threadId: reservation.threadId })).version, reservation.threadVersion);
   });

@@ -11255,6 +11255,123 @@ test('Ali @advisor-c6: gestiona recordatorios propios por fecha y estado sin toc
   expect(businessWrites).toEqual([]);
 });
 
+async function showChatHistory(chat) {
+  const picker=chat.getByRole('button',{name:/^‹? ?Conversaciones$/});
+  if(await picker.getAttribute('aria-expanded')!=='true') await picker.click();
+}
+
+test('Ali @chat-ux: buscar mensajes, archivar y restaurar el historial', async ({page, request}, info) => {
+  await loginWithAdvisorFixture(page, request);
+  const tag = randomUUID().slice(0, 8);
+  const title = `¿Dónde hago un arqueo? ${tag}`;
+  const followUp = `Consultar productos para el seguimiento ${tag}`;
+  const chat = await openAli(page);
+  const history = chat.getByRole('region', {name:'Conversaciones anteriores'});
+  const search = history.getByRole('searchbox', {name:'Buscar por título o mensaje'});
+  const row = history.getByRole('button', {name:new RegExp(tag)});
+  await chat.getByRole('button',{name:'Solicitar una intención',exact:true}).click();
+  const intent=chat.getByRole('searchbox',{name:'Buscar intenciones'});
+  await intent.fill('arqueo');
+  const prepare=chat.getByRole('button',{name:'Preparar consulta: Contar y cerrar la caja del día'});
+  await prepare.click();
+  await expect(chat.getByLabel('Mensaje para Ali')).toHaveValue(/caja/i);
+  await expect(chat.getByTestId('assistant-result')).toHaveCount(0);
+  await askAli(chat, title);
+  await expect(chat.locator('[data-capability-id="cash.close-day"]')).toBeVisible();
+  await askAli(chat, followUp);
+  await expect(chat.getByTestId('assistant-result')).toHaveCount(2);
+  await showChatHistory(chat);
+  for (const query of ['arqueo? '+tag, 'seguimiento '+tag]) {
+    await search.fill(`sin-coincidencia-${tag}`);
+    await expect(row).toHaveCount(0);
+    await search.fill(query);
+    await expect(row).toBeVisible();
+  }
+  await row.click();
+  await expect(chat.getByText(followUp, {exact:true})).toBeVisible();
+  await chat.getByRole('button', {name:'Archivar',exact:true}).click();
+  await expect(chat.getByRole('button',{name:'Restaurar',exact:true})).toBeVisible();
+  await showChatHistory(chat);
+  await expect(row).toHaveCount(0);
+  await history.getByRole('button', {name:'Archivadas',exact:true}).click();
+  await expect(row).toBeVisible();
+  await screenshot(page,info,'ali-historial-archivado');
+  await row.click();
+  await chat.getByRole('button', {name:'Restaurar',exact:true}).click();
+  await expect(chat.getByRole('button',{name:'Archivar',exact:true})).toBeVisible();
+  await showChatHistory(chat);
+  await history.getByRole('button', {name:'Activas',exact:true}).click();
+  await row.click();
+  await expect(chat.getByText(followUp, {exact:true})).toBeVisible();
+});
+
+test('Ali @chat-ux: dos lecturas continúan y un cambio espera por su registro', async ({page, request, context}, info) => {
+  test.setTimeout(90000);
+  await loginWithAdvisorFixture(page,request);
+  const store = await openStore(testDatabaseEnv());
+  const tag = randomUUID().slice(0,8);
+  // Hold only the outgoing advances after a *real* read checkpoint. No fabricated API responses.
+  const held = new Set();
+  let release;
+  const gate = new Promise(resolve => {release=resolve;});
+  try {
+    const product = await store.save('products',{...emptyRecord('products'),title:`Ficha ${tag}`,
+      slug:`ficha-${tag}`,status:'draft',description:'Original',price:25000,presentation:'Unidad'},null,null,await fixtureActor(context,store));
+    await page.goto(`/admin?section=products&record=${product.id}`);
+    await page.getByRole('dialog',{name:'Editar producto'}).getByRole('button',{name:/^Ayúdame/}).click();
+    const chat=page.getByRole('dialog',{name:'Ali, asistente del negocio'});
+    await page.route('**/assistant/turns/*/advance',async route=>{
+      const id=new URL(route.request().url()).pathname.split('/').at(-2);
+      if(held.has(id))await gate;
+      const response=await route.fetch();
+      if(response.ok()){
+        const status=await response.json();
+        if(status.state==='running' && status.progress.readsCompleted)held.add(id);
+      }
+      await route.fulfill({response});
+    });
+    const beginRead=async text=>{
+      const advanced=page.waitForResponse(async response=>{
+        if(!response.url().endsWith('/advance')||!response.ok())return false;
+        const status=await response.json();
+        return status.state==='running' && status.progress.readsCompleted>0;
+      });
+      await askAli(chat,text);
+      return (await (await advanced).json()).threadId;
+    };
+    const fresh=()=>chat.getByRole('button',{name:'Nueva conversación',exact:true}).click();
+    const a=await beginRead(`Consulta el producto para revisión ${tag}`);
+    await fresh();
+    const b=await beginRead(`Consulta el producto para contraste ${tag}`);
+    expect(a).not.toBe(b);
+    await expect(chat.getByTestId('assistant-progress')).toBeVisible();
+    await showChatHistory(chat);
+    await chat.getByRole('region',{name:'Conversaciones anteriores'}).getByRole('button',{name:new RegExp(`producto para revisión ${tag}`)}).click();
+    await expect(chat.getByTestId('assistant-progress')).toBeVisible();
+    await expect(chat.getByTestId('assistant-progress')).toContainText('Preparar consulta');
+    await screenshot(page,info,'ali-progreso-simultaneo');
+    await fresh();
+    const change=`Cambia la descripción a «Revisada ${tag}»`;
+    await askAli(chat,change);
+    await expect(chat.getByText(/otra conversación/i).last()).toBeVisible();
+    expect((await store.get('products',product.id)).description).toBe('Original');
+    release();
+    for(const id of [a,b])await expect.poll(async()=>{
+      const r=await page.request.get(`/api/admin/assistant/threads/${id}`);
+      return (await r.json()).turns[0].state;
+    }).toBe('completed');
+    await showChatHistory(chat);
+    await chat.getByRole('region',{name:'Conversaciones anteriores'}).getByRole('button',{name:new RegExp(`producto para revisión ${tag}`)}).click();
+    await expect(chat.getByTestId('assistant-result')).toBeVisible();
+    await chat.getByText('Etapas registradas',{exact:true}).click();
+    await expect(chat.getByText('Preparar consulta',{exact:true}).first()).toBeVisible();
+    await fresh();
+    await askAli(chat,change);
+    await expect(chat.getByRole('region',{name:'Comprobante de cambio guardado'})).toBeVisible();
+    expect((await store.get('products',product.id)).description).toBe(`Revisada ${tag}`);
+  } finally { release(); await store.close(); }
+});
+
 test('Ali @advisor-c6: recupera y borra solo la conversación elegida tras confirmar',async({page,request},info)=>{
   test.setTimeout(85000);
   await loginWithAdvisorFixture(page,request);
