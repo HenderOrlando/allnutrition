@@ -160,8 +160,10 @@ test('Ali @advisor-c6: partial → explicit acceptance → durable stop → relo
   await expect(composer).toBeFocused();
   await composer.fill(`${marker}: revisa todos los textos de estos productos.`);
   await dialog.getByRole('button', { name: 'Enviar', exact: true }).click();
-  await expect(dialog.getByText('Respuesta parcial', { exact: true }).last()).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Completar análisis', exact: true }).last()).toBeVisible();
+  const source = dialog.locator('[data-assistant-turn]').filter({ has: page.getByText('Respuesta parcial', { exact: true }) });
+  await expect(source).toBeVisible();
+  await expect(source.getByRole('button', { name: 'Completar análisis', exact: true })).toBeVisible();
+  const sourceTurnId = await source.getAttribute('data-assistant-turn');
   await screenshot(page, info, 'assistant-partial');
   const before = await request.get(`${controlURL}/__control`, { headers: { Authorization: 'Bearer assistant-fixture-only' } });
   const records = (await before.json()).requests.filter(item => !item.connectionCheck);
@@ -176,47 +178,62 @@ test('Ali @advisor-c6: partial → explicit acceptance → durable stop → relo
     await askAli(dialog,`¿Dónde encuentro ${query}?`);
     await expect(dialog.locator(`[data-capability-id="assistant.${id}"]`).last()).toBeVisible();
   }
-  await fromChat('extend-analysis');
-  await fromDirectory('extend-analysis','completar análisis');
-  await control(request,{action:'configure',behavior:{scenario:'review',query:{kind:'products',q:marker}}});
   const turnPath='/api/admin/assistant/turns';
   const created=[];
   page.on('request',outbound=>{if(outbound.method()==='POST'&&new URL(outbound.url()).pathname===turnPath)created.push(outbound.postDataJSON());});
+  await fromChat('extend-analysis');
+  await fromDirectory('extend-analysis','completar análisis');
+  expect(created).toHaveLength(0);
+  await control(request,{action:'configure',behavior:{scenario:'review',query:{kind:'products',q:marker}}});
   const gate = await control(request, { action: 'hold', afterReads: 1 });
+  let stoppedResult;
   try {
     const accepted=page.waitForResponse(res=>res.request().method()==='POST'&&new URL(res.url()).pathname===turnPath&&res.request().postDataJSON()?.continueFromTurnId);
     await native('extend-analysis').click();
-    const running=await (await accepted).json();
-    expect(running.state).toBe('running');
+    const acceptedResponse=await accepted;
+    expect(acceptedResponse.status()).toBe(202);
+    const running=await acceptedResponse.json(),runningPath=`${turnPath}/${running.turnId}`;
+    expect(running).toMatchObject({state:'running',mode:'extended'});
+    expect(running.turnId).not.toBe(sourceTurnId);
+    expect(created).toEqual([expect.objectContaining({threadId:running.threadId,continueFromTurnId:sourceTurnId})]);
     await control(request, { action: 'wait', id: gate.id });
     await expect(dialog.getByTestId('assistant-progress')).toBeVisible();
     await screenshot(page, info, 'assistant-progress');
     await dialog.getByRole('button',{name:'Cerrar asistente'}).click();
+    await expect(dialog).toBeHidden();
     await topAli.click();
     await expect(native('continue-running')).toBeVisible();
     await fromChat('continue-running');
     await fromDirectory('continue-running','continuar análisis en curso');
-    const recovered=page.waitForResponse(res=>res.request().method()==='GET'&&new URL(res.url()).pathname===`${turnPath}/${running.turnId}`);
+    const recovered=page.waitForResponse(res=>res.request().method()==='GET'&&new URL(res.url()).pathname===runningPath);
+    const advanced=page.waitForRequest(req=>req.method()==='POST'&&new URL(req.url()).pathname===`${runningPath}/advance`);
     await native('continue-running').click();
-    expect((await (await recovered).json()).turnId).toBe(running.turnId);
+    const recoveredResponse=await recovered;
+    expect(recoveredResponse.ok()).toBe(true);
+    expect(await recoveredResponse.json()).toMatchObject({turnId:running.turnId,state:'running'});
+    await advanced;
     expect(created).toHaveLength(1);
     await fromChat('stop-analysis');
     await fromDirectory('stop-analysis','detener ali');
-    const cancelled=page.waitForResponse(res=>res.request().method()==='POST'&&new URL(res.url()).pathname===`${turnPath}/${running.turnId}/cancel`);
+    const cancelled=page.waitForResponse(res=>res.request().method()==='POST'&&new URL(res.url()).pathname===`${runningPath}/cancel`);
     await native('stop-analysis').click();
-    expect((await (await cancelled).json()).turnId).toBe(running.turnId);
+    const cancelledResponse=await cancelled;
+    expect(cancelledResponse.ok()).toBe(true);
+    expect(await cancelledResponse.json()).toMatchObject({turnId:running.turnId,state:'completed',result:{analysis:{reason:'user_stopped',sourceTurnId,status:'partial'}}});
     await expect(dialog.getByTestId('assistant-progress')).toHaveCount(0);
-    await expect(dialog.getByTestId('assistant-result').last()).toContainText(/parcial|revisado/i);
+    stoppedResult=dialog.locator(`[data-assistant-turn="${running.turnId}"]`).getByTestId('assistant-result');
+    await expect(stoppedResult.getByText('Análisis detenido. Esto es lo revisado.',{exact:true})).toBeVisible();
     await screenshot(page, info, 'assistant-stopped');
   } finally { await control(request, { action: 'release', id: gate.id }); }
-  await dialog.getByText(/^Fuentes \(/).last().click();
-  await expect(dialog.locator('details[open]').last()).toBeVisible();
-  await dialog.getByRole('button', { name: 'Ver registros consultados', exact: true }).last().click();
+  await stoppedResult.getByText(/^Fuentes \(/).click();
+  await expect(stoppedResult.locator('details[open]')).toBeVisible();
+  await stoppedResult.getByRole('button', { name: 'Ver registros consultados', exact: true }).click();
   await expect(dialog.getByTestId('assistant-read-page')).toContainText(marker);
   await page.reload();
-  await page.getByRole('banner').getByRole('button', { name: 'Ali', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Ali, asistente del negocio' }).getByRole('button').filter({ hasText: marker }).first().click();
-  await expect(page.getByRole('dialog', { name: 'Ali, asistente del negocio' })).toContainText(/parcial|revisado/i);
+  await topAli.click();
+  await dialog.getByRole('region', {name:'Conversaciones anteriores'}).getByRole('button', {name:new RegExp(marker)}).click();
+  await expect(stoppedResult.getByText('Análisis detenido. Esto es lo revisado.',{exact:true})).toBeVisible();
+  await expect(dialog.getByTestId('assistant-progress')).toHaveCount(0);
   await screenshot(page, info, 'assistant-reloaded');
 });
 
@@ -716,11 +733,15 @@ async function askAli(dialog, message) {
 }
 
 async function askAliCatalog(dialog,message) {
-  if(await dialog.getByRole('button',{name:'Responder',exact:true}).count()){
-    await dialog.getByRole('button',{name:'‹ Conversaciones',exact:true}).click();
-    await expect(dialog.getByRole('button',{name:'Responder',exact:true})).toHaveCount(0);
+  const another=dialog.getByRole('button',{name:'Empezar otra consulta',exact:true});
+  if(await another.isVisible()){
+    await another.click();
+    await expect(another).toHaveCount(0);
   }
+  const results=dialog.getByRole('article').getByTestId('assistant-result');
+  const before=await results.count();
   await askAli(dialog,message);
+  await expect(results).toHaveCount(before+1);
 }
 
 test('Ali @advisor-c5: directorio, coincidencia en chat y traspaso sin ejecutar', async ({ page, request }, info) => {
@@ -11001,6 +11022,9 @@ test('Ali @advisor-c6: permite empezar otra consulta y conserva la aclaración a
     if(req.method()==='POST'&&new URL(req.url()).pathname==='/api/admin/assistant/turns')turns.push(req.postDataJSON());
   });
   const chat=await openAli(page), question=chat.getByRole('textbox',{name:'¿Cuál de estas acciones quieres revisar?',exact:true});
+  const history=chat.getByRole('region',{name:'Conversaciones anteriores',exact:true});
+  const heading=history.getByRole('heading',{name:'Conversaciones',exact:true});
+  const newConversation=chat.getByRole('button',{name:'Nueva conversación',exact:true});
   const composer=chat.getByRole('textbox',{name:'Mensaje para Ali',exact:true});
   const original='¿Dónde encuentro devolución comercial?';
   const originalTurn=page.waitForResponse(res=>res.request().method()==='POST'&&new URL(res.url()).pathname==='/api/admin/assistant/turns');
@@ -11019,22 +11043,24 @@ test('Ali @advisor-c6: permite empezar otra consulta y conserva la aclaración a
   await expect(chat.locator('[data-capability-id="cash.close-day"]')).toBeVisible();
   expect(turns).toHaveLength(2);
   expect(turns.map(turn=>[turn.threadId,turn.answer])).toEqual([[null,null],[null,null]]);
-  await chat.getByRole('button',{name:'‹ Conversaciones',exact:true}).click();
+  await showChatHistory(chat);
   const originalRequest=page.waitForResponse(res=>res.request().method()==='GET'&&new URL(res.url()).pathname===`/api/admin/assistant/threads/${originalId}`);
-  await chat.getByRole('region',{name:'Conversaciones anteriores',exact:true}).getByRole('button',{name:new RegExp(original.replace(/[?]/g,'\\?'))}).first().click();
+  const originalRow=history.getByRole('button',{name:original,exact:true}).first();
+  await originalRow.click();
   expect((await originalRequest).ok()).toBe(true);
   await expect(question).toBeFocused();
   const transcript=chat.getByRole('article').filter({has:page.getByText('Tú',{exact:true})});
   await expect(transcript.getByText(original,{exact:true})).toBeVisible();
   expect(turns).toHaveLength(2);
 
-  const history=chat.getByRole('region',{name:'Conversaciones anteriores',exact:true});
-  const heading=history.getByRole('heading',{name:'Conversaciones',exact:true});
-  const newConversation=history.getByRole('button',{name:'Nueva conversación',exact:true});
-  await chat.getByRole('button',{name:'‹ Conversaciones',exact:true}).click();
+  await showChatHistory(chat);
   await expect(heading).toBeFocused();
+  await expect(question).toBeVisible();
+  expect(turns).toHaveLength(2);
   await newConversation.click();
   await expect(composer).toBeFocused();
+  await expect(history).toHaveCount(0);
+  await expect(question).toHaveCount(0);
   expect(turns).toHaveLength(2);
   for(const via of ['chat','directorio'])await test.step(via,async()=>{
     for(const [id,query,target] of [
@@ -11055,7 +11081,12 @@ test('Ali @advisor-c6: permite empezar otra consulta y conserva la aclaración a
       await action.getByRole('button',{name:/^Abrir en el panel:/}).click();
       await expect(target).toBeFocused();
       await expect(target).toBeInViewport({ratio:1});
-      await expect(history.getByRole('button',{name:/devolución comercial/}).first()).toBeVisible();
+      if(id==='assistant.thread-new'){
+        await expect(history).toHaveCount(0);
+        await expect(composer).toHaveValue('');
+        await showChatHistory(chat);
+      }
+      await expect(originalRow).toBeVisible();
       expect(turns).toHaveLength(count);
     }
   });
@@ -12396,9 +12427,13 @@ test('Ali @advisor-c6: abre ayuda, ofrece ideas editables y espera el envío exp
     await locate(via,'ask','consultar ali',composer);
     if(via==='directorio')await expect(composer).toHaveValue('Explícame qué puedo hacer aquí y cómo empezar.');
     const consulted=turns.length;
-    await askAli(dialog,'¿Dónde está cotizar flete?');
+    const edited='¿Dónde está cotizar flete?';
+    await composer.fill(edited);
+    await expect(composer).toHaveValue(edited);
+    expect(turns).toHaveLength(consulted);
+    await dialog.getByRole('button',{name:'Enviar',exact:true}).click();
     await expect(dialog.locator('[data-capability-id="heka.quote-shipment"]').last()).toContainText('Consultar una cotización de Heka');
-    expect(turns).toHaveLength(consulted+1);
+    expect(turns.slice(consulted)).toEqual([edited]);
     expect(businessWrites).toEqual([]);
     await expect(page).toHaveURL(url=>url.searchParams.get('section')==='orders');
   });

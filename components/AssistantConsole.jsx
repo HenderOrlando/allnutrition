@@ -100,7 +100,7 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
   const consoleHeading=useRef(null),ideasGroup=useRef(null);
   const [controlFocus,setControlFocus]=useState(null),[ideasOpen,setIdeasOpen]=useState(false);
   const [intentionsOpen,setIntentionsOpen]=useState(false);
-  const focusComposer=useRef(false);
+  const focusConversation=useRef(false);
   const messageRef=useRef(null),listRef=useRef(null),dialogRef=useRef(null),mounted=useRef(false),readRequest=useRef(0);
   useDialog(dialogRef,{open,busy:false,dirty:false,onClose});
   const job=jobs.current.get(scopeRef.current.id||scopeRef.current);
@@ -153,6 +153,14 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
     };
   },[]);
   useEffect(()=>{
+    if(open)return;
+    const scope=scopeRef.current;
+    const item=jobs.current.get(scope.id||scope);
+    // Closing detaches the visible pump; switching conversations leaves every pump running.
+    if(item?.status?.state==='running')item.controller?.abort();
+    else if(item?.busy&&!item.status)item.pauseAfterSubmit=true;
+  },[open]);
+  useEffect(()=>{
     if(!open)return;
     let live=true;
     const refresh=()=>void loadSettings().then(()=>{if(live)setSettingsError('');})
@@ -168,12 +176,6 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
     window.addEventListener('focus',refresh);
     return()=>{clearTimeout(timer);window.removeEventListener('focus',refresh);};
   },[open,historyQuery,showArchived,loadThreads]);
-  useEffect(()=>{
-    const focused=document.activeElement;
-    if(!open||loading||dialogRef.current?.contains(focused)&&focused!==dialogRef.current&&!focused.hasAttribute('data-dialog-initial-focus'))return;
-    const question=listRef.current?.querySelector('[data-assistant-question]');
-    (question?.querySelector('input:not(:disabled),button:not(:disabled)') || messageRef.current)?.focus({preventScroll:true});
-  },[open,loading,pendingQuestion?.id,settings?.enabled]);
   useEffect(()=>{setAnswerText('');setAnswerOption('');},[pendingQuestion?.id]);
   useEffect(()=>{if(readPage)listRef.current?.querySelector('[data-testid=assistant-read-page] h3')?.focus({preventScroll:false});},[readPage]);
   useEffect(()=>{
@@ -187,8 +189,14 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
     }
   },[messages,sending]);
   useEffect(()=>{
-    if(focusComposer.current&&open&&!composerDisabled){focusComposer.current=false;messageRef.current?.focus({preventScroll:true});}
-  },[open,composerDisabled,scopeRef.current]);
+    if(!open||composerDisabled)return;
+    const focused=document.activeElement;
+    if(!focusConversation.current&&dialogRef.current?.contains(focused)&&focused!==dialogRef.current&&!focused.hasAttribute('data-dialog-initial-focus'))return;
+    focusConversation.current=false;
+    const question=listRef.current?.querySelector('[data-assistant-question] input:not(:disabled)');
+    if(question)question.focus();
+    else messageRef.current?.focus({preventScroll:true});
+  },[open,composerDisabled,pendingQuestion?.id,scopeRef.current]);
   useEffect(()=>{
     const proposalIds=new Set(messages.map(row=>row.result?.proposal?.id).filter(Boolean));
     const fresh=bridge.receipts.filter(({receipt})=>proposalIds.has(receipt.proposalId)&&!seenReceipts.current.has(receipt.id));
@@ -208,6 +216,7 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
   function jobChanged(){if(mounted.current)updateJobs(value=>value+1);}
   function resetSelection(scope){
     scopeRef.current=scope;readRequest.current+=1;preserveScroll.current=null;
+    focusConversation.current=false;
     setThread(null);setMessages([]);setMessage('');setTurnsBefore(null);setTurnsHasMore(false);
     setReadPage(null);setReading(false);setOpeningAction(false);setAnswerText('');setAnswerOption('');setError('');setNotice('');setIntentionsOpen(false);
   }
@@ -242,7 +251,7 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
         else if(saved?.status&&saved.state==='running')publishStatus(item,validateAssistantTurnStatus(saved.status));
         if(!saved||saved.state==='running')applyTurnStatus(item,item.status);
       }
-      focusComposer.current=!item?.busy&&item?.status?.state!=='running';
+      focusConversation.current=!item?.busy&&item?.status?.state!=='running';
     }catch(cause){
       if(isSelected(scope)){setHistoryOpen(true);setError(cause.message||'No se pudo abrir la conversación.');}
     }finally{if(isSelected(scope))setLoading(false);}
@@ -262,16 +271,13 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
     finally{if(isSelected(scope))setLoading(false);}
   }
   const startThread=useCallback(()=>{
-    onClearAdvisorTask?.();resetSelection(emptyScope());setHistoryOpen(false);setLoading(false);focusComposer.current=true;
+    onClearAdvisorTask?.();resetSelection(emptyScope());setHistoryOpen(false);setLoading(false);focusConversation.current=true;
   },[onClearAdvisorTask]);
   const goToConsoleControl=useCallback(id=>{
-    if(consoleControls.includes(id)||resultControls.has(id)){
-      if(id==='assistant.suggested-message')setIdeasOpen(true);
-      setControlFocus(id);
-      return;
-    }
     if(id==='assistant.thread-new')startThread();
-    if(id==='assistant.thread-list'||id==='assistant.thread-open'){focusComposer.current=false;setHistoryOpen(true);}
+    focusConversation.current=false;
+    if(id==='assistant.suggested-message')setIdeasOpen(true);
+    if(id==='assistant.thread-list'||id==='assistant.thread-open')setHistoryOpen(true);
     setControlFocus(id);
   },[startThread]);
   useEffect(()=>{
@@ -462,7 +468,7 @@ export default function AssistantConsole({ api, view, onNavigate, onReminderRequ
       if(isSelected(scope)&&!answer&&!continueFromTurnId)setMessage('');
       publishStatus(item,status);
       if(openRef.current)void loadThreads();
-      await pump(item);
+      if(!item.pauseAfterSubmit||status.state!=='running')await pump(item);
     }catch(cause){
       if(isSelected(scope))setError(cause.message||'No se pudo iniciar la consulta. Reintenta para recuperar la misma solicitud.');
       else if(scope.id===null&&liveJob(item))jobs.current.delete(scope);
