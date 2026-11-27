@@ -67,7 +67,7 @@ function initial(action,context,guidedClosing,configuration){
   const contextualAccount=account?.active&&(action!=='cash-close'||account.type==='cash')?account.id:null;
   return {orderId:expense?.id?expense.orderId:order?.id,version:action==='document-reverse'?(context.documentVersion??1):action==='link-shipment'?(shipment?.version??1):expense?.version||order?.version||settlement?.version||payroll?.version||closing?.version||account?.version||1,
     occurredOn:today,effectiveOn:today,receivedOn:today,incurredOn:expense?.id?expense.incurredOn:context.expenseOnly?null:today,closingOn:guidedClosing?guidedClosing.closingOn:today,
-    amountMinor:action==='expense'?expense?.amountMinor??null:action==='collection'?order?.paymentSummary?.outstandingMinor??null:action==='refund'?order?.paymentSummary?.refundDueMinor??null:action==='pay-expense'?expense?.outstandingMinor??null:action==='expense-recovery'?expense?.creditMinor??null:action==='payroll-pay'?payroll?.amountToPayMinor??null:null,
+    amountMinor:context.shippingReceipt&&action!=='settlement-confirm'?null:action==='expense'?expense?.amountMinor??null:action==='collection'?order?.paymentSummary?.outstandingMinor??null:action==='refund'?order?.paymentSummary?.refundDueMinor??null:action==='pay-expense'?expense?.outstandingMinor??null:action==='expense-recovery'?expense?.creditMinor??null:action==='payroll-pay'?payroll?.amountToPayMinor??null:null,
     accountId:action==='expense'?null:guidedClosing?guidedClosing.id:contextualAccount,expensePaymentMode:'pending',holder:'business',shipmentId:shipment?.id||expense?.shipmentId||null,method:'Transferencia',reference:'',reason:'',concept:action==='income'?'owner_funding':expense?.concept||'',description:'',supplier:expense?.supplier||'',category:expense?.category||'other',allowCredit:false,
     expenseId:expense?.id,sourceKey:expense?.sourceKey,reviewConfirmed:false,settlementId:settlement?.id,payrollId:payroll?.id,personId:payroll?.personId||expense?.personId||context.person?.id||null,startOn:payroll?.startOn||today.slice(0,8)+'01',endOnExclusive:payroll?.endOnExclusive||'',
     closingId:closing?.id,cashEntryId:entry?.id,documentId:context.documentId||entry?.sourceId||'',documentType:context.documentType||'collection',
@@ -86,6 +86,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const guidedClosing=advisorTargetRequest?.focus==='cash-close-form'?advisorTargetRequest.selection:null;
   const [form,setForm]=useState(()=>initial(action,context,guidedClosing,configuration)),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loaded,setLoaded]=useState(false),[accounts,setAccounts]=useState([]),[people,setPeople]=useState([]),[sources,setSources]=useState([]),[preview,setPreview]=useState(null),[invalid,setInvalid]=useState({});
   const requestId=useRef(crypto.randomUUID()),baseline=useRef(JSON.stringify(form)),errorRef=useRef(null),sequence=useRef(0);
+  const [shippingAccepted,setShippingAccepted]=useState(null);
   const lastPayload=useRef(null),confirmRequest=useRef({key:null,id:crypto.randomUUID()}),preparedPayroll=useRef(null);
   const personRequestId=useRef(crypto.randomUUID());
   const personName=useRef(null);
@@ -112,19 +113,21 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
   const payrollReview=preparedPayroll.current;
   const assistantAction=action==='payroll-prepare'&&payrollReview?'payroll-confirm':action;
   const assistantTarget=`business-action:${assistantAction}`;
-  const nativeHandoff=Boolean(advisorTargetRequest||accountOperation);
+  const nativeHandoff=Boolean(advisorTargetRequest||accountOperation||context.shippingReceipt);
   const assistantAvailable=!nativeHandoff&&Boolean(assistantFormDescriptor(assistantTarget));
   const assistantEntity=action==='account-save'?context.account:action==='link-shipment'?context.shipment:['expense','pay-expense','expense-recovery'].includes(action)?context.expense:['settlement-save','settlement-confirm'].includes(action)?context.settlement:action==='payroll-prepare'&&payrollReview?{id:payrollReview.id||payrollReview.payrollId,version:payrollReview.version}:['payroll-prepare','payroll-confirm','payroll-pay'].includes(action)?context.payroll:action==='cash-reopen'?context.closing:action==='cash-reverse'?context.entry:action==='document-reverse'?{id:context.documentId||context.entry?.sourceId,version:context.documentVersion}:action==='cash-close'?context.account:['collection','refund','return','complete-costs','resolve-legacy-payment'].includes(action)?context.order:null;
   const assistantEntityId=assistantEntity?.id||null;
   const assistantVersion=assistantEntity?.version??null;
-  const dirty=JSON.stringify(form)!==baseline.current||Object.values(invalid).some(Boolean);
+  const formKey=JSON.stringify(form), shippingConfirmed=shippingAccepted===formKey;
+  const dirty=formKey!==baseline.current||Object.values(invalid).some(Boolean);
   const assistantValues={...payload(),...(action==='payroll-prepare'&&payrollReview?{payrollId:payrollReview.id||payrollReview.payrollId,version:payrollReview.version??form.version}:{})};
   const assistant=useAssistantForm({enabled:!nativeHandoff,target:assistantTarget,entityId:assistantEntityId,recordVersion:assistantVersion,values:Object.fromEntries(Object.entries(assistantValues).filter(([key])=>!['allowCredit','reviewConfirmed','inventoryOpeningIncluded','active','closingEnabled','type'].includes(key))),dirty,busy:busy||!loaded||!assistantAvailable||Object.values(invalid).some(Boolean),referenceChoices:{accountId:accounts.filter(item=>item.active&&(action!=='cash-close'||item.type==='cash')).map(item=>item.id),fromAccountId:accounts.filter(item=>item.active).map(item=>item.id),toAccountId:accounts.filter(item=>item.active&&item.id!==form.fromAccountId).map(item=>item.id),personId:people.filter(item=>item.active||item.id===form.personId).map(item=>item.id),responsibleId:people.filter(item=>item.active||item.id===form.responsibleId).map(item=>item.id),sourceId:sources.filter(item=>item.active||item.id===form.sourceId).map(item=>item.id),shipmentId:(context.order?.shipments||[]).map(item=>item.id),lineId:(context.order?.items||[]).map(line=>line.lineId),assignments:Object.fromEntries((context.order?.items||[]).map(line=>[line.lineId,Number(line.quantity)]))},applyPatch:applyAssistantPatch});
   useEffect(()=>{if(loaded&&assistantAvailable)onAssistantRegistered?.({formId:assistant.formId,target:assistantTarget,entityId:assistantEntityId,recordVersion:assistantVersion});},[loaded,assistantAvailable,assistant.formId,assistantTarget,assistantEntityId,assistantVersion,onAssistantRegistered]);
   const assistantBusy=assistantAvailable&&assistant.assistantBusy,interactionBusy=busy||assistantBusy;
   const submitBlocked=interactionBusy||!loaded||Object.values(invalid).some(Boolean)||action==='cash-close'&&!closingReady
     ||action==='link-shipment'&&(!context.order?.id||context.requireExplicitAssignments&&!form.assignments.some(line=>line.quantity>0))
-    ||Boolean(accountOperation&&form[accountOperation.field]===Boolean(context.account?.[accountOperation.field]));
+    ||Boolean(accountOperation&&form[accountOperation.field]===Boolean(context.account?.[accountOperation.field]))
+    ||Boolean(context.shippingReceipt&&!shippingConfirmed);
   useEffect(()=>{onInteractionStateChange({busy:interactionBusy,dirty});},[interactionBusy,dirty,onInteractionStateChange]);
   useEffect(()=>()=>onInteractionStateChange({busy:false,dirty:false}),[onInteractionStateChange]);
   useEffect(()=>{if(error)errorRef.current?.focus();},[error]);
@@ -365,7 +368,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       </>}
       {(action==='collection'||action==='refund')&&<>
         <p className="hint">{action==='collection'?'Saldo del cliente: '+display(order?.paymentSummary?.outstandingMinor):'Saldo a favor: '+display(order?.paymentSummary?.refundDueMinor)}. El recaudo en plataforma no entra en la cuenta bancaria hasta confirmar una liquidación.</p>
-        <div className="product-form-grid">{amount('amountMinor','Importe (COP)')}{input('occurredOn','Fecha real',{required:true,type:'date'})}{select('holder',action==='refund'?'Origen del reembolso':'Quién recibió el dinero',[['business','El negocio'],['platform','La plataforma']])}
+        <div className="product-form-grid">{amount('amountMinor','Importe (COP)')}{input('occurredOn','Fecha real',{required:true,type:'date'})}{context.shippingReceipt?<p>Quién recibió el dinero: el negocio.</p>:select('holder',action==='refund'?'Origen del reembolso':'Quién recibió el dinero',[['business','El negocio'],['platform','La plataforma']])}
           {form.holder==='business'?accountSelect():select('shipmentId','Envío de plataforma',(order?.shipments||[]).filter(s=>s.sourceId).map(s=>[s.id,s.tracking||s.id]))}
           {input('method','Método',{required:true})}{input('reference','Referencia',{required:true})}
         </div>
@@ -441,8 +444,9 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
       </div>}
       {['cash-reverse','document-reverse'].includes(action)&&<><p className="hint">La reversión añade el movimiento contrario y conserva el original. Las dependencias activas deben deshacerse primero; no se borra una venta.</p>{input('effectiveOn','Fecha de reversión',{required:true,type:'date'})}{reason()}</>}
       {action==='settlement-confirm'&&<>
-        <p>Declaración {context.settlement?.externalId||'sin referencia'} · {context.settlement?.reportedOn||'Fecha declarada desconocida'}</p>
+        <p>Declaración {context.settlement?.label||context.settlement?.externalId||'sin referencia'} · {context.settlement?.reportedOn||'Fecha declarada desconocida'}</p>
         <p>Declarado neto: {display(context.settlement?.netMinor)}. Confirma solo el dinero efectivamente recibido o retenido, no el estado de entrega.</p>
+        {context.shippingReceipt&&<p>Solo se incluyen las líneas verificadas de esta guía, no el resto de la liquidación.</p>}
         <div className="product-form-grid">{input('receivedOn','Fecha de recepción',{required:true,type:'date'})}{accountSelect('accountId','Cuenta de recepción',net!==0)}{input('externalKey','Referencia única del recibo')}</div>
         {form.lines.map((line,index)=><section className="form-section" key={line.collectionId}><h4>{line.label||`Cobro vinculado ${index+1}`}</h4>{amount('gross-'+index,'Bruto asignado (COP)',line.grossMinor,value=>set('lines',form.lines.map((l,i)=>i===index?{...l,grossMinor:value}:l)))}{line.deductions.map((deduction,j)=>amount('deduction-'+index+'-'+j,`${deduction.label||'Retención / recuperación '+(j+1)} (COP)`,deduction.amountMinor,value=>set('lines',form.lines.map((l,i)=>i===index?{...l,deductions:l.deductions.map((d,k)=>k===j?{...d,amountMinor:value}:d)}:l)),{signed:true}))}</section>)}
         <p><strong>Neto de este recibo: {display(net)}</strong></p><p className="hint">Bruto menos retenciones = neto. Neto cero no genera movimiento; neto negativo registra salida real. Retenciones pagan los gastos existentes, no crean otro gasto.</p>
@@ -486,6 +490,7 @@ export function BusinessActionForm({action,context={},api,onSaved,onCancel,onInt
           {['payroll-prepare','payroll-confirm'].includes(action)&&<><div><dt>Persona</dt><dd>{people.find(p=>p.id===form.personId)?.name||'Selecciona una persona'}</dd></div>{validDate(form.startOn)&&validDate(form.endOnExclusive)&&<div><dt>Período</dt><dd>{form.startOn} hasta {form.endOnExclusive} (corte no incluido)</dd></div>}{preview?.amountToPayMinor!=null&&<div><dt>Pago nuevo revisado, todavía sin pagar</dt><dd>{display(preview.amountToPayMinor)}</dd></div>}</>}
         </dl><p>{reviewEffect}</p><p className={styles.queryHelp}>Revisa el hecho y sus soportes. No se proyectan saldos futuros con el saldo actual.</p>
       </section>}
+      {context.shippingReceipt&&<label className="checkbox-field"><input type="checkbox" checked={shippingConfirmed} onChange={event=>setShippingAccepted(event.target.checked?formKey:null)} required/>Confirmo que el dinero indicado ya fue recibido o pagado.</label>}
     </fieldset>
     <footer className="editor-footer"><span role="status">{busy?'Guardando…':assistantBusy?'Aplicando asistencia…':dirty?'Cambios sin guardar':''}</span>{assistantAvailable&&<button type="button" className="button subtle" disabled={interactionBusy||!loaded} onClick={assistant.openAssistant}>Ayúdame con este formulario</button>}{onCancel&&<button type="button" className="button subtle" disabled={interactionBusy} onClick={onCancel}>{configuration?'Cancelar edición':'Cancelar'}</button>}<button className="button primary" type="submit" disabled={submitBlocked}>{expenseOnly?'Guardar costo de envío':action==='expense'?(expenseEdit?'Guardar corrección del gasto':payingExpense?'Registrar gasto y pago':'Guardar gasto pendiente'):configuration&&action==='account-save'?(context.account?.id?'Guardar cuenta':'Crear cuenta'):action==='payroll-prepare'?'Revisar período':correctingDeclaration?'Guardar corrección de la declaración':titles[action]||'Guardar'}</button></footer>
   </form>;

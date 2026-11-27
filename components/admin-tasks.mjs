@@ -4,8 +4,8 @@ import { adminSections } from '../lib/admin-view.mjs';
 export const adminTaskGroups = [
   { id: 'orders', label: 'Pedidos y envíos', icon: 'receipt', description: 'Del pedido al seguimiento de la entrega.', tasks: [
     { id: 'orders', label: 'Gestionar pedidos', description: 'Crear, buscar y atender pedidos y cobros.', view: { section: 'orders', tab: 'list' } },
-    { id: 'shipments', label: 'Seguimiento de envíos', description: 'Guías, novedades y entregas.', view: { section: 'orders', tab: 'shipments' } },
-    { id: 'heka', label: 'Heka oficial', description: 'Revisa el historial local, cotiza y gestiona guías por separado en la API oficial.', view: { section: 'orders', tab: 'heka' } },
+    { id: 'shipments', label: 'Seguimiento de envíos', description: 'Registros locales y sus entregas.', view: { section: 'orders', tab: 'shipments' } },
+    { id: 'heka', label: 'Centro de envíos', description: 'Consulta guías y novedades, elige destinatarios y compara tarifas sin emitir una guía.', view: { section: 'orders', tab: 'heka' } },
     { id: 'imports', label: 'Importar Excel', description: 'Cargar archivos y revisar cada lote antes de aplicarlo.', view: { section: 'orders', tab: 'imports' } },
   ] },
   { id: 'products', label: 'Productos y colecciones', icon: 'box', description: 'Organiza lo que vendes y lo que publicas.', tasks: [

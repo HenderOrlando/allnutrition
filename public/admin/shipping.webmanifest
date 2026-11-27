@@ -1,0 +1,15 @@
+{
+  "id": "/admin",
+  "name": "All Nutrition · Administración",
+  "short_name": "All Nutrition",
+  "lang": "es-CO",
+  "start_url": "/admin",
+  "scope": "/admin",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#18231a",
+  "icons": [
+    { "src": "/admin/shipping-icon/192", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/admin/shipping-icon/512", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

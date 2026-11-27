@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { openStore } from '../lib/db/index.mjs';
 import { businessJobsDelay, isJobAvailabilityError, runBusinessJobs, touchSchedulerHeartbeat } from '../lib/business/jobs.mjs';
 import { processSocialBrowserTurn } from '../lib/business/social-jobs.mjs';
+import { shippingWebhookReady } from '../lib/business/shipping-novelties.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => !['--once', '--social-browser'].includes(arg)) || new Set(args).size !== args.length) {
@@ -10,6 +11,7 @@ if (args.some(arg => !['--once', '--social-browser'].includes(arg)) || new Set(a
   process.exitCode = 1;
 } else {
   const once = args.includes('--once'), worker = args.includes('--social-browser') ? 'social-browser' : 'business', idle = new AbortController();
+  const watchWebhook = worker==='business';
   let store, stopping = false, heartbeatTimer, heartbeatPending = null;
   const stop = () => { stopping = true; idle.abort(); };
   process.once('SIGTERM', stop);
@@ -44,8 +46,15 @@ if (args.some(arg => !['--once', '--social-browser'].includes(arg)) || new Set(a
         console.error('Trabajos de negocio: DB_UNAVAILABLE; se conserva el progreso.');
       }
       if (once || stopping) break;
-      try { await delay(sleep, undefined, { signal: idle.signal }); }
-      catch (error) { if (error.name !== 'AbortError') throw error; }
+      try {
+        const until=Date.now()+sleep;
+        do {
+          await delay(Math.min(Math.max(0,until-Date.now()),watchWebhook?5000:sleep),undefined,{signal:idle.signal});
+          if (!watchWebhook || Date.now()>=until || stopping || await shippingWebhookReady(store)) break;
+        } while (!stopping);
+      } catch (error) {
+        if (error.name!=='AbortError' && !isJobAvailabilityError(error)) throw error;
+      }
     } while (!stopping);
   } catch (error) {
     console.error(isJobAvailabilityError(error) ? 'Trabajos de negocio: DB_UNAVAILABLE.' : 'Trabajos de negocio: SCHEDULER_ERROR; revisa el estado durable del trabajo.');

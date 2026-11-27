@@ -7,6 +7,7 @@ import useDialog from './useDialog';
 import Icon from './Icons';
 import { BusinessActionForm } from './BusinessActionDialog';
 import ImportedData from './ImportedData';
+import ShippingFinance from './ShippingFinance';
 import styles from './OrderExperience.module.css';
 
 const stateLabel=value=>shipmentStates.find(state=>state.value===value)?.label||value;
@@ -151,7 +152,7 @@ export function ShipmentControls({shipment,inventoryOpening=shipment.inventoryOp
   </div>;
 }
 
-function ShipmentDialog({id,api,onClose,onOpenOrder,onMutation,onInteractionStateChange,assistantOpenRequest,onAssistantOpenHandled,advisorTargetRequest,onAdvisorTargetHandled}){
+function ShipmentDialog({id,api,onClose,onOpenOrder,onQuote,onMutation,onInteractionStateChange,assistantOpenRequest,onAssistantOpenHandled,advisorTargetRequest,onAdvisorTargetHandled}){
   const dialog=useRef(null),errorRef=useRef(null),sequence=useRef(0),selectionSequence=useRef(0),requests=useRef(new Map());
   const detailHeading=useRef(null),eventStatus=useRef(null),metadataFocus=useRef(null),lookupInput=useRef(null),linkHeading=useRef(null),advisorHandled=useRef(null);
   const [readyAdvisorTarget,setReadyAdvisorTarget]=useState(null);
@@ -323,7 +324,9 @@ function ShipmentDialog({id,api,onClose,onOpenOrder,onMutation,onInteractionStat
     <div className="admin-actions">{shipment.orderId?<button type="button" className="button subtle" disabled={interactionBusy} onClick={openOrder}>Abrir {orderNumber(shipment.orderNumber)}</button>:!linking&&<>
       <button className="button subtle" type="button" disabled={interactionBusy||loading} onClick={()=>startLink('lookup')}>Identificar el pedido</button>
       <button className="button primary" type="button" disabled={interactionBusy||loading} onClick={()=>startLink('link')}>Vincular pedido conocido</button>
-    </>}</div>
+    </>}{(shipment.preparationId||['unknown','label_created'].includes(shipment.status))&&<button className="button subtle" type="button" disabled={interactionBusy||loading} onClick={()=>onQuote(shipment.id)}>{shipment.preparationId?'Abrir preparación guardada':'Cotizar este envío'}</button>}</div>
+    {!linking&&!loading&&shipment.hekaIdentityProtected&&shipment.orderId&&<ShippingFinance key={shipment.id} api={api} shipmentId={shipment.id} busy={interactionBusy||controls.dirty}
+      onInteractionStateChange={reportFinancial} onSaved={()=>{onMutation?.({type:'finance',orderId:shipment.orderId,shipmentId:id});setNotice('Operación de Caja registrada.');}}/>}
     {linking?<section className="form-section" aria-labelledby="shipment-order-heading">
       <h3 id="shipment-order-heading" ref={linkHeading} tabIndex={-1}>{linking==='lookup'?'Identificar el pedido de esta guía':'Vincular esta guía con un pedido existente'}</h3>
       <p>{linking==='lookup'?'Consultar un pedido y sus líneas no vincula la guía.':'Elige tú el pedido y confirma qué unidades corresponden a esta guía. No se crea otro pedido ni se registra un cobro.'}</p>
@@ -346,7 +349,7 @@ function ShipmentDialog({id,api,onClose,onOpenOrder,onMutation,onInteractionStat
   </div><footer className="editor-footer"><span role="status">{working?'Guardando…':controls.busy?'Aplicando asistencia…':dirty?'Cambios sin guardar':''}</span><button className="button subtle" type="button" disabled={interactionBusy} onClick={close}>Cerrar</button></footer></dialog>;
 }
 
-export default function ShipmentsWorkspace({api,view,onViewChange,onEdit,onInteractionStateChange,onMutation,assistantOpenRequest,onAssistantOpenHandled,advisorTargetRequest,onAdvisorTargetHandled}){
+export default function ShipmentsWorkspace({api,view,onViewChange,onNavigate,onEdit,onInteractionStateChange,onMutation,assistantOpenRequest,onAssistantOpenHandled,advisorTargetRequest,onAdvisorTargetHandled}){
   const [data,setData]=useState(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[retry,setRetry]=useState(0),[platforms,setPlatforms]=useState([]),[sources,setSources]=useState([]),[selectorError,setSelectorError]=useState(''),[selectorRetry,setSelectorRetry]=useState(0);
   const sequence=useRef(0),q=view.q||'',status=view.status||'',platform=view.platform||'',source=view.source||'',carrier=view.carrier||'',issue=view.issue||'',page=view.page||1;
   const [dialogState,setDialogState]=useState({dirty:false,busy:false}),[readyAssistantRequest,setReadyAssistantRequest]=useState(null);
@@ -386,7 +389,7 @@ export default function ShipmentsWorkspace({api,view,onViewChange,onEdit,onInter
   const filter=patch=>onViewChange({...patch,page:1,record:undefined});
   const changed=event=>{onMutation?.(event);setRetry(value=>value+1);};
   const filtered=!!(q||status||platform||source||carrier||issue),filterCount=[status,platform,source,carrier,issue].filter(Boolean).length;
-  return <section className={`shipments-workspace ${styles.shipments}`} aria-label="Seguimiento de envíos"><header className={styles.taskHeading}><div><h2 tabIndex={-1} data-advisor-control={data&&!loading?'shipment-results':undefined}>Seguimiento de envíos</h2><p>Localiza una guía, registra lo observado o vincúlala con su pedido real.</p></div><div className="admin-actions"><button className="button subtle" type="button" onClick={()=>onViewChange({tab:'heka'})}>Operar con Heka oficial</button><button className="button primary" type="button" onClick={()=>onViewChange({tab:'imports',record:undefined,batch:'new',q:'',status:'',issue:'',carrier:'',platform:'',source:'',page:1})}>Importar seguimiento</button></div></header>
+  return <section className={`shipments-workspace ${styles.shipments}`} aria-label="Seguimiento de envíos"><header className={styles.taskHeading}><div><h2 tabIndex={-1} data-advisor-control={data&&!loading?'shipment-results':undefined}>Seguimiento de envíos</h2><p>Registros locales: vincula al pedido y registra lo observado. Las guías del proveedor se consultan en el Centro de envíos.</p></div><div className="admin-actions"><button className="button subtle" type="button" onClick={()=>onNavigate({section:'orders',tab:'heka'})}>Abrir Centro de envíos</button><button className="button primary" type="button" onClick={()=>onViewChange({tab:'imports',record:undefined,batch:'new',q:'',status:'',issue:'',carrier:'',platform:'',source:'',page:1})}>Importar seguimiento</button></div></header>
     <label className="field">Buscar guía o número AN<input type="search" data-advisor-control="shipment-query" value={q} maxLength={100} onChange={e=>filter({q:e.target.value})}/></label>
     <details className="form-section" data-advisor-disclosure>
       <summary>Filtros de envíos{filterCount?` (${filterCount} activos)`:''}</summary>
@@ -408,6 +411,6 @@ export default function ShipmentsWorkspace({api,view,onViewChange,onEdit,onInter
     {!loading&&!error&&data&&!data.records.length&&<div className="admin-card"><h3>{data.total>0?'Esta página ya no tiene envíos':filtered?'No hay envíos con estos filtros':'Todavía no hay envíos'}</h3><p>{data.total>0?'Vuelve a la página anterior con «Anteriores» para consultar los envíos restantes.':filtered?'Ajusta la búsqueda o limpia los filtros para ver otros envíos.':'Usa «Importar seguimiento» o registra una guía desde un pedido. Un envío sin pedido puede vincularse después, sin inventar ventas.'}</p></div>}
     <div className="shipment-list" aria-label="Envíos" aria-busy={loading}>{(data?.records||[]).map(item=><article className="admin-card shipment-card" key={item.id}><header><h2>{item.tracking||item.externalId||'Entrega sin guía'}</h2><span>{stateLabel(item.status)}</span></header><p>{orderNumber(item.orderNumber)} · {item.carrier||'Sin transportadora'}</p><p>{item.platformName||'Manual / histórico'}{item.sourceName?' / '+item.sourceName:''}</p><p className="muted">{item.knownEventOn||item.knownEventAt?'Hay eventos con fecha conocida':'Fecha de evento pendiente'} · Observación (día): {dateLabel(item.sourceAsOf,false)}</p><button type="button" className="button subtle" onClick={()=>onViewChange({record:item.id})}>{item.orderId?'Ver envío':'Revisar y vincular'}</button></article>)}</div>
     {data?.total>0&&<nav className="admin-actions" aria-label="Páginas de envíos"><button type="button" className="button subtle" disabled={page<=1||loading} onClick={()=>onViewChange({page:page-1})}>Anteriores</button><span role="status">Página {page} de {Math.max(1,Math.ceil(data.total/data.pageSize))} · {data.total} envíos</span><button type="button" className="button subtle" disabled={page*data.pageSize>=data.total||loading} onClick={()=>onViewChange({page:page+1})}>Siguientes</button></nav>}
-    {view.record&&<ShipmentDialog key={view.record} id={view.record} api={api} onClose={()=>onViewChange({record:undefined})} onOpenOrder={id=>onEdit('orders',{id})} onMutation={changed} onInteractionStateChange={reportDialog} assistantOpenRequest={readyAssistantRequest?.requestId===assistantOpenRequest?.requestId?readyAssistantRequest:null} onAssistantOpenHandled={onAssistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={onAdvisorTargetHandled}/>}
+    {view.record&&<ShipmentDialog key={view.record} id={view.record} api={api} onClose={()=>onViewChange({record:undefined})} onOpenOrder={id=>onEdit('orders',{id})} onQuote={shipmentId=>onNavigate({section:'orders',tab:'heka',panel:'freight',shipmentId})} onMutation={changed} onInteractionStateChange={reportDialog} assistantOpenRequest={readyAssistantRequest?.requestId===assistantOpenRequest?.requestId?readyAssistantRequest:null} onAssistantOpenHandled={onAssistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={onAdvisorTargetHandled}/>}
   </section>;
 }

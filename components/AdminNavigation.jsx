@@ -218,7 +218,7 @@ function KeyboardShortcuts({ shortcut }) {
   </details>;
 }
 
-export default function AdminNavigation({ view, user, onNavigate, onCreate, onSignOut, onOpenAssistant, advisorUnread = 0, interactionLocked, showSignOut }) {
+export default function AdminNavigation({ view, user, onNavigate, onCreate, onSignOut, onOpenAssistant, advisorUnread = 0, shippingUnread = 0, onOpenShipping, interactionLocked, showSignOut }) {
   const [dialog, setDialog] = useState(null);
   const [shortcut, setShortcut] = useState('Ctrl K');
   const advisorStatus = useId();
@@ -276,6 +276,9 @@ export default function AdminNavigation({ view, user, onNavigate, onCreate, onSi
           aria-haspopup="dialog" aria-expanded={dialog === 'launcher'} aria-keyshortcuts={shortcut === '⌘ K' ? 'Meta+K' : 'Control+K'}
           onClick={() => openDialog('launcher')}>
           <Icon name="search" size={18} /><span>Ir a…</span><kbd className="launcher-shortcut" aria-hidden="true">{shortcut}</kbd>
+        </button>
+        <button type="button" className="button subtle advisor-nav-trigger shipping-nav-trigger" disabled={interactionLocked} aria-label={`Novedades de envío${shippingUnread ? `: ${shippingUnread} sin leer` : ''}`} onClick={onOpenShipping}>
+          <Icon name="truck" size={18} />{shippingUnread > 0 && <span className="advisor-nav-count" aria-hidden="true">{shippingUnread > 99 ? '99+' : shippingUnread}</span>}
         </button>
         <button type="button" className="button subtle advisor-nav-trigger" aria-haspopup="dialog" aria-describedby={advisorUnread > 0 ? advisorStatus : undefined} onClick={onOpenAssistant}>
           <Icon name="chat" size={18} /><span>Ali</span>{advisorUnread > 0 && <span className="advisor-nav-count" aria-hidden="true">{advisorUnread > 99 ? '99+' : advisorUnread}</span>}

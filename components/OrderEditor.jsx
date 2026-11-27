@@ -70,7 +70,7 @@ function ShipmentCreateAssistant({detail,shipment,setShipment,orderLines,busy,di
     <button className="button primary" type="submit" data-advisor-control={!shipments.length?'shipment-create-submit':undefined} disabled={controlBusy}>Registrar envío</button></fieldset></form>
   </details>;
 }
-export default function OrderEditor({ record, all, api, onClose, onSaved, onReload, onInteractionStateChange, assistantOpenRequest, onAssistantOpenHandled, advisorTargetRequest, onAdvisorTargetHandled, catalogTab }) {
+export default function OrderEditor({ record, all, api, onClose, onQuote, onSaved, onReload, onInteractionStateChange, assistantOpenRequest, onAssistantOpenHandled, advisorTargetRequest, onAdvisorTargetHandled, catalogTab }) {
   const [detail,setDetail]=useState(record), [form,setForm]=useState(()=>copyForm(record));
   const initial=useRef(JSON.stringify(form));
   const [busy,setBusy]=useState(false),[error,setError]=useState(null),[tab,setTab]=useState('agreement'),[people,setPeople]=useState([]),[peopleError,setPeopleError]=useState(''),[peopleRetry,setPeopleRetry]=useState(0),[peopleLoading,setPeopleLoading]=useState(true);
@@ -323,6 +323,7 @@ export default function OrderEditor({ record, all, api, onClose, onSaved, onRelo
   return <dialog ref={dialog} className={`editor-drawer ${styles.editor}`} aria-labelledby="order-title">
     <header><div><p className="eyebrow">Pedidos · {detail?.id?'Detalle y operaciones':'Captura manual'}</p><h2 id="order-title" ref={orderHeading} tabIndex={-1} data-dialog-initial-focus data-advisor-control={detail?.id&&tab==='agreement'&&!financialAction?'order-detail':undefined}>{number(detail)}</h2><p>{detail?.id?'Acuerdo, envíos y movimientos del pedido':'Por crear · completa el destinatario y las referencias'}</p></div><button type="button" className="icon-button" aria-label="Cerrar pedido" disabled={interactionBusy} onClick={close}><Icon name="close"/></button></header>
     <div className="drawer-body">
+      {detail?.id&&['new','preparing'].includes(detail.status)&&!detail.economicLocked&&<div className="admin-actions"><button type="button" className="button subtle" disabled={interactionBusy} onClick={()=>onQuote?.(detail.id)}>Cotizar este pedido</button></div>}
       {error&&<div ref={errorSummary} tabIndex={-1} className="error" role="alert">{error.message}{error.status===409&&<button type="button" className="text-button" onClick={onReload}>Cargar versión guardada</button>}</div>}
       {financialAction?<BusinessActionForm key={[financialAction.action,financialAction.context.documentId||financialAction.context.expense?.id||financialAction.context.shipment?.id||'',financialAction.requestId||''].join(':')} action={financialAction.action} context={{order:detail,...financialAction.context}} api={api} onSaved={financialSaved} onCancel={cancelFinancial} onInteractionStateChange={reportFinancial} onAssistantRegistered={financialRegistered}/>:<>
       <WorkspaceTabs label="Detalle del pedido" items={tabs} value={tab} onChange={changeTab} disabled={interactionBusy}/>

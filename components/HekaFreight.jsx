@@ -1,8 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { CARRIERS, DESTINATION_TYPES, HekaFields, HekaValues, HEKA_ID, PAYMENT_TYPES, fieldPayload } from './HekaForms';
-import styles from './HekaPanel.module.css';
+import { CARRIERS, DESTINATION_TYPES, HekaField, HekaFields, HekaValues, HEKA_ID, PAYMENT_TYPES, fieldPayload } from './HekaForms';
 
 const field = (name, label, extra = {}) => ({ name, label, ...extra });
 const amount = (name, label) => field(name, label, { number: true, min: 0, step: 'any', required: true });
@@ -10,8 +9,8 @@ const dimension = (name, label) => field(name, label, { number: true, min: 0, st
 const checkbox = (name, label) => field(name, label, { type: 'checkbox' });
 const VERSION = [['1', '1'], ['2', '2 · Blindar devolución']];
 const SHARED = [
-  field('city_origin', 'Código DANE de origen', { required: true, inputMode: 'numeric', pattern: '[0-9]+', maxLength: 16 }),
-  field('city_destination', 'Código DANE de destino', { required: true, inputMode: 'numeric', pattern: '[0-9]+', maxLength: 16 }),
+  field('city_origin', 'Origen'),
+  field('city_destination', 'Destino'),
   field('type', 'Tipo de entrega', { required: true, options: DESTINATION_TYPES, number: true }),
   field('type_payment', 'Tipo de pago', { required: true, options: PAYMENT_TYPES, number: true }),
   amount('declared_value', 'Valor declarado'), amount('collection_value', 'Valor a recaudar'),
@@ -19,7 +18,6 @@ const SHARED = [
   field('warehouse', 'ID de bodega Heka', { maxLength: 200 }), field('version', 'Versión de tarifa', { options: VERSION }),
 ];
 const SHIPPING = checkbox('withshipping_cost', 'Sumar el costo del envío al recaudo');
-const QUOTE = [field('channel', 'Canal', { options: [['hekaentrega', 'Heka Entrega'], ['loggy24', 'Loggy24']] }), field('seller', 'ID del vendedor', { maxLength: 200 })];
 const GUIDE = [
   field('distributor_id', 'Transportadora', { required: true, options: CARRIERS }),
   field('product', 'Descripción del producto', { required: true, maxLength: 500 }),
@@ -37,16 +35,14 @@ const CLIENT = [
   field('document', 'Documento', { inputMode: 'numeric', pattern: '[0-9]+', maxLength: 32 }),
   field('neighborhood', 'Barrio', { maxLength: 200 }), field('locality', 'Localidad', { maxLength: 200 }),
   field('email', 'Correo del destinatario', { type: 'email', maxLength: 254 }),
-  field('note_destination', 'Indicaciones para la entrega', { type: 'textarea', maxLength: 1000 }),
+  field('note_destination', 'Indicaciones para la entrega', { type: 'textarea', maxLength: 1000, 'aria-label':'Indicaciones para la entrega' }),
 ];
 
 export const EMPTY_FREIGHT = { type: '1', type_payment: '3', collection_value: '0', withshipping_cost: false };
-export const TEMPLATE_FIELDS = [
-  'city_destination', 'type_payment', 'declared_value', 'weight', 'height', 'long', 'width', 'withshipping_cost',
-];
 
+const displayValue = value => value && typeof value==='object' ? [value.city,value.state].filter(Boolean).join(', ') : value;
 function displayFields(fields, input) {
-  return fields.map(({ name, label, options }) => [label, options?.find(([value]) => value === String(input[name]))?.[1] ?? input[name]]);
+  return fields.map(({ name, label, options }) => [label, options?.find(([value]) => value === String(input[name]))?.[1] ?? displayValue(input[name])]);
 }
 
 export function GuideReview({ input }) {
@@ -58,20 +54,30 @@ export function GuideReview({ input }) {
   </>;
 }
 
-export default function HekaFreight({ mode, setMode, draft, onDraft, client, onClient, busy, perform, review }) {
-  const [quote, setQuote] = useState(null), [validation, setValidation] = useState('');
-  const create = mode === 'create';
-  const shared = create ? SHARED.map(item => item.name === 'warehouse' ? { ...item, required: true, pattern: HEKA_ID, maxLength: 24 } : item) : SHARED;
-  const update = (name, value) => { setQuote(null); setValidation(''); onDraft(name, value); };
+function CityFields({field,value,onChange}) {
+  const place=typeof value==='object'&&value!==null?value:{};
+  return <>
+    <HekaField label={`Código DANE de ${field.label.toLowerCase()}`} name={field.name} inputMode="numeric" pattern="[0-9]+" maxLength={16} value={typeof value==='string'?value:''} onChange={onChange}/>
+    <HekaField label={`Municipio de ${field.label.toLowerCase()}`} name={`${field.name}_city`} maxLength={100} value={place.city??''} onChange={(_,city)=>onChange(field.name,{...place,city})}/>
+    <HekaField label={`Departamento de ${field.label.toLowerCase()}`} name={`${field.name}_state`} maxLength={100} value={place.state??''} onChange={(_,state)=>onChange(field.name,{...place,state})}/>
+  </>;
+}
+
+export default function HekaFreight({ draft, onDraft, client, onClient, busy, review, onBack, environment }) {
+  const [validation, setValidation] = useState('');
+  const shared = SHARED.slice(2).map(item => item.name === 'warehouse' ? { ...item, required: true, pattern: HEKA_ID, maxLength: 24 } : item);
+  const update = (name, value) => { setValidation(''); onDraft(name, value); };
   function submit(event) {
     event.preventDefault(); setValidation('');
-    const input = fieldPayload([...shared, SHIPPING, ...(create ? [...GUIDE, ...GUIDE_OPTIONS] : QUOTE)], draft);
+    const input = fieldPayload([...shared, SHIPPING, ...GUIDE, ...GUIDE_OPTIONS], draft);
+    for (const {name,label} of SHARED.slice(0,2)) {
+      const value=draft[name];
+      if(typeof value==='string'&&/^\d{1,16}$/.test(value)) input[name]=value;
+      else if(value?.city?.trim()&&value?.state?.trim()) input[name]={city:value.city.trim(),state:value.state.trim()};
+      else {setValidation(`${label}: indica un DANE o el municipio y departamento.`);return;}
+    }
     if (['weight', 'height', 'long', 'width'].some(key => !(input[key] > 0))) {
       setValidation('El peso y las tres dimensiones deben ser mayores que cero.'); return;
-    }
-    if (!create) {
-      setQuote(null); perform('quote', input, result => setQuote({ result }));
-      return;
     }
     input.client = fieldPayload(CLIENT, client);
     if (!input.product || !input.client.name || !input.client.address) {
@@ -79,32 +85,25 @@ export default function HekaFreight({ mode, setMode, draft, onDraft, client, onC
     }
     review('createGuide', input);
   }
-  return <section className="settings-card" aria-label="Cotizar o emitir guía">
-    <h3 tabIndex={create ? undefined : -1} data-advisor-control={create ? undefined : 'heka-quote-form'}>{create ? 'Emitir guía' : 'Cotizar envío'}</h3>
-    <div className="admin-actions" role="group" aria-label="Acción de despacho">
-      <button type="button" className={`button ${!create ? 'primary' : 'subtle'}`} aria-pressed={!create} disabled={busy} onClick={() => { setMode('quote'); setValidation(''); }}>Cotizar envío</button>
-      <button type="button" className={`button ${create ? 'primary' : 'subtle'}`} aria-pressed={create} disabled={busy} onClick={() => { setMode('create'); setValidation(''); }}>Emitir guía</button>
-    </div>
-    <p>{create ? 'La emisión crea una guía en Heka; no registra ni vincula un envío en All Nutrition.' : 'Cotizar no crea una guía. Heka devuelve el resultado para los datos indicados.'} Puedes consultar códigos DANE, bodegas y plantillas en «Datos de envío» y copiar sus valores a este formulario.</p>
-    <form aria-label={create ? 'Datos para emitir guía' : 'Datos para cotizar'} onSubmit={submit}>
+  return <section className="settings-card" aria-label="Emitir guía en Heka">
+    <h3>Emitir guía en Heka</h3>
+    <button type="button" className="button subtle" onClick={onBack} disabled={busy}>Volver a preparar o cotizar</button>
+    <p>La emisión crea una guía en Heka; no registra ni vincula un envío en All Nutrition.</p>
+    {environment==='test'&&<p className="hint">Pruebas: escribe un destinatario ficticio. No se copian contactos reales desde la preparación.</p>}
+    <form aria-label="Datos para emitir guía" onSubmit={submit}>
       <fieldset className="editor-fieldset" disabled={busy}>
         <h4>Ruta, paquete y cobro</h4>
+        <div className="product-form-grid">{SHARED.slice(0,2).map(field=><CityFields key={field.name} field={field} value={draft[field.name]} onChange={update}/>)}</div>
         <HekaFields fields={shared} values={draft} onChange={update}/>
         <HekaFields fields={[SHIPPING]} values={draft} onChange={update}/>
-        {create ? <>
-          <h4>Datos de la guía</h4>
-          <HekaFields fields={GUIDE} values={draft} onChange={update}/>
-          <HekaFields fields={GUIDE_OPTIONS} values={draft} onChange={update}/>
-          <h4>Datos del destinatario</h4>
-          <HekaFields fields={CLIENT} values={client} onChange={onClient}/>
-        </> : <details className={styles.details}><summary>Contexto adicional de cotización</summary><HekaFields fields={QUOTE} values={draft} onChange={update}/></details>}
+        <h4>Datos de la guía</h4>
+        <HekaFields fields={GUIDE} values={draft} onChange={update}/>
+        <HekaFields fields={GUIDE_OPTIONS} values={draft} onChange={update}/>
+        <h4>Datos del destinatario</h4>
+        <HekaFields fields={CLIENT} values={client} onChange={onClient}/>
         {validation && <p className="error" role="alert">{validation}</p>}
-        <button type="submit" className="button primary" data-advisor-control={create?'heka-guide-review':undefined}>{create ? 'Revisar antes de emitir' : 'Solicitar cotización'}</button>
+        <button type="submit" className="button primary" data-advisor-control="heka-guide-review">Revisar antes de emitir</button>
       </fieldset>
     </form>
-    {!create && quote && <section className="settings-subform" aria-label="Respuesta de cotización" aria-live="polite">
-      <h4>Respuesta de Heka</h4>
-      {quote.result?.entries?.length ? <><p>Heka no documenta el significado ni la moneda de estos valores. No representan un cargo confirmado.</p><HekaValues items={quote.result.entries.map(({ path, value }) => [path, value])}/></> : <p>Heka no devolvió valores numéricos de cotización para mostrar.</p>}
-    </section>}
   </section>;
 }

@@ -12,7 +12,7 @@ export const parseOrderNumber = value => {
 export function HekaGuideOrderLink({ guide, linking, busy, unique }) {
   if (!linking || !isHekaId(guide?._id) || !guide.guide_number) return null;
   const linked = linking.records[guide._id] ?? guide.localLink;
-  return linked ? <div className="admin-actions"><span>Vinculada al pedido {orderLabel(linked.orderNumber)}.</span><button className="button subtle" type="button" data-advisor-control={unique?'heka-linked-shipment':undefined} disabled={busy} onClick={() => linking.open(linked)}>Abrir envío local</button></div>
+  return linked ? <div className="admin-actions"><span>Vinculada al pedido {orderLabel(linked.orderNumber)}.</span><button className="button subtle" type="button" data-advisor-control={unique?'heka-linked-shipment':undefined} disabled={busy} onClick={() => linking.open(linked)}>Abrir envío local</button><span className="hint">Consulta allí las operaciones de Caja vinculadas.</span></div>
     : guide.distributor_id ? <button type="button" className="button subtle" data-advisor-control={unique?'heka-link-guide-start':undefined} disabled={busy} onClick={() => linking.select(guide)}>Vincular guía a un pedido</button> : null;
 }
 

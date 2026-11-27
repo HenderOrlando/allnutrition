@@ -19,6 +19,7 @@ import AdvisorDirectory from './AdvisorDirectory';
 import AdvisorPreferences from './AdvisorPreferences';
 import AdvisorRecommendations from './AdvisorRecommendations';
 import useAdvisorInbox from './useAdvisorInbox';
+import useShippingNoveltySummary, { shippingEventView, shippingNoveltyView } from './useShippingNoveltySummary';
 import { ContentList } from './AdminLists';
 import OrdersWorkspace from './OrdersWorkspace';
 import ReportsWorkspace from './ReportsWorkspace';
@@ -239,6 +240,7 @@ function AssistantTargetAcknowledger({request,onHandled}) {
 export default function Admin({csrf,user}) {
  const params=useSearchParams();
  const [view,setView]=useState(()=>readAdminView(params));
+ const [shippingArrival,setShippingArrival]=useState('human');
  const [resources,setResources]=useState(initialResources),[settingsResource,setSettingsResource]=useState(blankResource),[ordersResource,setOrdersResource]=useState(blankResource),[cashAction,setCashAction]=useState(null);
  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[query,setQueryInput]=useState(view.q),[editing,setEditing]=useState(null),[opening,setOpening]=useState(null),[busy,setBusy]=useState(false),[interaction,setInteraction]=useState({dirty:false,busy:false}),[userRevision,setUserRevision]=useState(0);
  const [workspaceInteraction,setWorkspaceInteraction]=useState({dirty:false,busy:false}),[businessRevision,setBusinessRevision]=useState(0),[workspaceEpoch,setWorkspaceEpoch]=useState(0),[assistantOpen,setAssistantOpen]=useState(false),[assistantOpenRequest,setAssistantOpenRequest]=useState(null),[assistantMutation,setAssistantMutation]=useState(false);
@@ -325,6 +327,12 @@ export default function Admin({csrf,user}) {
   return response.json();
  },[csrf]);
  const advisor=useAdvisorInbox(api,{sessionKey:csrf,showList:section==='home'&&view.issue!=='attention',revision:businessRevision});
+ const shipping=useShippingNoveltySummary(api,eventId=>{
+  const current=accepted.current;
+  if(guardState.current.dirty||guardState.current.busy||editingRef.current||document.querySelector('dialog[open]')||current.tab==='heka'&&['create','freight'].includes(current.panel))return false;
+  const target=shippingEventView(eventId);
+  return adminHref(current)===adminHref(target)||acceptView(target);
+ });
  const advisorRequestHandled=useCallback(id=>setAdvisorRequest(current=>current?.id===id?null:current),[]);
  const advisorTaskRequestHandled=useCallback(id=>setAdvisorTaskRequest(current=>current?.id===id?null:current),[]);
  const advisorTargetHandled=useCallback((id,errorMessage)=>{
@@ -417,10 +425,11 @@ export default function Admin({csrf,user}) {
   setEditing(null);setCashAction(null);reportInteraction({dirty:false,busy:false});reportWorkspaceInteraction({dirty:false,busy:false});reportAdvisorInteraction({dirty:false,busy:false});guardState.current={rootBusy:false,settingsDirty:false,dirty:false,busy:false};
   return true;
  }
- function acceptView(candidate,{replace=false,fromHistory=false,check=true}={}) {
+ function acceptView(candidate,{replace=false,fromHistory=false,check=true,shippingOrigin='human'}={}) {
   cancelSearch();
   const next=readAdminView(candidate),href=adminHref(next);
   if(check&&!allowExit())return false;
+  setShippingArrival(shippingOrigin);
   setAdvisorOverlay(null);
   if(catalogFocusRef.current){const pending=catalogFocusRef.current;catalogFocusRef.current=null;setCatalogFocus(null);pending.resolve(false);}
   if(advisorTarget.current&&adminHref(advisorTarget.current.view)!==href)advisorTargetHandled(advisorTarget.current.id,'Se cambió de vista antes de abrir el control.');
@@ -502,6 +511,7 @@ export default function Admin({csrf,user}) {
   }catch(cause){if(sequence===assistantOpeningSequence.current)setError(cause.message);}
  },[api]);
  const navigate=key=>acceptView(typeof key==='string'?{section:key}:key);
+ const navigateShippingPanel=(panel,context)=>acceptView({section:'orders',tab:'heka',panel,...(['freight','create'].includes(panel)?context:{})},{check:false});
  function openAdvisorOverlay(next,{keepConsole=false}={}){
   if(guardState.current.busy)return false;
   if(!keepConsole)setAssistantOpen(false);
@@ -541,7 +551,7 @@ export default function Admin({csrf,user}) {
  },[api,businessChanged]);
  async function openAdvisorTarget({taskId,...candidate}){
   const resolved=validateAdvisorTarget(candidate);
-  if(!resolved||advisorTarget.current||!acceptView(resolved.view))return false;
+  if(!resolved||advisorTarget.current||!acceptView(resolved.view,{shippingOrigin:'ali'}))return false;
   setAssistantOpen(false);
   if(resolved.focus===null)return true;
   const destination=accepted.current;
@@ -1251,7 +1261,7 @@ export default function Admin({csrf,user}) {
     }
     if(catalogFocusRef.current)return false;
     setError('');setAdvisorOverlay(null);
-   }else if(!acceptView(next))return false;
+   }else if(!acceptView(next,{shippingOrigin:'ali'}))return false;
    if(!reuseCashForm&&same&&capability.area==='cash'&&next.section==='business'&&next.tab==='accounts'&&workspaceRoot.current?.querySelector('dialog[open].editor-drawer'))setWorkspaceEpoch(value=>value+1);
    return focusCatalogControl(capability,focus,reuseContent?origin:next,reuseOrder||reuseContent||reuseImportInventory?editor:null,
     {orderTab,accountIntent,campaignVersion,socialAction,importStep:importOriginAction?1:savedImportMapping?2:savedImportReview||importAcceptance?3:null});
@@ -1263,7 +1273,7 @@ export default function Admin({csrf,user}) {
  function openAdvisorAction(action){
   if(action.taskId)return requestAdvisor('reminders',action.taskId);
   if(action.orderId)return openEditor('orders',{id:action.orderId});
-  if(action.view?.section)return acceptView(action.view);
+  if(action.view?.section)return acceptView(action.view,{shippingOrigin:'ali'});
   return false;
  }
  function setQuery(value){setQueryInput(value);cancelSearch();const generation=searchGeneration.current;searchTimer.current=setTimeout(()=>{if(searchGeneration.current===generation)acceptView({...accepted.current,q:value,page:1},{replace:true,check:false});},200);}
@@ -1369,12 +1379,13 @@ export default function Admin({csrf,user}) {
   reviseProposal={reviseProposal} cancelProposal={cancelProposal} executeProposal={executeProposal} onReceipt={receiveAssistantReceipt}>
  <AssistantTargetAcknowledger request={assistantOpenRequest} onHandled={assistantOpenHandled}/>
  <div className="admin-shell">
-  <AdminNavigation view={view} user={user} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onSignOut={signOut} onOpenAssistant={()=>setAssistantOpen(true)} advisorUnread={advisor.availability==='ready'&&!advisor.offline?advisor.unreadCount:0} interactionLocked={Boolean(editing)||Boolean(cashAction)||guardState.current.busy} showSignOut={catalogFocus?.focus==='admin-sign-out'}/>
+  <AdminNavigation view={view} user={user} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onSignOut={signOut} onOpenAssistant={()=>setAssistantOpen(true)} advisorUnread={advisor.availability==='ready'&&!advisor.offline?advisor.unreadCount:0} shippingUnread={shipping.count} onOpenShipping={()=>navigate(shippingNoveltyView)} interactionLocked={Boolean(editing)||Boolean(cashAction)||guardState.current.busy} showSignOut={catalogFocus?.focus==='admin-sign-out'}/>
   <div className={`admin-main${isConfiguration?' '+configurationStyles.viewport:''}`}><main ref={workspaceRoot} className="admin-content" id="admin-workspace" tabIndex={-1}>
    <AdvisorActionFocus root={workspaceRoot} request={catalogFocus?.editor&&catalogFocus.editor!==editing?null:catalogFocus} onSettled={catalogFocusSettled}/>
    {!['home','reports','cash','advertising'].includes(section)&&<div className="admin-heading"><div><p className="eyebrow">{isConfiguration?(configurationHome?'Administración':'Configuración'):'Mesa de trabajo'}</p><h1 tabIndex="-1" data-admin-section-heading>{configurationHome?'Configuración':section==='settings'?'Datos y publicación de la vitrina':giftView?'Obsequios':configurationTask?.label||sectionLabel}</h1><p>{configurationHome?'Organiza la operación, la vitrina y el acceso al panel.':configurationTask?.description||schemas[section]?.help||(section==='orders'?'Pedidos, envíos y cobros acordados.':'Gestiona los datos de tu negocio.')}</p></div></div>}
    {error&&<div className="error alert" role="alert">{error}<button type="button" className="icon-button" aria-label="Cerrar error" onClick={()=>setError('')}><Icon name="close"/></button></div>}
    {notice&&<div className="success alert" role="status"><Icon name="check"/>{notice}<button type="button" className="icon-button" aria-label="Cerrar aviso" onClick={()=>setNotice('')}><Icon name="close"/></button></div>}
+   {shipping.notice&&<div className="success alert" role="status">Hay novedades de envío sin leer. <button type="button" className="text-button" onClick={()=>{if(navigate(shippingEventView(shipping.notice)))shipping.dismiss();}}>Ver novedades</button><button type="button" className="icon-button" aria-label="Cerrar aviso de envíos" onClick={shipping.dismiss}><Icon name="close"/></button></div>}
    {opening&&<div className="admin-action-feedback" aria-busy={opening.loading}>{opening.loading?<p role="status">Preparando {opening.record?.title||opening.record?.customerName||'el editor'}…</p>:<div className="error" role="alert">{opening.error}<button type="button" className="text-button" onClick={()=>openEditor(opening.kind,opening.record)}>Reintentar apertura</button></div>}</div>}
    {isConfiguration?<ConfigurationNavigation view={view} onNavigate={navigate} interactionLocked={guardState.current.busy}/>:<AreaNavigation view={view} onNavigate={navigate} interactionLocked={guardState.current.busy}/>}
    {section==='home'&&<AdminOverview api={api} view={view} onViewChange={changeView} onCreateOrder={()=>openEditor('orders',null)} onImport={()=>navigate({section:'orders',tab:'imports'})} onCreateProduct={()=>openEditor('products',null)} onConfigureCash={configureCash} onNavigate={navigate} onOpenOrder={id=>openEditor('orders',{id})} revision={businessRevision}
@@ -1385,7 +1396,7 @@ export default function Admin({csrf,user}) {
       <AdvisorRecommendations api={api} ready={advisor.availability==='ready'&&!advisor.offline} revision={`${businessRevision}:${preferenceRevision}`} onNavigate={openAdvisorTarget} onFollow={followAdvisorRecommendation} onInteractionStateChange={reportRecommendations}/></>}/>}
    {section==='settings'&&<div aria-busy={settingsResource.loading}>{settingsResource.loading&&<p role="status">{settings?'Actualizando…':'Cargando configuración…'}</p>}{!settings&&settingsResource.loading&&<div className="static-skeleton" aria-hidden="true"/>}{settingsResource.error&&<div className="error" role="alert">{settingsResource.error}<button type="button" className="text-button" onClick={()=>retry('settings')}>Reintentar</button></div>}</div>}
    {schemas[section]&&<ContentList kind={section} resource={resources[section]} view={{...view,q:query}} onViewChange={changeView} onCreate={(kind,prefill)=>openEditor(kind,prefill??null)} onEdit={openEditor} onRetry={()=>retry(section)}/>}
-   {section==='orders'&&<OrdersWorkspace key={'orders:'+workspaceEpoch} api={api} resource={ordersResource} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>loadOrders(accepted.current)} onInteractionStateChange={reportWorkspaceInteraction} onCreateProduct={createProductForImport} onMutation={nativeAdvisorMutation} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={advisorTargetHandled} advisorSearchRef={advisorOrderSearch} catalogRequest={catalogFocus}/>}
+   {section==='orders'&&<OrdersWorkspace key={'orders:'+workspaceEpoch} api={api} resource={ordersResource} view={{...view,q:query}} onViewChange={changeView} onNavigate={navigate} onShippingPanel={navigateShippingPanel} shippingArrival={shippingArrival} onShippingRead={shipping.reload} onCreate={kind=>openEditor(kind,null)} onEdit={openEditor} onRetry={()=>loadOrders(accepted.current)} onInteractionStateChange={reportWorkspaceInteraction} onCreateProduct={createProductForImport} onMutation={nativeAdvisorMutation} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={advisorTargetHandled} advisorSearchRef={advisorOrderSearch} catalogRequest={catalogFocus}/>}
    {section==='reports'&&<ReportsWorkspace key={'reports:'+workspaceEpoch} api={api} view={view} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={advisorTargetHandled}/>}
    {section==='cash'&&<CashWorkspace key={'cash:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onOpenOrder={id=>openEditor('orders',{id})} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={nativeAdvisorMutation} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={advisorTargetHandled} cashCatalogRequest={catalogFocus?.focus==='cash-expense-confirm-import-review'?catalogFocus:null}/>}
    {section==='advertising'&&<AdvertisingWorkspace key={'advertising:'+workspaceEpoch} api={api} view={{...view,q:query}} onViewChange={changeView} onStudioThread={setStudioThread} onNavigate={navigate} onInteractionStateChange={reportWorkspaceInteraction} onMutation={businessChanged} revision={businessRevision} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={advisorTargetHandled} assetCatalogRequest={catalogFocus?.focus==='advertising-asset-assist-name'?catalogFocus:null} campaignCatalogRequest={catalogFocus?.view.section==='advertising'&&catalogFocus.view.tab==='campaigns'&&/^ad-(?:campaign|offer|studio|same)-/.test(catalogFocus.focus)?catalogFocus:null}/>}
@@ -1395,10 +1406,10 @@ export default function Admin({csrf,user}) {
  {section==='users'&&<UserManagement key={userRevision} api={api} onInteractionStateChange={reportInteraction} />}
  </main></div>
  {editing&&editing.kind!=='orders'&&<RecordEditor key={editing.kind+':'+(editing.record.id||'new')+':'+editing.revision} kind={editing.kind} record={editing.record} all={all} api={api} onClose={closeEditor} onSaved={saved} onReload={reloadEditor} onInteractionStateChange={reportInteraction}/>}
- {editing?.kind==='orders'&&<OrderEditor key={(editing.record?.id||'new-order')+':'+editing.revision} record={editing.record} all={all} api={api} onClose={closeEditor} onSaved={saved} onReload={reloadEditor} onInteractionStateChange={reportInteraction} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={advisorTargetHandled} catalogTab={catalogFocus?.editor===editing?catalogFocus.orderTab:undefined}/>}
+ {editing?.kind==='orders'&&<OrderEditor key={(editing.record?.id||'new-order')+':'+editing.revision} record={editing.record} all={all} api={api} onClose={closeEditor} onQuote={orderId=>navigate({section:'orders',tab:'heka',panel:'freight',orderId})} onSaved={saved} onReload={reloadEditor} onInteractionStateChange={reportInteraction} assistantOpenRequest={assistantOpenRequest} onAssistantOpenHandled={assistantOpenHandled} advisorTargetRequest={advisorTargetRequest} onAdvisorTargetHandled={advisorTargetHandled} catalogTab={catalogFocus?.editor===editing?catalogFocus.orderTab:undefined}/>}
  {cashAction&&<BusinessActionDialog action={cashAction.action} context={cashAction.context} api={api} configuration onClose={()=>{setCashAction(null);reportInteraction({dirty:false,busy:false});}} onSaved={record=>{setCashAction(null);reportInteraction({dirty:false,busy:false});businessChanged();setNotice('Cuenta '+record.name+' guardada.'+(record.warnings?.length?' '+record.warnings.join(' '):''));}} onInteractionStateChange={reportInteraction}/>}
  </div>
- <AssistantConsole api={api} view={assistantView} onNavigate={navigate} onReminderRequest={requestAdvisor} advisorReady={advisor.availability==='ready'} onAdvisorTaskRequest={requestAdvisorTask} onAdvisorTasks={()=>requestAdvisorTask('tasks')} onAdvisorDirectory={options=>openAdvisorOverlay('directory',options)} onAdvisorPreferences={()=>openAdvisorOverlay('preferences')} onAdvisorAction={openCatalogAction} advisorTaskId={advisorTaskId} onClearAdvisorTask={()=>setAdvisorTaskId(null)} brandName={settings?.brandName} open={assistantOpen} catalogConsoleRequest={assistantConsoleRequest} onClose={()=>setAssistantOpen(false)}/>
+ <AssistantConsole api={api} view={assistantView} onNavigate={next=>acceptView(next,{shippingOrigin:'ali'})} onReminderRequest={requestAdvisor} advisorReady={advisor.availability==='ready'} onAdvisorTaskRequest={requestAdvisorTask} onAdvisorTasks={()=>requestAdvisorTask('tasks')} onAdvisorDirectory={options=>openAdvisorOverlay('directory',options)} onAdvisorPreferences={()=>openAdvisorOverlay('preferences')} onAdvisorAction={openCatalogAction} advisorTaskId={advisorTaskId} onClearAdvisorTask={()=>setAdvisorTaskId(null)} brandName={settings?.brandName} open={assistantOpen} catalogConsoleRequest={assistantConsoleRequest} onClose={()=>setAssistantOpen(false)}/>
  <AdvisorDirectory api={api} open={advisorOverlay==='directory'} onClose={()=>setAdvisorOverlay(null)} onAdvisorAction={openCatalogAction}/>
  <AdvisorPreferences api={api} open={advisorOverlay==='preferences'} onClose={()=>setAdvisorOverlay(null)} onSaved={()=>{advisor.reload();setPreferenceRevision(value=>value+1);}} onInteractionStateChange={reportPreferences}/>
  </AssistantBridgeProvider>;

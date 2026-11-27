@@ -1,8 +1,9 @@
 'use client';
 import { useAssistantForm } from './AssistantBridge';
-import { useState,useRef,useEffect,useMemo } from 'react';
+import { useState,useRef,useEffect,useMemo,useId } from 'react';
 import { schemas,slugify,emptyRecord,contentStates,money } from '@/lib/schema.mjs';
 import { formatMoneyMinor, MAX_MONEY_MINOR } from '@/lib/business/money.mjs';
+import { PACK_FIELDS, parsePackedMeasure } from '@/lib/shipping/center-values.mjs';
 import { stockAvailable } from '@/lib/inventory.mjs';
 import { Field, ProductComponents } from './Fields';
 import Icon from './Icons';
@@ -24,12 +25,14 @@ const comboFieldControls={
  orderable:'combo-orderability',
  catalogIds:'combo-catalog-membership'
 };
+const packingSection={key:'unitPackaging',title:'Empaque de una unidad',description:'Mide la referencia ya empacada. Estas medidas se usan en Envíos y no se publican en la vitrina. Deja vacío lo que aún no has medido.',fields:[]};
 const productSections=[
  {key:'basics',title:'Información básica',description:'Completa el nombre, la presentación y el precio.',fields:['title','slug','presentation','price']},
  {key:'inventory',title:'Existencias y reservas',description:'Registra el conteo físico. Los pedidos reservan unidades; el despacho las descuenta y las devoluciones recuperables las reingresan.',fields:['stockQuantity']},
  {key:'image',title:'Imagen del producto',description:'Sube una imagen optimizada o ingresa una URL pública.',fields:['image'],singleColumn:true},
  {key:'description',title:'Descripción',description:'Describe el contenido y los datos aprobados para mostrar al cliente.',fields:['flavor','description','productInfo']},
  {key:'costs',title:'Costos y obsequios',description:'Datos internos para trabajar con pedidos, sin obligación de publicar.',fields:[],collapsible:true},
+ packingSection,
  {key:'publication',title:'Organización y publicación',description:'Asigna catálogos y decide si se publica, se destaca o queda como borrador.',fields:['status','sort','featured','catalogIds']}
 ];
 const publicationHelp={
@@ -47,6 +50,7 @@ const contentSections={
   {key:'basics',title:'Datos de la oferta',description:'Define el nombre, el precio final y si estará disponible para pedidos privados. El precio no se calcula a partir de sus productos.',fields:['title','description','price','orderable']},
   {key:'components',title:'Productos del combo',description:'Añade cada referencia una sola vez e indica cuántas unidades incluye. Las existencias del combo dependen de estos componentes.',fields:['items'],singleColumn:true},
   {key:'presentation',title:'Imagen y condiciones',description:'Usa una imagen pública e indica los límites o condiciones confirmadas de la oferta.',fields:['image','conditions'],singleColumn:true},
+  packingSection,
   {key:'publication',title:'Organización y publicación',description:'Asigna catálogos, revisa la dirección corta y elige la visibilidad del combo.',fields:['slug','status','sort','catalogIds']}
  ],
  catalogs:[
@@ -80,6 +84,37 @@ function recordForm(kind,record){
  return {...emptyRecord(kind),...record,...(['products','combos'].includes(kind)&&record.id&&record.orderable==null?{orderable:kind==='products'&&record.productType==='gift'||record.status==='published'}:{})};
 }
 
+function packingText(value,precision){
+ if(value==null)return '';
+ const factor=10**precision, whole=Math.floor(value/factor);
+ const fraction=String(value%factor).padStart(precision,'0').replace(/0+$/,'');
+ return fraction?`${whole},${fraction}`:String(whole);
+}
+
+function PackedMeasureField({field,value,onChange,onDraftInvalid}){
+ const id=useId();
+ const measure=PACK_FIELDS.find(entry=>entry.name===field.name);
+ const [draft,setDraft]=useState(null),[error,setError]=useState('');
+ function edit(event){
+  const next=event.target.value;
+  setDraft(next);
+  try{
+   onChange(parsePackedMeasure(next,measure));
+   event.target.setCustomValidity('');setError('');onDraftInvalid(false);
+  }catch(cause){
+   event.target.setCustomValidity(cause.message);setError(cause.message);onDraftInvalid(true);
+  }
+ }
+ return <div className="field">
+  <label htmlFor={id}>{field.label}</label>
+  <input id={id} name={field.name} type="text" inputMode="decimal" maxLength={12} placeholder="Sin medir"
+   value={draft??packingText(value,measure.precision)} onChange={edit} onBlur={()=>{if(!error)setDraft(null);}}
+   aria-invalid={error?true:undefined} aria-describedby={`${id}-precision${error?` ${id}-error`:''}`}/>
+  <small id={`${id}-precision`} className="muted field-description">Hasta {measure.precision} {measure.precision===1?'decimal':'decimales'} en {measure.unit}.</small>
+  {error&&<p id={`${id}-error`} className="error" role="alert">{error}</p>}
+ </div>;
+}
+
 export default function RecordEditor({kind,record:providedRecord,all,api,onClose,onSaved,onReload,onInteractionStateChange}){
  const schema=schemas[kind];
  const storefront=storefrontControls[kind],configurationContent=Boolean(storefront);
@@ -88,8 +123,10 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
  const [initialForm]=useState(()=>recordForm(kind,providedRecord));
  const [form,setForm]=useState(initialForm),[busy,setBusy]=useState(false),[uploadingImage,setUploadingImage]=useState(false),[error,setError]=useState(null);
  const [invalidCostDraft,setInvalidCostDraft]=useState(false);
+ const [invalidPacking,setInvalidPacking]=useState({});
  const [initialSnapshot,setInitialSnapshot]=useState(()=>JSON.stringify(initialForm));
- const dirty=useMemo(()=>invalidCostDraft||JSON.stringify(form)!==initialSnapshot,[form,initialSnapshot,invalidCostDraft]);
+ const invalidPackingDraft=Object.values(invalidPacking).some(Boolean);
+ const dirty=useMemo(()=>invalidCostDraft||invalidPackingDraft||JSON.stringify(form)!==initialSnapshot,[form,initialSnapshot,invalidCostDraft,invalidPackingDraft]);
  const productType=kind==='products'?(form.productType||'product'):undefined;
  const isGift=productType==='gift';
  const recordLabel=isGift?'obsequio':schema.singular;
@@ -105,7 +142,7 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
   acceptAutomaticResult:record.id&&record.status==='draft'?({result})=>{
    if(result?.id!==record.id||!Number.isSafeInteger(result.version))throw new Error('No se recibió la ficha guardada para actualizar este editor.');
    const next=recordForm(kind,result);
-   setRecord(result);setForm(next);setInitialSnapshot(JSON.stringify(next));setInvalidCostDraft(false);setError(null);
+   setRecord(result);setForm(next);setInitialSnapshot(JSON.stringify(next));setInvalidCostDraft(false);setInvalidPacking({});setError(null);
   }:undefined
  });
  const interactionBusy=formBusy||assistant.assistantBusy;
@@ -113,6 +150,7 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
  const contentCommand=useRef(null);
  const close=useDialog(dialog,{busy:interactionBusy,dirty,onClose});
  const sections=kind==='products'?productSections:contentSections[kind];
+ const packingFields=schema.fields.filter(field=>field.group==='unitPackaging');
  const fieldByName=useMemo(()=>new Map(schema.fields.map(field=>[field.name,field])),[schema]);
  const [activeSection,setActiveSection]=useState(sections[0].key);
  useEffect(()=>{onInteractionStateChange({dirty,busy:interactionBusy,productType});},[dirty,interactionBusy,productType,onInteractionStateChange]);
@@ -125,6 +163,12 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
   ...(field==='status'&&value==='published'&&!record.id&&(kind==='combos'||kind==='products'&&(old.productType||'product')==='product')?{orderable:true}:{})
  };}
  const change=(field,value)=>setForm(old=>changedForm(old,field,value));
+ function changePackingValidity(name,invalid){
+  setInvalidPacking(previous=>{
+   if(Boolean(previous[name])===invalid)return previous;
+   return {...previous,[name]:invalid};
+  });
+ }
  function blockAssistantInteraction(event){
   if(!assistant.assistantBusy)return;
   event.preventDefault();event.stopPropagation();
@@ -147,6 +191,7 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
  async function save(event){
   event.preventDefault();
   if(formBusy||assistant.assistantBusy)return;
+  if(invalidPackingDraft){goToSection('unitPackaging');return;}
   setError(null);
   try{
    const result=await assistant.submitAssisted({payload:form,saveUnassisted:async payload=>{
@@ -185,6 +230,7 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
  const editorControl=storefront?`${storefront.prefix}-${record.id?'open-record':'new-form'}`:record.id?{products:'product-record-detail',combos:'combo-record-detail',catalogs:'catalog-record-detail'}[kind]:'catalog-record-editor';
  const submitControl=storefront&&!record.id?`${storefront.prefix}-create-editor`:(saveControls||(kind==='products'&&!isGift?productSaveControls:null))?.[record.id?'update':'create'];
  const renderField=field=><Field key={field.name} field={{...field,...(field.name==='stockQuantity'?{min:record.stockReserved||0,required:record.stockQuantity!=null}:{}),advisorControl:fieldControl(field.name)??field.advisorControl,description:field.name==='status'?publicationHelp[form.status]:field.description||fieldHelp[field.name]}} value={form[field.name]} onChange={value=>{if(field.name==='productType')setInvalidCostDraft(false);change(field.name,value);}} all={all} api={api} onUploading={setUploadingImage} onDraftInvalid={setInvalidCostDraft}/>;
+ const renderPacking=field=><PackedMeasureField key={`${field.name}:${record.version??'new'}`} field={field} value={form[field.name]} onChange={value=>change(field.name,value)} onDraftInvalid={invalid=>changePackingValidity(field.name,invalid)}/>;
  const publication=contentStates.find(state=>state.value===form.status)?.label;
  const priceDefined=Number(form.price)>0;
  const validPrice=priceDefined||(isGift&&form.price===0);
@@ -276,6 +322,7 @@ export default function RecordEditor({kind,record:providedRecord,all,api,onClose
          <div className="product-form-section-heading"><p className={styles.sectionStep}>Sección {index+1} de {sections.length}</p><h3 id={`form-section-${section.key}`} tabIndex="-1" data-advisor-control={record.id&&kind==='products'&&section.key==='inventory'?'product-inventory-summary':undefined}>{section.title}</h3><p>{section.description}</p></div>
          <div className={`product-form-grid${section.singleColumn?' product-form-grid--single':''}`}>
           {section.fields.filter(name=>!(isGift&&name==='stockQuantity')).map(name=><div className={`product-form-field product-form-field--${name} ${['textarea','image','comboItems','multi'].includes(fieldByName.get(name).type)?styles.fullWidth:''}`} key={name}>{renderField(fieldByName.get(name))}</div>)}
+          {section.key==='unitPackaging'&&packingFields.map(renderPacking)}
          </div>
          {section.key==='inventory'&&<>{isGift?<p className="hint">Este obsequio no tiene existencias propias: utiliza las unidades de sus componentes. Posibles ahora: {availableUnits??'por contar'}.</p>:<><p className="hint">Reservadas: {record.stockReserved||0} · Disponibles para nuevos pedidos: {availableUnits??'sin contar'}. El conteo físico debe incluir las unidades reservadas.</p>{form.stockQuantity==null&&<p className="hint">Sin un conteo no se pueden reservar ni despachar nuevas unidades de esta referencia.</p>}</>}<p className="small muted">El conteo queda auditado. Registrar existencias no crea compras, gastos ni movimientos de caja. Las reservas se confirman al guardar el pedido, no al seleccionar productos.</p></>}
          {kind==='combos'&&section.key==='components'&&componentCost}
