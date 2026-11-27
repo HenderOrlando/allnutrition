@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { openSQLite } from '../lib/db/sqlite.mjs';
-import { Store } from '../lib/store.mjs';
-import { migrateBusinessV3 } from '../lib/db/migrations.mjs';
+import { openStore } from '../lib/db/index.mjs';
 import { loadOrderData, pageOrders } from '../lib/business/orders.mjs';
 import { createShipment, saveShipment, saveShipmentTx, getShipment, pageShipments, recordShipmentEvent, recordShipmentEventTx, effectiveShipmentEvents, effectiveShipmentState, linkShipmentTx } from '../lib/business/shipments.mjs';
 import { validateImportedFields, mergeImportedFields } from '../lib/business/imported-fields.mjs';
@@ -16,10 +14,8 @@ const at = '2026-09-01T12:00:00.000Z';
 const requestId = () => randomUUID();
 const conflict = error => error.status === 409;
 async function fixture(t) {
-  const store = new Store(await openSQLite(':memory:'));
+  const store = await openStore({ DB_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' });
   t.after(() => store.close());
-  await store.initialize();
-  await migrateBusinessV3(store);
   const settings=await getBusinessSettings(store);
   await saveBusinessSettings(store,{...settings,requestId:requestId(),rulesVersions:[{id:'historical-rule',effectiveOn:'2026-01-01',saleRecognition:'delivered',commission:{enabled:false},shippingExpenseDate:'dispatch_date',returnExpenseDate:'charge_date',platformFeeExpenseDate:'charge_date'}]},actor);
   return store;
