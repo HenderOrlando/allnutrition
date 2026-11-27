@@ -37,11 +37,12 @@ const operate = (workspace, label) => ['Datos de envío','Etiquetas PDF','Histor
 const center = page => page.getByRole('region',{name:'Centro de envíos',exact:true});
 const prep = workspace => workspace.getByRole('region',{name:'Preparar envío',exact:true});
 const quoteLabel='Cotizar con Heka · solo cotizar';
-const response = (page, pathname, method) => page.waitForResponse(item => item.request().method() === method && new URL(item.url()).pathname === pathname);
+const response = (page, pathname, method, matchesBody) => page.waitForResponse(item => item.request().method() === method
+  && new URL(item.url()).pathname === pathname && (!matchesBody || matchesBody(item.request().postDataJSON())));
 const entries = async log => (await readFile(log, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
 const calls = async (log, method, pathname) => (await entries(log)).filter(item => item.method === method && item.path === pathname).length;
-async function clickAndWait(page, scope, title, operation = 'POST', endpoint = `${SETTINGS}/operate`) {
-  const pending = response(page, endpoint, operation);
+async function clickAndWait(page, scope, title, operation = 'POST', endpoint = `${SETTINGS}/operate`, matchesBody) {
+  const pending = response(page, endpoint, operation, matchesBody);
   await button(scope, title).click();
   return pending;
 }
@@ -184,8 +185,11 @@ async function exercise(page, log, uncertainty) {
   await button(page, 'Abrir Centro de envíos').click();
   await expect(workspace).toContainText('Entorno Heka: Pruebas');
   const search = form(workspace, 'Buscar guías');
-  await fill(search, 'Número de guía, nombre o teléfono', 'ERROR-DE-PROVEEDOR');
-  assert.equal((await clickAndWait(page, search, 'Buscar guías')).status(), 403);
+  const rejectedQuery = 'ERROR-DE-PROVEEDOR';
+  await fill(search, 'Número de guía, nombre o teléfono', rejectedQuery);
+  const rejectedSearch = await clickAndWait(page, search, 'Buscar guías', 'POST', `${SETTINGS}/operate`,
+    body => body?.operation === 'guides' && body.input?.text === rejectedQuery);
+  assert.equal(rejectedSearch.status(), 403);
   await expect(workspace.getByRole('alert')).toBeVisible();
   await expect(workspace).not.toContainText('no muestres el mensaje privado');
   await expect(workspace).not.toContainText('Todavía no hay guías.');
@@ -274,17 +278,21 @@ async function exercise(page, log, uncertainty) {
   await expect(button(confirmSolution, 'Enviar solución a Heka')).toBeDisabled();
   assert.equal((await entries(log)).filter(item => item.method === 'PATCH').length, previousPatches);
   await confirmSolution.getByRole('checkbox').check();
-  const refreshedJournal = response(page, `${SETTINGS}/operate`, 'GET');
-  const submission = await clickAndWait(page, confirmSolution, 'Enviar solución a Heka');
+  const submission = await clickAndWait(page, confirmSolution, 'Enviar solución a Heka', 'POST', `${SETTINGS}/operate`,
+    body => body?.operation === 'solveNovelty' && body.confirm === true);
   assert.equal(submission.status(), 200, await submission.text());
   await expect(journal).toContainText('Heka aceptó la solución para revisión.');
   await expect(journal).not.toContainText(SOLUTION);
   assert.equal((await entries(log)).filter(item => item.method === 'PATCH').length, previousPatches + 1);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
 
-  // The new journal reads on mount. Its in-flight request blocks panel navigation.
-  assert.equal((await refreshedJournal).status(), 200);
-  await expect(button(journal, 'Actualizar historial')).toBeEnabled();
+  const refresh = button(journal, 'Actualizar historial');
+  await expect(refresh).toBeEnabled();
+  const refreshedJournal = await clickAndWait(page, journal, 'Actualizar historial', 'GET');
+  assert.equal(refreshedJournal.status(), 200);
+  await expect(refresh).toBeEnabled();
+  await expect(journal).toContainText('Heka aceptó la solución para revisión.');
+  await expect(journal).not.toContainText(SOLUTION);
 
   await button(workspace, 'Configurar conexión Heka').click();
   await expect(page.getByRole('region', { name: 'Conexión oficial de Heka' })).toBeVisible();
