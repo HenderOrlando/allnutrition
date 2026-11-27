@@ -7,6 +7,9 @@ export const CITY = '111111111111111111111111', WAREHOUSE = '2222222222222222222
 export const GUIDE_A = { _id: 'aaaaaaaaaaaaaaaaaaaaaaaa', guide_number: '000000567801', distributor_id: 'coordinadora', status: 'created' };
 export const GUIDE_B = { _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', guide_number: '000000567802', distributor_id: 'coordinadora', status: 'in_office' };
 export const GUIDE_C = { _id: 'cccccccccccccccccccccccc', guide_number: '000000567803', distributor_id: 'coordinadora', status: 'created' };
+const HISTORY = [GUIDE_A,GUIDE_B,GUIDE_C,...Array.from({length:38},(_,index)=>({
+  _id:(index+1).toString(16).padStart(24,'0'),guide_number:`SYN-${index+1}`,distributor_id:index<12?'coordinadora':'envia',status:'created',
+}))];
 export const NOVELTY = 'dddddddddddddddddddddddd';
 export const SOLUTION = 'Entregar en portería de la dirección sintética';
 export const UNCERTAIN_SOLUTION = 'Solución sintética registrada sin recibo';
@@ -54,17 +57,23 @@ export function installHekaBrowserTransport(log, origin) {
       case 'GET /shipping/template': return ok([{ _id: TEMPLATE, label: 'Plantilla de prueba', city_destination: '05001000', type_payment: 3, declared_value: 25000, weight: 1, height: 5, long: 6, width: 7, withshipping_cost: false }]);
       case 'POST /shipping/quoter': {
         const body = await request.json();
-        assert.equal(body.city_origin, '11001000'); assert.equal(body.city_destination, '05001000');
-        assert.equal(body.warehouse, WAREHOUSE); assert.equal(body.withshipping_cost, false);
+        assert.ok(body.city_origin==='11001000'||body.city_origin?.city==='Bogotá');
+        assert.ok(body.city_destination==='05001000'||body.city_destination?.state==='Cundinamarca');
+        if (body.warehouse!==undefined) assert.equal(body.warehouse, WAREHOUSE);
+        assert.equal(body.withshipping_cost, false);
         assert.equal(body.client, undefined);
-        return ok({ options: [{ amount: 12750 }], authToken: 'never-return-provider-token' });
+        assert.ok(!('recipient' in body)&&!('orderId' in body));
+        return ok({ options: [{distributor_id:'coordinadora',total:12750,deliveryTime:2,visual_flete:12000,assured:0,transportCommission:750},{ amount:12750 }], authToken:'never-return-provider-token' });
       }
       case 'GET /shipments/guide/v2/external': {
         if (query.get('id') === GUIDE_A._id) return ok(paged([GUIDE_A]));
         if (query.get('id') === GUIDE_C._id) return ok(paged([GUIDE_C]));
         if (query.get('text') === 'SIN-RESULTADOS') return ok(paged([]));
         if (query.get('text') === 'ERROR-DE-PROVEEDOR') return reject(403, 'no muestres el mensaje privado del proveedor');
-        return ok(query.get('page') === '2' ? paged([GUIDE_C], { total: 3, page: 2, pages: 2, previousPage: 1 }) : paged([GUIDE_A, GUIDE_B], { total: 3, pages: 2, nextPage: 2 }));
+        const carrier=query.get('distributor_id'), limit=Number(query.get('limit')||20), page=Number(query.get('page')||1);
+        if(carrier==='tcc'&&limit===2) return reject(503,'Cuenta temporalmente no disponible');
+        const all=HISTORY.filter(row=>!carrier||row.distributor_id===carrier), total=all.length, pages=Math.max(1,Math.ceil(total/limit));
+        return ok(paged(all.slice((page-1)*limit,page*limit),{page,total,pages,nextPage:page<pages?page+1:null,previousPage:page>1?page-1:null}));
       }
       case 'POST /shipments/guide': {
         const body = await request.json();

@@ -1,6 +1,6 @@
 // Deployment units and the non-import edges in the candidate's test graph.
 export const units = ['web', 'scheduler', 'social-browser-worker', 'social-browser', 'db'];
-export const pgGroups = ['core', 'business', 'imports', 'backup', 'heka', 'social', 'assistant', 'schema'];
+export const pgGroups = ['core', 'business', 'imports', 'backup', 'heka', 'shipping', 'social', 'assistant', 'schema'];
 export const browserDomains = ['privacy', 'storefront', 'orders', 'cash', 'reports', 'imports', 'business', 'media', 'security', 'heka', 'social', 'assistant'];
 export const gateNames = ['harness', 'runtime', 'https', 'postgres', 'migration', 'restore', 'scheduler', 'runner', 'audit', 'compose', 'infra', 'desktop'];
 export const configFiles = ['compose.yaml', 'compose.nginx.yaml', 'compose.production.yaml', 'compose.staging.yaml', 'deploy/Caddyfile.production', 'deploy/Caddyfile.staging', 'deploy/nginx/allnutrition-acme.conf', 'deploy/nginx/allnutrition.wintimeapp.co.conf', 'deploy/pg_hba.conf', 'deploy/postgres-entrypoint.sh', 'deploy/social-browser-seccomp.json'];
@@ -38,7 +38,7 @@ export function domains(path) {
   const list = [];
   if (/privacy|social-data-deletion|deauthorize/.test(path)) list.push('privacy');
   if (/Storefront|app\/(?:\[section\]|page\.|robots\.)/.test(path)) list.push('storefront');
-  if (/\b(?:Heka|ShippingIntegration|Shipments)|shipping|heka/.test(path)) list.push('heka');
+  if (/(?:Heka|Shipping|Shipments|shipping|heka)/.test(path)) list.push('heka');
   if (/Advertising|Social|Meta|advertising|(?:^|[/-])social(?:[/-]|\.mjs)|guided-image/.test(path)) list.push('social');
   if (/Assistant|assistant/.test(path)) list.push('assistant');
   if (/\b(?:Import|Workbook)|import|workbook/.test(path)) list.push('imports');
@@ -54,7 +54,7 @@ export function domains(path) {
 export const nodeOwners = {
   privacy: /(?:social-meta|social-oauth|auth-session)/,
   storefront: /(?:persistence|sqlite|validation|media|import-excel)/,
-  heka: /(?:heka|shipping-bridge|business-shipments|integration-keyring|runtime-integrations-migration|backup-restore)/,
+  heka: /(?:heka|shipping-center|shipping-bridge|business-shipments|integration-keyring|runtime-integrations-migration|backup-restore)/,
   social: /(?:social|advertising|backup-restore|integration-keyring)/,
   assistant: /assistant/,
   imports: /(?:import|workbook|onboarding)/,
@@ -66,7 +66,7 @@ export const nodeOwners = {
   security: /(?:auth|validation|security|persistence)/,
 };
 export const postgresByDomain = {
-  heka: ['heka', 'backup'], social: ['social', 'backup'], assistant: ['assistant'], imports: ['imports'], orders: ['business'], cash: ['business'], reports: ['business'], business: ['business'], media: ['core', 'backup'], security: ['core'], storefront: ['core'],
+  heka: ['heka', 'shipping', 'backup'], social: ['social', 'backup'], assistant: ['assistant'], imports: ['imports'], orders: ['business'], cash: ['business'], reports: ['business'], business: ['business'], media: ['core', 'backup'], security: ['core'], storefront: ['core'],
 };
 
 // Domain-qualified browser tests are narrow; the verifier owns their fixed argv.

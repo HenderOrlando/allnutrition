@@ -84,7 +84,7 @@ export async function runHekaApiContracts(t,factory) {
       ['cities',{label:'Bogotá & Norte'},'/geolocation/city','GET','?label=Bogot%C3%A1+%26+Norte',page([{_id:GUIDE_ID,label:'Bogotá',dane:'11001000',secret:KEY}]),result=>assert.equal(result.rows[0].dane,'11001000')],
       ['warehouses',{status:'active'},'/warehouse','GET','?status=active',page([{_id:WAREHOUSE,name:'Bodega',status:'active'}]),result=>assert.equal(result.rows[0]._id,WAREHOUSE)],
       ['templates',{},'/shipping/template','GET','',[{_id:GUIDE_ID,label:'Bodega',weight:3}],result=>assert.equal(result[0].weight,3)],
-      ['quote',quote,'/shipping/quoter','POST','',{unknown:{observedNumber:4500,phone:3133060972,token:KEY}},result=>assert.deepEqual(result,{entries:[{path:'unknown / observedNumber',value:4500}]})],
+      ['quote',quote,'/shipping/quoter','POST','',{unknown:{observedNumber:4500,phone:3133060972,token:KEY}},result=>assert.deepEqual(result,{state:'error',offers:[],details:[{path:'unknown / observedNumber',value:4500}]})],
       ['guides',{text:GUIDE_NO},'/shipments/guide/v2/external','GET',`?text=${GUIDE_NO}`,page([{...guide,client:{name:'Private Client'}}]),result=>assert.deepEqual(result.rows[0],guide)],
       ['clientHistory',{phone:3133060972},'/shipments/client-log','GET','?phone=3133060972',page([{name:'N*** C***',document:'***345',phone:3133060972,guide_number:GUIDE_NO}]),result=>assert.deepEqual(result.rows[0],{name:'N*** C***',document:'***345',guide_number:GUIDE_NO})],
       ['clientRating',{phone:3133060972,limit:1},'/shipments/guide/client','GET','?phone=3133060972&limit=1',null,result=>assert.equal(result,null)],

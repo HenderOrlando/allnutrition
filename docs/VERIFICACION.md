@@ -1,5 +1,18 @@
 # Verificación v3 — administración de negocio
 
+## Centro de envíos y webhook v19 · verificación local
+
+- Node 24: **39** pruebas aprobadas en SQLite y **55** en PostgreSQL 16 desechable (grupos `shipping,schema,backup`). Se comprobaron la migración v17→v19, el sondeo habitual hasta el primer evento de guía verificado, la conciliación diaria de omisiones y la vuelta al sondeo al perder evidencia.
+- Los contratos usan guías, credenciales, cuentas y movimientos sintéticos. La lectura de una guía vinculada y la conciliación logística no escriben en Caja. Los comandos existentes solo registran el cobro, la recepción o el pago explícitamente confirmado.
+- `node tests/heka-browser.mjs --shipping-center`: **7** recorridos en Chromium con HTTPS sintético, incluida Caja desde la novedad y la guía en escritorio y a 320 px. Abrir y editar no movió dinero; confirmar la recepción y el pago pasó por los formularios existentes. También se comprobó el receptor firmado y la presentación local del aviso Push; quedan sin verificar las entregas de Heka y Web Push por Internet.
+
+## Centro de envíos v18 · verificación local
+
+- Node 24: `node --test tests/heka-api.test.mjs tests/shipping-center.test.mjs` y `TEST_PG_GROUPS=shipping npm run test:postgres` aprobaron 32 pruebas cada uno con SQLite y PostgreSQL 16 descartables. Incluyen migración idempotente v17→v18, respaldo/restauración antiguo y nuevo, conflicto con rollback, cuota compartida, selección de conexiones y separación de avisos por usuario y entorno.
+- `node tests/heka-browser.mjs --shipping-center`: Chromium de escritorio y a 320 px, con HTTPS y Heka sintética. Se verificaron 41 guías paginadas y una cifra fallida, agenda sin conexión, reabrir una preparación, conversión kg→g sin cambiar el bulto, total y plazo visibles, teclado y elección de oferta sin emisión.
+- `node tests/heka-browser.mjs --ali-queries`: escritorio y móvil. Abrir desde el chat o directorio de Ali no llamó a Heka hasta una acción explícita del operador.
+- Con la pestaña del panel cerrada, el service worker mostró el aviso genérico **Envíos · Pruebas** después de una inyección local por CDP. Esto verifica permiso, registro, alcance y presentación, no la recepción Web Push por Internet. No se desplegó ni se usaron credenciales Heka reales.
+
 ## Selección por impacto y aceptación Linux amd64
 
 - `node scripts/release-impact.mjs --head <sha40> --base <sha40>` calcula el impacto de los árboles Git sin usar cambios locales. Para producción, use `--state <manifest.json>` en vez de `--base`: cada binario conserva su SHA de procedencia y `coveredThrough` limita el historial de comprobaciones. `config` enumera los cambios públicos permitidos; `recreate` indica los servicios afectados en la configuración efectiva de producción. Un cambio de montaje del scheduler valida Compose en CI sin reconstruir ni iniciar el scheduler; el operador verifica su imagen, montaje y latido durante el corte.

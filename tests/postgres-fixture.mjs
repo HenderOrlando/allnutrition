@@ -1,4 +1,4 @@
-import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, PUBLICATION_STUDIO_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, HEKA_API_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, ASSISTANT_ADVISOR_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
+import { BUSINESS_TABLES, SOCIAL_TABLES, SOCIAL_INTERNAL_TABLES, ADVERTISING_INTERNAL_TABLES, PUBLICATION_STUDIO_INTERNAL_TABLES, INTEGRATION_INTERNAL_TABLES, HEKA_API_INTERNAL_TABLES, ASSISTANT_INTERNAL_TABLES, ASSISTANT_OAUTH_INTERNAL_TABLES, ASSISTANT_WORK_INTERNAL_TABLES, ASSISTANT_ADVISOR_INTERNAL_TABLES, SHIPPING_COMMERCIAL_TABLES, SHIPPING_INTERNAL_TABLES } from '../lib/db/migrations.mjs';
 import { initializeBusinessDefaults } from '../lib/business/settings.mjs';
 import { openPostgres } from '../lib/db/postgres.mjs';
 import { databaseConfig } from '../lib/db/config.mjs';
@@ -21,6 +21,7 @@ export async function resetPostgresStore(store) {
   const current = await store.db.get('SELECT current_database() AS name');
   if (current.name !== 'allnutrition_test') throw new Error('Reset rechazado: la conexión real no es allnutrition_test.');
   const tables = [...BUSINESS_TABLES, ...SOCIAL_TABLES, ...SOCIAL_INTERNAL_TABLES, ...ADVERTISING_INTERNAL_TABLES, ...PUBLICATION_STUDIO_INTERNAL_TABLES, ...INTEGRATION_INTERNAL_TABLES, ...HEKA_API_INTERNAL_TABLES, ...ASSISTANT_INTERNAL_TABLES,...ASSISTANT_OAUTH_INTERNAL_TABLES,...ASSISTANT_WORK_INTERNAL_TABLES,...ASSISTANT_ADVISOR_INTERNAL_TABLES,'order_audit','order_events','idempotency','orders','records','sessions','users','attempts','settings'];
+  tables.push(...SHIPPING_COMMERCIAL_TABLES,...SHIPPING_INTERNAL_TABLES);
   // TRUNCATE recreates relation files; slow fsync must not consume a runtime query's 15s limit.
   await store.db.exec({ text: `TRUNCATE ${tables.map(name => store.t(name)).join(',')};`, query_timeout: 120000 });
   await store.db.run(`UPDATE ${store.t('counters')} SET value=0`);

@@ -28,6 +28,8 @@ import { runSocialAudienceContracts } from './social-audience-contract.mjs';
 import { runShippingBridgeContracts } from './shipping-bridge-contract.mjs';
 import { runHekaImportContracts } from './heka-import-contract.mjs';
 import { runHekaApiContracts } from './heka-api-contract.mjs';
+import { runShippingCenterContracts } from './shipping-center-contract.mjs';
+import { migrateHekaWebhookV19, migrateShippingCenterV18 } from '../lib/db/migrations.mjs';
 import { runAssistantPersistenceContracts } from './assistant-persistence.test.mjs';
 import { runAssistantMigrationContracts } from './assistant-migration.test.mjs';
 import { runAssistantMemoryContracts } from './assistant-memory.test.mjs';
@@ -57,6 +59,8 @@ async function restoreAssistantSchema(store) {
  await migrateHekaApiV15(store);
  await migratePublicationStudioV16(store);
  await migrateAssistantAdvisorV17(store);
+ await migrateShippingCenterV18(store);
+ await migrateHekaWebhookV19(store);
 }
 
 async function migrationRows(store,{includeInternals=false}={}) {
@@ -127,6 +131,10 @@ async function runSchemaContracts(t,factory,env) {
    await removeStudioV16(store);
    await store.transaction(async tx=>{
     await tx.lockWrites();
+    await tx.db.exec(`DROP TABLE ${tx.t('shipping_guide_observations')}`);
+    for(const column of ['webhook_verified_revision','webhook_verified_at','sweep_open_done','sweep_resolved_done','guide_page','guide_next_at'])
+      await tx.db.exec(`ALTER TABLE ${tx.t('shipping_novelty_sync')} DROP COLUMN ${column}`);
+    await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=19`);
     for(const table of [...HEKA_API_INTERNAL_TABLES].reverse())await tx.db.exec(`DROP TABLE ${tx.t(table)}`);
     await tx.db.exec('DROP INDEX allnutrition.shipments_heka_link_identity');
     await tx.db.run(`DELETE FROM ${tx.t('migrations')} WHERE version=15`);
@@ -446,6 +454,10 @@ const groups = {
   await runHekaImportContracts(t,factory);
   await runHekaApiContracts(t,factory);
  },
+ async shipping(t,factory,env) {
+  await runHekaApiContracts(t,factory);
+  await runShippingCenterContracts(t,factory,()=>openStore(env));
+ },
  async social(t,factory) {
   await runSocialContracts(t,factory);
   await runSocialSettingsContracts(t,factory);
@@ -515,7 +527,7 @@ test('Contrato completo con PostgreSQL real (base descartable)',{skip:filter===u
    await migrateStockAlertsV9(first);
    await migrateRuntimeIntegrationsV10(first);
    await restoreAssistantSchema(first);
-   assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=17`));
+   assert.ok(await first.db.get(`SELECT version FROM ${first.t('migrations')} WHERE version=19`));
   } finally { await first.close(); }
   const factory=async()=>{
    const store=await openStore(env);

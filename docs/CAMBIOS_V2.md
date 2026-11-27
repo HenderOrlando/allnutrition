@@ -1,5 +1,18 @@
 # Cambios — administración v3 y antecedentes
 
+## Heka · webhook opcional · esquema v19
+
+- El webhook queda inactivo hasta guardar el secreto vigente, cifrado, en **Configuración → Proveedores de envíos → Heka · API oficial → Webhook de Heka**. Guardarlo o retirarlo no modifica el destino en Heka ni afecta FN Studio. El sondeo habitual solo pasa a conciliación logística diaria tras verificar un evento de guía real contra la API oficial.
+- Las novedades con vínculo verificable permiten abrir **Caja de este envío**. Cobro directo, recepción de liquidación y pago de gastos usan confirmación manual; leer, resolver y sincronizar no registran dinero.
+
+## Centro de envíos · esquema v18
+
+- Listado de guías paginado desde la entrada humana, totales independientes por transportadora y hasta 20 etiquetas seleccionadas entre páginas. Abrir desde Ali no consulta al proveedor por sí solo.
+- Agenda de pedidos y fichas guardadas; preparaciones versionadas y medidas unitarias privadas para productos, obsequios y combos.
+- Cotización por conexión y entorno con desglose de importes conocidos, sin inferir moneda ni convertir un importe aislado en total. Cotizar y preparar no emiten guías.
+- En Cotizar, producto y destinatario se eligen al inicio. La cantidad propone peso y valor declarado, la dirección completa el destino y la bodega Heka se puede elegir en el mismo formulario. La revisión de guía reutiliza estos datos sin consultar ni emitir por sí sola.
+- Sondeo de novedades, bandeja con lecturas por usuario y avisos Web Push optativos. Respaldo comercial `shippingVersion:1`, sin claves, dispositivos, cola ni historial operativo de novedades.
+
 ## Administración · rediseño visual adaptable
 
 - Inicio da prioridad a Nuevo pedido, Importar Excel, el directorio de tareas y las cifras del negocio. La asistencia de Ali y la guía de inicio conservan sus acciones.
