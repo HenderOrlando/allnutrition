@@ -303,7 +303,7 @@ test('navegación conserva destino, selección y recarga en escritorio y móvil'
   for(const task of adminTasks){
    const section=task.view.section;
    if(section==='orders'){
-    await navigate(page,'Pedidos');await selectWorkspace(page,'Vistas de pedidos',{list:'Pedidos',shipments:'Envíos',imports:'Importar Excel'}[task.view.tab]);
+    await navigate(page,'Pedidos');await selectWorkspace(page,'Vistas de pedidos',{list:'Pedidos',shipments:'Seguimiento de envíos',imports:'Importar Excel'}[task.view.tab]);
    }else if(section==='cash'){
     await navigate(page,'Caja');await selectWorkspace(page,'Vistas de caja',{overview:'Resumen y cuentas',movements:'Movimientos',settlements:'Liquidaciones',expenses:'Gastos y pagos',payroll:'Sueldos y anticipos'}[task.view.tab]);
    }else if(section==='reports'){
